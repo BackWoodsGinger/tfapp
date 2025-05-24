@@ -1,0 +1,211 @@
+/* General Admin Panel Styling */
+body {
+    background: #10284e;
+    color: #fff;
+}
+/* Sidebar Background Color */
+#nav-sidebar {
+    background-color: #494a4a; /* Matches the dark theme */
+}
+#changelist {
+    background-color: #494a4a;
+}
+
+#changelist-form {
+    background-color: #494a4a;
+}
+/* Fieldset Background Color */
+fieldset.module.aligned {
+    background-color: #494a4a; /* New background color for fieldsets */
+    border: 1px solid #4dafff; /* Optional: Add border for better visibility */
+    padding: 15px;
+    color: #fff; /* Ensure text is visible */
+}
+
+/* Ensure child elements like div.flex-container inherit background */
+fieldset.module.aligned .flex-container {
+    background-color: inherit;
+    color: inherit;
+}
+
+/* Flex Containers */
+div.flex-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px; /* Add spacing between child elements */
+    background-color: inherit; /* Ensures it inherits from the parent */
+    padding: 10px;
+    border-radius: 5px;
+}
+
+/* Optional: Form Labels and Inputs */
+fieldset.module label,
+fieldset.module input,
+fieldset.module select,
+fieldset.module textarea {
+    color: #fff; /* Ensure text color matches the theme */
+    background-color: dimgrey;
+}
+
+/* Adjust Buttons Inside Fieldsets */
+fieldset.module button {
+    background: #4dafff;
+    color: #10284e;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+fieldset.module button:hover {
+    background: #80d4ff;
+    color: #3c4148;
+}
+
+
+/* Header Styling */
+#header {
+    height: 50px;
+    background: #0d223d;
+    color: #fff;
+}
+
+#branding h1 {
+    color: #fff;
+}
+
+/* Links Styling */
+a:link,
+a:visited {
+    color: #4dafff;
+}
+
+a:hover,
+a:active {
+    color: #80d4ff;
+    text-decoration: underline;
+}
+
+/* Breadcrumbs Styling */
+div.breadcrumbs {
+    background: #183a60;
+    color: #fff;
+}
+
+div.breadcrumbs a {
+    color: #4dafff;
+}
+
+/* Module Headers */
+.module h2, .module caption, .inline-group h2 {
+    background: #1b3f66;
+    color: #fff;
+}
+
+/* Table Styling */
+table {
+    background: #1b3f66;
+    color: #fff;
+    border-color: #4dafff;
+}
+
+th {
+    background: #0d223d;
+    color: #fff;
+}
+
+tr:nth-child(even) {
+    background: #204d8a;
+}
+
+tr:nth-child(odd) {
+    background: #1b3f66;
+}
+
+/* Form Elements */
+fieldset {
+    border: 1px solid #4dafff;
+    padding: 15px;
+    margin-bottom: 20px;
+    background: #0d223d;
+    color: #fff;
+}
+
+legend {
+    color: #4dafff;
+    font-weight: bold;
+}
+
+/* Buttons */
+button, .button, input[type=submit], input[type=button], .submit-row input {
+    background: #4dafff;
+    color: #10284e;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.3s ease;
+}
+
+button:hover, .button:hover, input[type=submit]:hover, input[type=button]:hover {
+    background: #80d4ff;
+    color: #0d223d;
+}
+
+/* Fix Admin Button Overlap and Layout */
+fieldset.actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px; /* Adds space between buttons */
+}
+
+fieldset.actions label {
+    margin-right: 10px; /* Space between checkboxes and text */
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Apply Schedule Column Styling */
+table th:last-child {
+    width: 200px;
+    text-align: center;
+}
+
+.apply-schedule {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+}
+
+.apply-schedule button {
+    min-width: 120px;
+    font-size: 14px;
+}
+
+/* Improve Small Screen Display */
+@media (max-width: 768px) {
+    table {
+        font-size: 14px;
+    }
+
+    fieldset.actions {
+        flex-direction: column;
+    }
+
+    fieldset.actions button, .button {
+        width: 100%; /* Full width buttons for small screens */
+    }
+
+    .apply-schedule {
+        flex-direction: row;
+        justify-content: space-around;
+    }
+
+    .apply-schedule button {
+        flex: 1;
+        margin: 2px;
+    }
+}

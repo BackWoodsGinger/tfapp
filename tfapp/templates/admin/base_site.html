@@ -1,0 +1,11 @@
+{% extends 'admin/base.html' %}
+{% load static %}
+
+{% block branding %}
+<h1 id="head" style="margin-top: 20px;">
+    <img src="{% static 'img/tube-fab-roman-engineering.webp' %}" alt="TF-R" height="50" width="auto" class="brand_img"> Admin Area
+</h1>
+{% endblock %}
+{% block extrastyle %}
+<link rel="stylesheet" href="{% static 'css/admin.css' %}"
+      {% endblock %}

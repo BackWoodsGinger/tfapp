@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block content %}
+<header style="position: relative;">
+    <div id="video-overlay">
+        <div id="overlay-text">
+            <h2>TF-R App</h2>
+            <p>"Innovation: Passionate about developing better methods for tomorrow."</p>
+        </div>
+    </div>
+    <video width="320" height="240" autoplay muted loop>
+        <source src="{% static 'img/clips.mp4' %}" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+</header>
+<div class="card text-center">
+    <div class="card-body">
+        <h1>Welcome To TF-R App</h1>
+        <p>This Tube Fab's custom app.</p>
+        {% if user.is_authenticated %}
+        <a class="btn btn-dark" href="{% url 'attendance:attendance_list' %}">View Attendance Tracking</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,81 @@
+
+{% load static %}
+
+<!-- Navbar -->
+<nav class="navbar navbar-expand-sm navbar-dark bg-primary p-0">
+    <div class="container">
+        <a class="navbar-brand" href="{% url 'index' %}"><img src="{% static 'img/tube-fab-roman-engineering.webp' %}" class="object-fill-none border rounded" alt="..." style="max-height: 60px;"></a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse justify-content-end" id="navbarContent">
+            <ul class="navbar-nav">
+                <li
+                        {% if '/' == request.path %}
+                class="nav-item active mr-3"
+                {% else %}
+                class="nav-item mr-3"
+                {% endif %}
+                >
+                <a class="nav-link" href="{% url 'index' %}">Home</a>
+                </li>
+                <li
+                    {% if 'timeclock' in request.path %}
+                    class="nav-item active mr-3"
+                    {% else %}
+                    class="nav-item mr-3"
+                    {% endif %}
+                >
+                    <a class="nav-link" href="{% url 'timeclock:timeclock_home' %}">Timeclock</a>
+                </li>
+            </ul>
+
+
+            <ul class="navbar-nav ml-auto">
+                {% if user.is_authenticated %}
+                    <li
+                        {% if 'dashboard' in request.path %}
+                        class="nav-item active mr-3"
+                        {% else %}
+                        class="nav-item mr-3"
+                        {% endif %}
+                    >
+                        <a class="nav-link" href="{% url 'attendance:dashboard' %}">Dashboard</a>
+                    </li>
+            
+                    {% if user.role in 'group_lead supervisor manager executive' %}
+                    <li
+                        {% if 'reports' in request.path %}
+                        class="nav-item active mr-3"
+                        {% else %}
+                        class="nav-item mr-3"
+                        {% endif %}
+                    >
+                        <a class="nav-link" href="{% url 'attendance:reports' %}">Reports</a>
+                    </li>
+                    {% endif %}
+            
+                    <li class="nav-item mr-3">
+                        <a href="javascript:{document.getElementById('logout').submit()}" class="nav-link">Logout</a>
+                        <form action="{% url 'logout' %}" method="POST" id="logout">
+                            {% csrf_token %}
+                            <input type="hidden">
+                        </form>
+                    </li>
+                {% else %}
+                    <li
+                        {% if 'register' in request.path %}
+                        class="nav-item active mr-3"
+                        {% else %}
+                        class="nav-item mr-3"
+                        {% endif %}
+                    >
+                        <a class="nav-link" href="{% url 'login' %}">
+                            <i class="fas fa-sign-in-alt"></i> Login
+                        </a>
+                    </li>
+                {% endif %}
+            </ul>
+        </div>
+    </div>
+</nav>

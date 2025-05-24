@@ -1,0 +1,63 @@
+$primary: #313198;
+
+header {
+  position: relative;
+  height: calc(100vh - 56px); // Or set the height you want
+  overflow: hidden;
+
+  video {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    min-width: 100%;
+    min-height: 100%;
+    width: auto;
+    height: auto;
+    z-index: 0;
+    transform: translate(-50%, -50%);
+    object-fit: cover;
+  }
+
+  #video-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 1;
+
+    #overlay-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #a89f9f; // Or any color you want for the text
+      text-align: center;
+
+      h1 {
+        font-size: 3em; // Adjust as needed
+      }
+
+      p {
+        font-size: 1.5em; // Adjust as needed
+      }
+    }
+  }
+
+  #main-header {
+    position: relative;
+    z-index: 2;
+  }
+}
+
+.card-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+#survey-title, #icon {
+  text-align: center; // optional: use this if you want the text within each element to be centered
+}
