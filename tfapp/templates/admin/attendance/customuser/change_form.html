@@ -1,0 +1,15 @@
+{% extends "admin/change_form.html" %}
+{% load i18n %}
+
+{% block object-tools %}
+{{ block.super }}
+{% if show_refresh_pto %}
+<div class="object-tools" style="margin-top: 10px;">
+  <form method="post" action="{% url 'admin:attendance_customuser_refresh_pto' original.pk %}" style="display: inline;">
+    {% csrf_token %}
+    <button type="submit" class="button default">Refresh PTO balance to tenure baseline</button>
+  </form>
+  <span style="margin-left: 8px; color: #888; font-size: 12px;">Sets PTO to tenure amount and clears unpaid time.</span>
+</div>
+{% endif %}
+{% endblock %}

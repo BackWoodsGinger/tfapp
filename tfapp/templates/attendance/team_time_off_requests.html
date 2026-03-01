@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}- Team Time Off Requests{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-12 col-md-10 col-sm-12">
+
+            <h1 class="mb-4">Team Time Off Requests</h1>
+
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="mb-3">Pending requests</h5>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Submitted</th>
+                                    <th>Dates</th>
+                                    <th>Planned?</th>
+                                    <th>Absence type</th>
+                                    <th>Comments</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for r in pending_requests %}
+                                    <tr>
+                                        <td>{{ r.user.get_full_name|default:r.user.username }}</td>
+                                        <td>{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                                        <td>{{ r.start_date }} – {{ r.end_date }}</td>
+                                        <td>{{ r.planned|yesno:"Yes,No" }}</td>
+                                        <td>{{ r.get_subtype_display|default:"—" }}</td>
+                                        <td>{{ r.comments|truncatewords:8|default:"—" }}</td>
+                                        <td class="text-end">
+                                            <form method="post" action="{% url 'attendance:approve_time_off' r.pk %}" class="d-inline">
+                                                {% csrf_token %}
+                                                <button type="submit" class="btn btn-success btn-sm">Approve</button>
+                                            </form>
+                                            <form method="post" action="{% url 'attendance:deny_time_off' r.pk %}" class="d-inline ms-1">
+                                                {% csrf_token %}
+                                                <button type="submit" class="btn btn-danger btn-sm">Deny</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                {% empty %}
+                                    <tr>
+                                        <td colspan="7" class="text-muted text-center py-3">No pending requests to review.</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -9,9 +9,10 @@
           <h3>Welcome, {% if user.first_name %}{{ user.first_name }}{% else %}{{ user.username }}{% endif %}</h3>
 
           <h5 class="mt-4">Occurrences for Selected Day</h5>
-          <form method="get" class="row g-2 mb-3">
-            <div class="col-sm-6 col-md-4 col-lg-3">
-              <input type="date" name="date" class="form-control" value="{{ selected_date|date:'Y-m-d' }}">
+          <form method="get" class="row g-2 mb-3 align-items-end">
+            <div class="col-auto">
+              <label for="id_date" class="form-label small text-muted mb-0">Date</label>
+              <input type="date" name="date" id="id_date" class="form-control" value="{{ selected_date|date:'Y-m-d' }}" style="min-width: 11rem;">
             </div>
             <div class="col-auto">
               <button class="btn btn-sm btn-primary" type="submit">Filter</button>
@@ -43,6 +44,7 @@
 
           {% if user_list|length > 1 %}
           <form method="get" class="mt-3">
+            <input type="hidden" name="date" value="{{ selected_date|date:'Y-m-d' }}">
             <label for="user_id">View Absences For:</label>
             <select name="user_id" id="user_id" class="form-select w-auto d-inline-block" onchange="this.form.submit()">
               {% for u in user_list %}
@@ -61,13 +63,13 @@
           <h5>Paid Time Off Balance ({{ selected_user.get_full_name|default:selected_user.username }})</h5>
           <ul>
             <li>Current PTO: {{ current_pto }} hrs</li>
-            <li>Pending PTO: {{ pending_hours }} hrs</li>
+            <li>Pending PTO: {{ pending_pto_hours }} hrs <span class="text-muted">(future approved time off that will use PTO)</span></li>
             <li>Balance After Pending: {{ balance_after_pending }} hrs</li>
             {% if final_year_balance %}
             <li>Final Year Balance: {{ final_year_balance }} hrs</li>
             {% endif %}
-            <li>Personal Time: {{ personal_time }} hrs</li>
-            <li>Future Personal: {{ future_personal }} hrs</li>
+            <li>Personal Time (unpaid): {{ personal_time }} hrs</li>
+            <li>Future Personal: {{ future_personal }} hrs <span class="text-muted">(approved future time off that would add to unpaid once those dates pass—no PTO left to cover)</span></li>
           </ul>
         </div>
       </div>

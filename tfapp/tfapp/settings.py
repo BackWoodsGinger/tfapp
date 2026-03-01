@@ -25,9 +25,11 @@ SECRET_KEY = 'django-insecure-c&a_*#xv07(2=f2f554*&-)#895yfjq2an)aoo$ejag58mvzi7
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['localhost', 'tfapp.freedomwoods.online', '127.0.0.1']
 
-
+CSRF_TRUSTED_ORIGINS = [
+    'https://tfapp.freedomwoods.online',
+]
 # Application definition
 
 INSTALLED_APPS = [

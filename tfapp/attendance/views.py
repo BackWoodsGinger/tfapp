@@ -2,6 +2,7 @@ from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django import forms
+from django.utils import timezone as django_tz
 from django.utils.timezone import now, localdate
 from timeclock.models import TimeEntry
 from timeclock.forms import TimeEntryForm
@@ -10,10 +11,28 @@ from datetime import time, timedelta, date, datetime, timezone
 from django.http import HttpResponse
 from django.template.loader import get_template
 from xhtml2pdf import pisa
-from .models import CustomUser, Occurrence, RoleChoices
-from .forms import ReportFilterForm
+from .models import (
+    CustomUser,
+    Occurrence,
+    OccurrenceType,
+    OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL,
+    PayrollPeriod,
+    PayrollPeriodUserSnapshot,
+    RoleChoices,
+    TimeOffRequest,
+    TimeOffRequestStatus,
+    apply_past_due_occurrences,
+    ensure_holiday_occurrences_for_range,
+    OccurrenceSubtype,
+)
+from .forms import ReportFilterForm, TimeOffRequestForm
 from django.views.decorators.http import require_POST
+from django.conf import settings
+from pathlib import Path
+import base64
 import csv
+import json
+from io import BytesIO
 
 def home(request):
     return render(request, "pages/index.html")
@@ -24,11 +43,42 @@ class DateFilterForm(forms.Form):
         widget=forms.DateInput(attrs={"type": "date", "class": "form-control"})
     )
 
-def get_recent_saturdays(count=5):
+def get_recent_saturdays(count=12):
+    """Return list of Saturday dates for payroll week selector (current and prior weeks)."""
     today = date.today()
-    days_since_saturday = (today.weekday() - 5) % 7  # 5 = Saturday
-    last_saturday = today - timedelta(days=days_since_saturday)
-    return sorted([last_saturday - timedelta(weeks=i) for i in range(count)], reverse=True)
+    # Saturday of current payroll week (week containing today, ending Saturday)
+    days_until_saturday = (5 - today.weekday()) % 7  # 5 = Saturday
+    current_week_saturday = today + timedelta(days=days_until_saturday)
+    return sorted(
+        [current_week_saturday - timedelta(weeks=i) for i in range(count)],
+        reverse=True,
+    )
+
+
+def can_approve_time_off(approver: CustomUser, target: CustomUser) -> bool:
+    """
+    Only allow approvals by the user's own group lead, supervisor,
+    manager (same department), or any executive.
+    """
+    if not approver.is_authenticated:
+        return False
+
+    if approver.role == RoleChoices.EXECUTIVE:
+        return True
+
+    if target.group_lead_id and approver.id == target.group_lead_id:
+        return True
+    if target.supervisor_id and approver.id == target.supervisor_id:
+        return True
+
+    if (
+        approver.role == RoleChoices.MANAGER
+        and approver.department
+        and approver.department == target.department
+    ):
+        return True
+
+    return False
 
 @login_required
 def dashboard(request):
@@ -60,6 +110,9 @@ def dashboard(request):
     selected_user_id = request.GET.get("user_id")
     selected_user = get_object_or_404(CustomUser, id=selected_user_id) if selected_user_id and selected_user_id.isdigit() else user
 
+    # Apply any past-due occurrences so balance is current (future requests only deduct when date passes).
+    apply_past_due_occurrences(selected_user)
+
     anniversary = selected_user.service_date.replace(year=today.year) if selected_user.service_date else today
     if today < anniversary:
         anniversary = anniversary.replace(year=today.year - 1)
@@ -72,28 +125,68 @@ def dashboard(request):
         user=selected_user, date__gt=today
     ).order_by('date')
 
+    # Only future occurrences that use PTO/personal affect pending and future personal.
+    future_occurrences_using_balance = Occurrence.objects.filter(
+        user=selected_user,
+        date__gt=today,
+        subtype__in=OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL,
+    )
+    future_hours_using_balance = (
+        future_occurrences_using_balance.aggregate(total=Sum("duration_hours"))["total"] or 0
+    )
+
+    # Pending PTO: hours of future approved time off that will be paid from PTO.
+    pending_pto_hours = min(future_hours_using_balance, selected_user.pto_balance)
+    # Future Personal: only the hours of future approved time off that would add to unpaid
+    # once those dates pass (no PTO left to cover them). Does NOT include current personal_time_balance.
+    future_personal_hours_from_occurrences = max(
+        0, future_hours_using_balance - selected_user.pto_balance
+    )
+    future_personal = future_personal_hours_from_occurrences
+    # Balance after accounting for future approved time off.
+    balance_after_pending = selected_user.pto_balance - pending_pto_hours
+
     daily_occurrences = Occurrence.objects.filter(
         user__in=visible_users,
         date=selected_date
     ).order_by("user__username", "date")
 
-    future_hours = future_occurrences.aggregate(total=Sum("duration_hours"))["total"] or 0
-    future_pto = max(selected_user.pto_balance - future_hours, 0)
-    future_personal = selected_user.personal_time_balance + max(0, future_hours - selected_user.pto_balance)
-
     start_of_week = today - timedelta(days=(today.weekday() + 1) % 7)
     end_of_week = start_of_week + timedelta(days=6)
     weekly_totals = []
-    for u in visible_users:
-        total = 0
+
+    for u in visible_users.filter(is_exempt=False):
+        total_actual = 0
+        total_scheduled = 0
+        schedule = u.weekly_schedule or {}
+
         entries = TimeEntry.objects.filter(user=u, date__range=[start_of_week, end_of_week])
-        for e in entries:
-            if e.clock_in and e.clock_out:
-                lunch = timedelta()
-                if e.lunch_in and e.lunch_out:
-                    lunch = e.lunch_in - e.lunch_out
-                total += (e.clock_out - e.clock_in - lunch).total_seconds() / 3600
-        weekly_totals.append((u, round(total, 2)))
+        for entry in entries:
+            if entry.clock_in and entry.clock_out:
+                lunch = timedelta(minutes=30)
+                if entry.lunch_in and entry.lunch_out:
+                    actual_lunch = entry.lunch_in - entry.lunch_out
+                    if actual_lunch.total_seconds() >= 1800:
+                        lunch = actual_lunch
+                worked = entry.clock_out - entry.clock_in - lunch
+                total_actual += worked.total_seconds() / 3600
+
+            weekday = entry.date.strftime("%A").lower()  # "monday", etc.
+            if weekday in schedule:
+                try:
+                    fmt = "%H:%M"
+                    sched = schedule[weekday]
+                    start = datetime.strptime(sched["start"], fmt)
+                    end = datetime.strptime(sched["end"], fmt)
+                    lunch_out = datetime.strptime(sched["lunch_out"], fmt)
+                    lunch_in = datetime.strptime(sched["lunch_in"], fmt)
+                    sched_hours = (end - start - (lunch_in - lunch_out)).total_seconds() / 3600
+                    total_scheduled += sched_hours
+                except (KeyError, ValueError):
+                    continue
+
+        delta = round(total_actual - total_scheduled, 2)
+        weekly_totals.append((u, round(total_actual, 2), round(total_scheduled, 2), delta))
 
     alerts = []
     if user.is_staff:
@@ -112,10 +205,11 @@ def dashboard(request):
         "future_occurrences": future_occurrences,
         "current_pto": selected_user.pto_balance,
         "personal_time": selected_user.personal_time_balance,
-        "pending_hours": future_hours,
-        "balance_after_pending": future_pto,
-        "final_year_balance": selected_user.final_pto_balance,
+        "pending_pto_hours": pending_pto_hours,
+        "balance_after_pending": balance_after_pending,
         "future_personal": future_personal,
+        "future_personal_hours_from_occurrences": future_personal_hours_from_occurrences,
+        "final_year_balance": selected_user.final_pto_balance,
         "today": today,
         "weekly_totals": weekly_totals,
         "alerts": alerts,
@@ -130,6 +224,8 @@ def attendance_list(request, filter_by="today"):
     today = date.today()
 
     visible_user = user
+
+    apply_past_due_occurrences(visible_user)
 
     if visible_user.service_date:
         anniversary = visible_user.service_date.replace(year=today.year)
@@ -149,9 +245,18 @@ def attendance_list(request, filter_by="today"):
         date__gt=today
     ).order_by('date')
 
+    future_hours_using_balance = (
+        Occurrence.objects.filter(
+            user=visible_user,
+            date__gt=today,
+            subtype__in=OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL,
+        ).aggregate(total=Sum("duration_hours"))["total"]
+        or 0
+    )
     future_hours = future_occurrences.aggregate(total=Sum("duration_hours"))["total"] or 0
-    future_pto = max(visible_user.pto_balance - future_hours, 0)
-    future_personal = visible_user.personal_time_balance + max(0, future_hours - visible_user.pto_balance)
+    future_pto = max(visible_user.pto_balance - future_hours_using_balance, 0)
+    # Future Personal: only future approved time off that would add to unpaid (no PTO left).
+    future_personal = max(0, future_hours_using_balance - visible_user.pto_balance)
 
     context = {
         "date": today,
@@ -178,11 +283,8 @@ def reports_view(request):
     if not user_can_view_reports(request.user):
         return redirect("attendance:dashboard")
 
-    form = ReportFilterForm(request.GET or None)
-    occurrences = []
-    selected_user = None
-
     user = request.user
+    form = ReportFilterForm(request.GET or None)
     if user.role == RoleChoices.EXECUTIVE:
         visible_users = CustomUser.objects.all()
     elif user.role == RoleChoices.MANAGER:
@@ -193,22 +295,60 @@ def reports_view(request):
         visible_users = CustomUser.objects.filter(Q(group_lead=user) | Q(id=user.id))
     else:
         visible_users = CustomUser.objects.none()
+    form.fields["user"].queryset = visible_users
 
+    occurrences = []
+    selected_user = None
     today = localdate()
-    start_of_week = today - timedelta(days=(today.weekday() + 1) % 7)
-    end_of_week = start_of_week + timedelta(days=6)
+    payroll_weeks_list = get_recent_saturdays(12)
+    current_week_saturday = payroll_weeks_list[0]
+    week_ending_param = request.GET.get("week_ending")
+    if week_ending_param:
+        try:
+            selected_saturday = date.fromisoformat(week_ending_param)
+            end_of_week = selected_saturday
+            start_of_week = end_of_week - timedelta(days=6)
+        except (TypeError, ValueError):
+            end_of_week = current_week_saturday
+            start_of_week = end_of_week - timedelta(days=6)
+    else:
+        end_of_week = current_week_saturday
+        start_of_week = end_of_week - timedelta(days=6)
 
     weekly_totals = []
+
     for u in visible_users.filter(is_exempt=False):
-        total = 0
+        total_actual = 0
+        total_scheduled = 0
+        schedule = u.weekly_schedule or {}
+
         entries = TimeEntry.objects.filter(user=u, date__range=[start_of_week, end_of_week])
-        for e in entries:
-            if e.clock_in and e.clock_out:
-                lunch = timedelta()
-                if e.lunch_in and e.lunch_out:
-                    lunch = e.lunch_in - e.lunch_out
-                total += (e.clock_out - e.clock_in - lunch).total_seconds() / 3600
-        weekly_totals.append((u, round(total, 2)))
+        for entry in entries:
+            if entry.clock_in and entry.clock_out:
+                lunch = timedelta(minutes=30)
+                if entry.lunch_in and entry.lunch_out:
+                    actual_lunch = entry.lunch_in - entry.lunch_out
+                    if actual_lunch.total_seconds() >= 1800:
+                        lunch = actual_lunch
+                worked = entry.clock_out - entry.clock_in - lunch
+                total_actual += worked.total_seconds() / 3600
+
+            weekday = entry.date.strftime("%A").lower()  # "monday", etc.
+            if weekday in schedule:
+                try:
+                    fmt = "%H:%M"
+                    sched = schedule[weekday]
+                    start = datetime.strptime(sched["start"], fmt)
+                    end = datetime.strptime(sched["end"], fmt)
+                    lunch_out = datetime.strptime(sched["lunch_out"], fmt)
+                    lunch_in = datetime.strptime(sched["lunch_in"], fmt)
+                    sched_hours = (end - start - (lunch_in - lunch_out)).total_seconds() / 3600
+                    total_scheduled += sched_hours
+                except (KeyError, ValueError):
+                    continue
+
+        delta = round(total_actual - total_scheduled, 2)
+        weekly_totals.append((u, round(total_actual, 2), round(total_scheduled, 2), delta))
 
     alerts = []
     if user.role in [
@@ -231,7 +371,18 @@ def reports_view(request):
             user=selected_user, date__range=(start_date, end_date)
         ).order_by("date")
 
-    payroll_weeks = [d.strftime("%Y-%m-%d") for d in get_recent_saturdays()]
+    payroll_weeks = [d.strftime("%Y-%m-%d") for d in payroll_weeks_list]
+    payroll_weeks_display = [(d.strftime("%Y-%m-%d"), d.strftime("%m/%d/%Y")) for d in payroll_weeks_list]
+    if end_of_week.strftime("%Y-%m-%d") not in payroll_weeks:
+        payroll_weeks_display.insert(0, (end_of_week.strftime("%Y-%m-%d"), end_of_week.strftime("%m/%d/%Y")))
+        payroll_weeks.insert(0, end_of_week.strftime("%Y-%m-%d"))
+
+    user_service_dates = {
+        str(u.pk): u.service_date.isoformat() if u.service_date else None
+        for u in visible_users
+    }
+
+    payroll_finalized = _is_payroll_week_finalized(end_of_week)
 
     return render(request, "attendance/reports.html", {
         "form": form,
@@ -242,7 +393,142 @@ def reports_view(request):
         "start_of_week": start_of_week,
         "end_of_week": end_of_week,
         "payroll_weeks": payroll_weeks,
+        "payroll_weeks_display": payroll_weeks_display,
+        "payroll_finalized": payroll_finalized,
+        "user_service_dates_json": json.dumps(user_service_dates),
+        "today_iso": today.isoformat(),
     })
+
+
+def _scheduled_hours_from_work_schedule(user, weekday_int):
+    """Scheduled hours for a weekday (0=Mon..6=Sun) from WorkSchedule model, or 0."""
+    sched = user.schedules.filter(day=weekday_int).first()
+    if not sched:
+        return 0.0
+    # Use a arbitrary date to combine with time for timedelta math
+    d = date(2000, 1, 1)
+    start_dt = datetime.combine(d, sched.start_time)
+    end_dt = datetime.combine(d, sched.end_time)
+    lunch_out_dt = datetime.combine(d, sched.lunch_out)
+    lunch_in_dt = datetime.combine(d, sched.lunch_in)
+    return (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
+
+
+def _scheduled_hours_for_range(user, week_start, week_ending):
+    """Total scheduled hours from weekly_schedule or WorkSchedule for [week_start, week_ending]."""
+    schedule = user.weekly_schedule or {}
+    total = 0.0
+    fmt = "%H:%M"
+    current = week_start
+    while current <= week_ending:
+        weekday_str = current.strftime("%A").lower()
+        day_hours = 0.0
+        if schedule and weekday_str in schedule:
+            try:
+                sched = schedule[weekday_str]
+                start = datetime.strptime(sched["start"], fmt)
+                end = datetime.strptime(sched["end"], fmt)
+                lunch_out = datetime.strptime(sched["lunch_out"], fmt)
+                lunch_in = datetime.strptime(sched["lunch_in"], fmt)
+                day_hours = (end - start - (lunch_in - lunch_out)).total_seconds() / 3600
+            except (KeyError, ValueError):
+                pass
+        if day_hours <= 0:
+            day_hours = _scheduled_hours_from_work_schedule(user, current.weekday())
+        total += day_hours
+        current += timedelta(days=1)
+    return total
+
+
+def _scheduled_hours_for_day(user, d):
+    """Scheduled hours for a single day from weekly_schedule or WorkSchedule, or 0."""
+    schedule = user.weekly_schedule or {}
+    weekday_str = d.strftime("%A").lower()
+    if schedule and weekday_str in schedule:
+        try:
+            fmt = "%H:%M"
+            sched = schedule[weekday_str]
+            start = datetime.strptime(sched["start"], fmt)
+            end = datetime.strptime(sched["end"], fmt)
+            lunch_out = datetime.strptime(sched["lunch_out"], fmt)
+            lunch_in = datetime.strptime(sched["lunch_in"], fmt)
+            return (end - start - (lunch_in - lunch_out)).total_seconds() / 3600
+        except (KeyError, ValueError):
+            pass
+    return _scheduled_hours_from_work_schedule(user, d.weekday())
+
+
+def _get_scheduled_start_time(user, d):
+    """Return scheduled start time for user on date d from weekly_schedule or WorkSchedule, or None."""
+    schedule = user.weekly_schedule or {}
+    weekday_str = d.strftime("%A").lower()
+    if schedule and weekday_str in schedule:
+        try:
+            return datetime.strptime(schedule[weekday_str]["start"], "%H:%M").time()
+        except (KeyError, ValueError):
+            pass
+    sched = user.schedules.filter(day=d.weekday()).first()
+    return sched.start_time if sched else None
+
+
+def _create_tardy_occurrences_for_week(week_start, week_ending, period=None):
+    """
+    For each time entry in the week with clock_in and a schedule that day:
+    if clock_in is later than scheduled start, create TARDY_IN_GRACE (<=4 min) or
+    TARDY_OUT_OF_GRACE (5+ min late, duration = rounded loss). Skip if occurrence already exists.
+    If period is given, set payroll_period on created occurrences so they can be reverted on unfinalize.
+    Clock-in is compared in local time (schedule is stored as local); avoid UTC vs local mismatch.
+    """
+    entries = TimeEntry.objects.filter(
+        date__range=[week_start, week_ending],
+        clock_in__isnull=False,
+    ).select_related("user")
+    for e in entries:
+        scheduled_start = _get_scheduled_start_time(e.user, e.date)
+        if not scheduled_start:
+            continue
+        if not e.clock_in:
+            continue
+        # Compare in local time: clock_in is stored UTC when USE_TZ=True
+        clock_in_local = django_tz.localtime(e.clock_in)
+        clock_in_time = clock_in_local.time()
+        if clock_in_time <= scheduled_start:
+            continue
+        delta_minutes = (clock_in_time.hour * 60 + clock_in_time.minute) - (
+            scheduled_start.hour * 60 + scheduled_start.minute
+        )
+        if delta_minutes <= 0:
+            continue
+        already = Occurrence.objects.filter(
+            user=e.user,
+            date=e.date,
+            subtype__in=[OccurrenceSubtype.TARDY_IN_GRACE, OccurrenceSubtype.TARDY_OUT_OF_GRACE],
+        ).exists()
+        if already:
+            continue
+        if delta_minutes <= 4:
+            Occurrence.objects.create(
+                user=e.user,
+                occurrence_type=OccurrenceType.UNPLANNED,
+                subtype=OccurrenceSubtype.TARDY_IN_GRACE,
+                date=e.date,
+                duration_hours=0,
+                payroll_period=period,
+            )
+        else:
+            loss_hours = round((delta_minutes / 60.0) * 4) / 4  # round to nearest quarter hour
+            if loss_hours <= 0:
+                loss_hours = 0.25
+            occ = Occurrence.objects.create(
+                user=e.user,
+                occurrence_type=OccurrenceType.UNPLANNED,
+                subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+                date=e.date,
+                duration_hours=loss_hours,
+                payroll_period=period,
+            )
+            occ.save()
+
 
 @require_POST
 @login_required
@@ -258,7 +544,9 @@ def close_payroll(request):
 
     week_start = week_ending - timedelta(days=6)
 
-    from timeclock.models import TimeEntry
+    # Ensure holiday occurrences exist for this payroll week
+    ensure_holiday_occurrences_for_range(week_start, week_ending)
+
     incomplete_entries = TimeEntry.objects.filter(
         date__range=[week_start, week_ending]
     ).filter(
@@ -272,35 +560,284 @@ def close_payroll(request):
         messages.error(request, "Cannot close payroll. Some time entries are incomplete.")
         return redirect("attendance:reports")
 
+    period, _ = PayrollPeriod.objects.get_or_create(week_ending=week_ending, defaults={"is_finalized": False})
+
+    if not period.is_finalized:
+        # High level: compare each user's schedule to (time entries + approved time off). Shortfall not covered
+        # by approved time off gets an auto-generated occurrence; PTO/personal applied per policy; then accrue
+        # PTO for 0-2 yr / part-time on time-entry hours only (1 hr per 30 worked, cap 72 for part-time).
+        users = CustomUser.objects.filter(is_active=True, is_exempt=False).order_by("last_name", "first_name")
+
+        # Build total worked (time entries only) and total scheduled per user for the week
+        user_total_worked = {}
+        user_total_scheduled = {}
+        for user in users:
+            entries = TimeEntry.objects.filter(user=user, date__range=[week_start, week_ending])
+            total_worked_hours = 0
+            for e in entries:
+                if e.clock_in and e.clock_out:
+                    lunch = timedelta()
+                    if e.lunch_in and e.lunch_out:
+                        lunch = e.lunch_in - e.lunch_out
+                    total_worked_hours += (e.clock_out - e.clock_in - lunch).total_seconds() / 3600
+            user_total_worked[user.id] = total_worked_hours
+            user_total_scheduled[user.id] = _scheduled_hours_for_range(user, week_start, week_ending)
+
+        _create_tardy_occurrences_for_week(week_start, week_ending, period=period)
+
+        # Variance occurrences: only when user has a schedule and reported total falls short.
+        # Reported = time entries (punches/manual) + approved time off for the week. No default hours.
+        approved_time_off_by_user_date = {}
+        for user in users:
+            approved_time_off_by_user_date[user.id] = {}
+            qs = Occurrence.objects.filter(
+                user=user,
+                date__range=[week_start, week_ending],
+                time_off_request__status=TimeOffRequestStatus.APPROVED,
+            )
+            for occ in qs.values("date", "duration_hours"):
+                d = occ["date"]
+                approved_time_off_by_user_date[user.id][d] = (
+                    approved_time_off_by_user_date[user.id].get(d, 0) + occ["duration_hours"]
+                )
+
+        for user in users:
+            total_worked_hours = user_total_worked.get(user.id, 0)
+            total_scheduled = _scheduled_hours_for_range(user, week_start, week_ending)
+            if total_scheduled <= 0:
+                continue  # No schedule: do not create any variance
+            current = week_start
+            while current <= week_ending:
+                scheduled_day = _scheduled_hours_for_day(user, current)
+                if scheduled_day <= 0:
+                    current += timedelta(days=1)
+                    continue
+                entries_day = TimeEntry.objects.filter(user=user, date=current)
+                worked_day = 0
+                for e in entries_day:
+                    if e.clock_in and e.clock_out:
+                        lunch = timedelta()
+                        if e.lunch_in and e.lunch_out:
+                            lunch = e.lunch_in - e.lunch_out
+                        worked_day += (e.clock_out - e.clock_in - lunch).total_seconds() / 3600
+                approved_day = approved_time_off_by_user_date.get(user.id, {}).get(current, 0)
+                # Include tardy (and any existing variance) so we don't create duplicate shortfall for same time
+                tardy_or_variance_hours = sum(
+                    Occurrence.objects.filter(
+                        user=user,
+                        date=current,
+                    )
+                    .filter(
+                        Q(subtype__in=[OccurrenceSubtype.TARDY_IN_GRACE, OccurrenceSubtype.TARDY_OUT_OF_GRACE])
+                        | Q(is_variance_to_schedule=True)
+                    )
+                    .values_list("duration_hours", flat=True)
+                )
+                reported_day = worked_day + approved_day + tardy_or_variance_hours
+                shortfall_day = max(0, round(scheduled_day - reported_day, 2))
+                # Create variance only when shortfall exists and not already covered by approved time off
+                # (approved_day is in reported_day, so shortfall is the gap; no occurrence if shortfall is 0)
+                if shortfall_day > 0:
+                    has_variance = Occurrence.objects.filter(
+                        user=user,
+                        date=current,
+                        is_variance_to_schedule=True,
+                    ).exists()
+                    if not has_variance:
+                        subtype = (
+                            OccurrenceSubtype.EXCHANGE
+                            if total_worked_hours >= 40
+                            else OccurrenceSubtype.TIME_OFF
+                        )
+                        Occurrence.objects.create(
+                            user=user,
+                            occurrence_type=OccurrenceType.UNPLANNED,
+                            subtype=subtype,
+                            date=current,
+                            duration_hours=round(shortfall_day, 2),
+                            pto_applied=False,
+                            is_variance_to_schedule=True,
+                            payroll_period=period,
+                        )
+                current += timedelta(days=1)
+
+        # Apply PTO before accrual (use current balance, not hours earned this week).
+        # EXCHANGE when user worked 40+ gets no PTO applied.
+        week_occurrences = list(
+            Occurrence.objects.filter(
+                date__range=[week_start, week_ending],
+                subtype__in=OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL,
+                pto_applied=False,
+            )
+            .exclude(subtype=OccurrenceSubtype.EXCHANGE)
+            .select_related("user")
+            .order_by("user_id", "date")
+        )
+        # Also include EXCHANGE only when user worked < 40 (then apply PTO)
+        exchange_occurrences = list(
+            Occurrence.objects.filter(
+                date__range=[week_start, week_ending],
+                subtype=OccurrenceSubtype.EXCHANGE,
+                pto_applied=False,
+            ).select_related("user").order_by("user_id", "date")
+        )
+        for occ in exchange_occurrences:
+            if user_total_worked.get(occ.user_id, 0) < 40:
+                week_occurrences.append(occ)
+        week_occurrences.sort(key=lambda o: (o.user_id, o.date))
+
+        # Apply PTO first (then personal) to all occurrences per policy; no cap so full shortfall is covered
+        for occ in week_occurrences:
+            occ.apply_pto()
+
+        # Accrue PTO for the week (after applying so balance used is pre-accrual).
+        # Policy: FT under 2 yr and part-time accrue 1 hr PTO per 30 hrs worked (time entries only, not PTO from requests).
+        # Cap at 40 regular hours so overtime does not accrue.
+        for user in users:
+            total_worked_hours = user_total_worked.get(user.id, 0)  # from time entries only
+            if total_worked_hours and (user.years_of_service() <= 2 or user.is_part_time):
+                user.refresh_from_db()  # use balance after apply_pto so accrual doesn't overwrite
+                hours_for_accrual = min(total_worked_hours, 40.0)
+                accrued = user.accrue_pto(hours_for_accrual)
+                if accrued:
+                    PayrollPeriodUserSnapshot.objects.update_or_create(
+                        period=period,
+                        user=user,
+                        defaults={"pto_accrued_hours": round(accrued, 2)},
+                    )
+
+        period.is_finalized = True
+        period.finalized_at = django_tz.now()
+        period.finalized_by = request.user
+        period.save()
+        messages.success(request, f"Payroll for week ending {week_ending} has been finalized and CSV exported.")
+    else:
+        messages.info(request, "This payroll period is already finalized. CSV exported for records.")
+
     response = HttpResponse(content_type='text/csv')
     filename = f"payroll_week_ending_{week_ending.strftime('%Y-%m-%d')}.csv"
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
     writer = csv.writer(response)
-    writer.writerow(["LASTNAME", "FIRSTNAME", "TIMEENTRYTOTAL", "PTOTOTAL", "OVERTIMETOTAL"])
-
-    users = CustomUser.objects.filter(is_active=True, is_exempt=False)
+    users = CustomUser.objects.filter(is_active=True, is_exempt=False).order_by("last_name", "first_name")
     for user in users:
         entries = TimeEntry.objects.filter(user=user, date__range=[week_start, week_ending])
-        total_hours = 0
+        total_worked_hours = 0
         for e in entries:
             if e.clock_in and e.clock_out:
                 lunch = timedelta()
                 if e.lunch_in and e.lunch_out:
                     lunch = e.lunch_in - e.lunch_out
-                total_hours += (e.clock_out - e.clock_in - lunch).total_seconds() / 3600
+                total_worked_hours += (e.clock_out - e.clock_in - lunch).total_seconds() / 3600
 
-        overtime = max(total_hours - 40, 0)
-        regular = min(total_hours, 40)
-        writer.writerow([user.last_name, user.first_name, round(regular + overtime, 2), round(regular, 2), round(overtime, 2)])
+        pto_occurrences = Occurrence.objects.filter(
+            user=user,
+            date__range=[week_start, week_ending],
+            pto_applied=True,
+        ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
+        pto_hours = sum(o.duration_hours for o in pto_occurrences)
+
+        holiday_occurrences = Occurrence.objects.filter(
+            user=user,
+            date__range=[week_start, week_ending],
+            subtype=OccurrenceSubtype.HOLIDAY_PAID,
+        )
+        holiday_hours = sum(o.duration_hours for o in holiday_occurrences)
+
+        regular = min(total_worked_hours, 40)
+        overtime = max(total_worked_hours - 40, 0)
+        writer.writerow(
+            [
+                (user.last_name or "").title(),
+                (user.first_name or "").title(),
+                round(regular, 2),
+                round(overtime, 2),
+                round(pto_hours, 2),
+                round(holiday_hours, 2),
+            ]
+        )
 
     return response
+
+
+def _week_ending_for_date(d):
+    """Saturday of the payroll week containing date d."""
+    days_until_saturday = (5 - d.weekday()) % 7
+    return d + timedelta(days=days_until_saturday)
+
+
+def _is_payroll_week_finalized(week_ending_date):
+    """Return True if the payroll week ending on this Saturday is finalized."""
+    return PayrollPeriod.objects.filter(
+        week_ending=week_ending_date,
+        is_finalized=True,
+    ).exists()
+
+
+def _unfinalize_payroll_revert(period):
+    """
+    Revert all effects of finalizing this payroll period: PTO accrued, occurrence PTO applied,
+    and delete occurrences created at finalize (variance + tardy).
+    """
+    week_start = period.week_ending - timedelta(days=6)
+
+    # 1. Revert PTO accrued for this period (round so add/subtract cancel exactly)
+    for snapshot in period.user_snapshots.select_related("user"):
+        u = snapshot.user
+        accrued = round(snapshot.pto_accrued_hours, 2)
+        u.pto_balance = round(max(0.0, u.pto_balance - accrued), 2)
+        u.save()
+    period.user_snapshots.all().delete()
+
+    # 2. Refund PTO/personal only for occurrences created at finalize (this period), then delete them
+    period_occurrences = Occurrence.objects.filter(
+        payroll_period=period,
+        pto_applied=True,
+    ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID).select_related("user")
+    # Aggregate refunds by user so we apply correct totals (same user can have variance + tardy)
+    refunds = (
+        period_occurrences.values("user")
+        .annotate(
+            pto_refund=Sum("pto_hours_applied"),
+            personal_refund=Sum("personal_hours_applied"),
+        )
+    )
+    for r in refunds:
+        u = CustomUser.objects.get(pk=r["user"])
+        u.pto_balance = round(u.pto_balance + (r["pto_refund"] or 0), 2)
+        u.personal_time_balance = round(max(0.0, u.personal_time_balance - (r["personal_refund"] or 0)), 2)
+        u.save()
+    # Delete occurrences created at finalize so they can be re-created on refinalize
+    Occurrence.objects.filter(payroll_period=period).delete()
+
+
+@require_POST
+@login_required
+def unfinalize_payroll(request):
+    if not request.user.is_staff:
+        return redirect("attendance:dashboard")
+    try:
+        week_ending = date.fromisoformat(request.POST.get("week_ending"))
+    except (TypeError, ValueError):
+        messages.error(request, "Invalid week selected.")
+        return redirect("attendance:reports")
+    period = get_object_or_404(PayrollPeriod, week_ending=week_ending)
+    if not period.is_finalized:
+        messages.info(request, "That payroll period is not finalized.")
+        return redirect("attendance:reports")
+    _unfinalize_payroll_revert(period)
+    period.is_finalized = False
+    period.finalized_at = None
+    period.finalized_by = None
+    period.save()
+    messages.success(request, f"Payroll for week ending {week_ending} has been unfinalized. PTO accrual and occurrence PTO have been reverted.")
+    return redirect("attendance:reports")
+
 
 @login_required
 def edit_entry(request, pk):
     entry = get_object_or_404(TimeEntry, pk=pk)
 
-    # Restrict to group lead or higher
     if request.user.role not in [
         RoleChoices.GROUP_LEAD,
         RoleChoices.SUPERVISOR,
@@ -308,6 +845,19 @@ def edit_entry(request, pk):
         RoleChoices.EXECUTIVE,
     ]:
         return redirect("attendance:dashboard")
+
+    week_ending = _week_ending_for_date(entry.date)
+    if _is_payroll_week_finalized(week_ending):
+        if request.method == "POST":
+            messages.error(
+                request,
+                "This time entry is in a finalized payroll week. Unfinalize the payroll from Reports to make corrections.",
+            )
+            return redirect("attendance:reports")
+        messages.warning(
+            request,
+            "This week is finalized. Unfinalize from Reports to edit.",
+        )
 
     if request.method == "POST":
         form = TimeEntryForm(request.POST, instance=entry)
@@ -317,7 +867,11 @@ def edit_entry(request, pk):
     else:
         form = TimeEntryForm(instance=entry)
 
-    return render(request, "timeclock/edit_entry.html", {"form": form, "entry": entry})
+    return render(request, "timeclock/edit_entry.html", {
+        "form": form,
+        "entry": entry,
+        "payroll_finalized": _is_payroll_week_finalized(week_ending),
+    })
 
 @login_required
 def generate_report_pdf(request):
@@ -333,10 +887,183 @@ def generate_report_pdf(request):
             user=user, date__range=(start_date, end_date)
         ).order_by("date")
 
+        # PTO/Personal used in this report period (from tracked split per occurrence)
+        pto_using = Occurrence.objects.filter(
+            user=user,
+            date__range=(start_date, end_date),
+            pto_applied=True,
+        ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
+        pto_used = sum(o.pto_hours_applied for o in pto_using)
+        personal_used = sum(o.personal_hours_applied for o in pto_using)
+        # Legacy: occurrences applied before we tracked the split (both 0)
+        legacy_hours = sum(
+            o.duration_hours for o in pto_using
+            if o.pto_hours_applied == 0 and o.personal_hours_applied == 0 and o.duration_hours
+        )
+        if legacy_hours and pto_used == 0 and personal_used == 0:
+            pto_used = legacy_hours
+
+        static_dirs = getattr(settings, "STATICFILES_DIRS", []) or []
+        static_root = Path(static_dirs[0]) if static_dirs else Path(settings.BASE_DIR) / "static"
+        img_dir = static_root / "img"
+        logo_uri = None
+        # Prefer pdfimage.jpg for report branding, then logo.webp / logo.png
+        for name in ("pdfimage.jpg", "logo.webp", "logo.png"):
+            logo_path = img_dir / name
+            if not logo_path.exists():
+                continue
+            try:
+                raw = logo_path.read_bytes()
+                if name.endswith(".webp"):
+                    from PIL import Image
+                    img = Image.open(BytesIO(raw))
+                    buf = BytesIO()
+                    img.save(buf, format="PNG")
+                    raw = buf.getvalue()
+                    mime = "image/png"
+                elif name.endswith(".jpg") or name.endswith(".jpeg"):
+                    mime = "image/jpeg"
+                else:
+                    mime = "image/png"
+                b64 = base64.b64encode(raw).decode("ascii")
+                logo_uri = f"data:{mime};base64,{b64}"
+            except Exception:
+                logo_uri = None
+            break
+
         template = get_template("attendance/report_pdf_template.html")
-        html = template.render({"user": user, "occurrences": occurrences, "start": start_date, "end": end_date})
+        html = template.render({
+            "user": user,
+            "occurrences": occurrences,
+            "start": start_date,
+            "end": end_date,
+            "logo_uri": logo_uri,
+            "pto_used": pto_used,
+            "personal_used": personal_used,
+        })
         response = HttpResponse(content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{user.username}_report.pdf"'
         pisa.CreatePDF(html, dest=response)
         return response
     return redirect("attendance:reports")
+
+
+@login_required
+def request_time_off(request):
+    """
+    Allow a user to request PTO for full scheduled days within a single payroll week.
+    """
+    user = request.user
+
+    if request.method == "POST":
+        form = TimeOffRequestForm(request.POST, request_user=user)
+        if form.is_valid():
+            tor = form.save(commit=False)
+            tor.user = user
+            tor.save()
+            messages.success(request, "Time off request submitted.")
+            return redirect("attendance:my_time_off_requests")
+    else:
+        form = TimeOffRequestForm(request_user=user)
+
+    my_requests = TimeOffRequest.objects.filter(user=user).order_by("-created_at")
+
+    return render(
+        request,
+        "attendance/request_time_off.html",
+        {"form": form, "my_requests": my_requests},
+    )
+
+
+@login_required
+def my_time_off_requests(request):
+    """
+    Simple list view for a user to see their own requests and statuses.
+    """
+    user = request.user
+    my_requests = TimeOffRequest.objects.filter(user=user).order_by("-created_at")
+    return render(
+        request,
+        "attendance/my_time_off_requests.html",
+        {"my_requests": my_requests},
+    )
+
+
+@login_required
+def team_time_off_requests(request):
+    """
+    For approvers to see pending requests for users they manage.
+    Executives see all pending requests.
+    """
+    approver = request.user
+
+    if approver.role not in [
+        RoleChoices.GROUP_LEAD,
+        RoleChoices.SUPERVISOR,
+        RoleChoices.MANAGER,
+        RoleChoices.EXECUTIVE,
+    ]:
+        return redirect("attendance:dashboard")
+
+    pending = TimeOffRequest.objects.filter(status=TimeOffRequestStatus.PENDING)
+    # Filter to only those the current user can approve
+    manageable = [r.id for r in pending if can_approve_time_off(approver, r.user)]
+    pending = pending.filter(id__in=manageable)
+
+    return render(
+        request,
+        "attendance/team_time_off_requests.html",
+        {"pending_requests": pending},
+    )
+
+
+@require_POST
+@login_required
+def approve_time_off(request, pk):
+    tor = get_object_or_404(TimeOffRequest, pk=pk)
+    approver = request.user
+
+    if not can_approve_time_off(approver, tor.user):
+        messages.error(request, "You do not have permission to approve this request.")
+        return redirect("attendance:team_time_off_requests")
+
+    tor.approve(approver)
+    messages.success(request, "Time off request approved and PTO applied.")
+    return redirect("attendance:team_time_off_requests")
+
+
+@require_POST
+@login_required
+def deny_time_off(request, pk):
+    tor = get_object_or_404(TimeOffRequest, pk=pk)
+    approver = request.user
+
+    if not can_approve_time_off(approver, tor.user):
+        messages.error(request, "You do not have permission to deny this request.")
+        return redirect("attendance:team_time_off_requests")
+
+    tor.deny(approver)
+    messages.info(request, "Time off request denied.")
+    return redirect("attendance:team_time_off_requests")
+
+
+@require_POST
+@login_required
+def cancel_time_off(request, pk):
+    tor = get_object_or_404(TimeOffRequest, pk=pk)
+    if tor.user != request.user:
+        messages.error(request, "You can only cancel your own requests.")
+        return redirect("attendance:my_time_off_requests")
+    if tor.status not in (TimeOffRequestStatus.PENDING, TimeOffRequestStatus.APPROVED):
+        messages.error(request, "Only pending or approved requests can be cancelled.")
+        return redirect("attendance:my_time_off_requests")
+    was_approved = tor.status == TimeOffRequestStatus.APPROVED
+    tor.cancel()
+    messages.success(
+        request,
+        "Time off request cancelled." + (" PTO has been credited back." if was_approved else ""),
+    )
+    next_url = request.POST.get("next") or request.GET.get("next") or request.META.get("HTTP_REFERER")
+    if next_url and next_url.startswith("/"):
+        return redirect(next_url)
+    return redirect("attendance:my_time_off_requests")

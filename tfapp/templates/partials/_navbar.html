@@ -42,8 +42,27 @@
                     >
                         <a class="nav-link" href="{% url 'attendance:dashboard' %}">Dashboard</a>
                     </li>
-            
+
+                    <li
+                        {% if 'timeoff' in request.path and 'team' not in request.path %}
+                        class="nav-item active mr-3"
+                        {% else %}
+                        class="nav-item mr-3"
+                        {% endif %}
+                    >
+                        <a class="nav-link" href="{% url 'attendance:request_time_off' %}">Time Off</a>
+                    </li>
+
                     {% if user.role in 'group_lead supervisor manager executive' %}
+                    <li
+                        {% if 'timeoff/team' in request.path %}
+                        class="nav-item active mr-3"
+                        {% else %}
+                        class="nav-item mr-3"
+                        {% endif %}
+                    >
+                        <a class="nav-link" href="{% url 'attendance:team_time_off_requests' %}">Approvals</a>
+                    </li>
                     <li
                         {% if 'reports' in request.path %}
                         class="nav-item active mr-3"
@@ -54,7 +73,7 @@
                         <a class="nav-link" href="{% url 'attendance:reports' %}">Reports</a>
                     </li>
                     {% endif %}
-            
+
                     <li class="nav-item mr-3">
                         <a href="javascript:{document.getElementById('logout').submit()}" class="nav-link">Logout</a>
                         <form action="{% url 'logout' %}" method="POST" id="logout">

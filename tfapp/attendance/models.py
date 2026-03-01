@@ -1,8 +1,30 @@
+import math
 from django.db import models
+from django.db.models import JSONField
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
+DAYS_OF_WEEK = [
+    (0, "Monday"), (1, "Tuesday"), (2, "Wednesday"), (3, "Thursday"),
+    (4, "Friday"), (5, "Saturday"), (6, "Sunday"),
+]
 
+class WorkSchedule(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="schedules")
+    day = models.IntegerField(choices=DAYS_OF_WEEK)
+    start_time = models.TimeField()
+    lunch_out = models.TimeField()
+    lunch_in = models.TimeField()
+    end_time = models.TimeField()
+
+    class Meta:
+        unique_together = ("user", "day")
+        ordering = ["day"]
+
+    def __str__(self):
+        return f"{self.user.username} - {DAYS_OF_WEEK[self.day][1]}"
+    
 class RoleChoices(models.TextChoices):
     EXECUTIVE = "executive", "Executive"
     MANAGER = "manager", "Manager"
@@ -27,21 +49,30 @@ class CustomUser(AbstractUser):
     hours_worked = models.FloatField(default=0.0)
     timeclock_login = models.CharField(max_length=4, blank=True, null=True)
     timeclock_pin = models.CharField(max_length=4, blank=True, null=True)
-
+    weekly_schedule = JSONField(default=dict, blank=True, null=True)  # e.g. {"monday": {"start": "05:00", "lunch_out": "12:00", "lunch_in": "12:30", "end": "14:00"}, ...}
     supervisor = models.ForeignKey(
         'self', null=True, blank=True, on_delete=models.SET_NULL, related_name="supervisees"
     )
 
     def accrue_pto(self, hours):
-        if self.is_part_time or self.years_of_service() <= 2:
-            self.hours_worked += hours
-            earned = self.hours_worked // 30
-            if self.is_part_time:
-                self.pto_balance = min(self.pto_balance + earned, 72)
-            else:
-                self.pto_balance += earned
-            self.hours_worked %= 30
-            self.save()
+        """
+        Accrue PTO for years 0-2 or part-time: 1 hour PTO per 30 hours worked (fractional).
+        Accrual is rounded down to the hundredth so add/subtract on unfinalize cancels exactly.
+        Returns the number of hours added to pto_balance for this call (rounded down to 2 decimals).
+        """
+        if not (self.is_part_time or self.years_of_service() <= 2):
+            return 0.0
+        if not hours:
+            return 0.0
+        # Round down to hundredth so unfinalize subtracts the exact same amount
+        raw = hours / 30.0
+        earned = math.floor(raw * 100) / 100
+        if self.is_part_time:
+            self.pto_balance = round(min(self.pto_balance + earned, 72.0), 2)
+        else:
+            self.pto_balance = round(self.pto_balance + earned, 2)
+        self.save()
+        return earned
 
     def years_of_service(self):
         if not self.service_date:
@@ -55,74 +86,108 @@ class CustomUser(AbstractUser):
         return max(0, 3 - days // 30) if days <= 90 else 0
 
     def reset_pto_at_service_anniversary(self):
-        """Resets PTO annually based on tenure. Applies updated PTO and carries over."""
+        """
+        Reset PTO for a new service year based on tenure.
+        This should be called when a user's service anniversary is reached.
+
+        Years-of-service PTO scale (full-time):
+        - < 2 years: accrual only (handled via accrue_pto)
+        - 2–4 years: 80 hours
+        - 5–8 years: 100 hours
+        - 9–14 years: 120 hours
+        - 15–20 years: 140 hours
+        - 21–24 years: 160 hours
+        - 25+ years: 180 hours
+        """
         if self.is_part_time or not self.service_date:
             return  # Skip part-time or users with no service date
 
-        today = date.today()
         service_years = self.years_of_service()
 
-        # Find the most recent past anniversary
-        anniversary_this_year = self.service_date.replace(year=today.year)
-        if today < anniversary_this_year:
-            last_anniversary = self.service_date.replace(year=today.year - 1)
-        else:
-            last_anniversary = anniversary_this_year
-
-        if (today - last_anniversary).days < 1:
-            return  # Only update on anniversary day
-
         # PTO allocation scale
-        if 3 <= service_years <= 4:
+        if 2 <= service_years <= 4:
             pto_alloc = 80
         elif 5 <= service_years <= 8:
             pto_alloc = 100
         elif 9 <= service_years <= 14:
             pto_alloc = 120
-        elif 15 <= service_years <= 19:
+        elif 15 <= service_years <= 20:
             pto_alloc = 140
-        elif 20 <= service_years <= 24:
+        elif 21 <= service_years <= 24:
             pto_alloc = 160
         elif service_years >= 25:
             pto_alloc = 180
         else:
-            pto_alloc = 0  # Years 1-2 accrue hourly, handled elsewhere
+            pto_alloc = 0  # Years < 2 accrue hourly, handled elsewhere
 
+        # Carry out any remaining PTO from the previous year for reporting,
+        # then start the new year with the allocated amount and reset unpaid time.
         self.final_pto_balance = self.pto_balance
         self.pto_balance = pto_alloc
+        self.personal_time_balance = 0
+        self.save()
+
+    def set_pto_to_tenure_baseline(self, clear_personal=True):
+        """
+        Set PTO balance to the correct amount for the user's current years of service.
+        Use in admin after deleting occurrences or to correct balances.
+        For years 0-2 (accrual) or part-time: sets PTO and personal to 0 (no tenure allocation yet).
+        Optional: clear personal_time_balance (unpaid) when refreshing.
+        """
+        if not self.service_date:
+            return
+        if self.is_exempt:
+            return
+        service_years = self.years_of_service()
+        if service_years < 2 or self.is_part_time:
+            self.pto_balance = 0.0
+            self.final_pto_balance = 0.0
+            if clear_personal:
+                self.personal_time_balance = 0.0
+            self.save()
+            return
+        if service_years < 5:
+            pto_alloc = 80
+        elif service_years < 9:
+            pto_alloc = 100
+        elif service_years < 15:
+            pto_alloc = 120
+        elif service_years < 21:
+            pto_alloc = 140
+        elif service_years < 25:
+            pto_alloc = 160
+        else:
+            pto_alloc = 180
+        self.pto_balance = pto_alloc
+        self.final_pto_balance = pto_alloc
+        if clear_personal:
+            self.personal_time_balance = 0
         self.save()
 
     def recalculate_balances(self):
-        today = date.today()
-        years = self.years_of_service()
-
+        """
+        Ensure PTO / personal time balances respect basic caps.
+        This does NOT grant new annual PTO; that is handled by
+        reset_pto_at_service_anniversary and the admin action.
+        """
         if self.is_exempt:
             self.personal_time_balance = 0
             self.final_pto_balance = self.pto_balance
 
         elif self.is_part_time:
+            # Part-time: PTO accrues up to a hard cap of 72 hours.
             self.pto_balance = min(self.pto_balance, 72)
             self.final_pto_balance = self.pto_balance
 
-        elif self.service_date:
-            if years == 2:
-                self.final_pto_balance = self.pto_balance
-            elif years >= 3:
-                if years < 5:
-                    self.pto_balance = max(self.pto_balance, 80)
-                elif years < 10:
-                    self.pto_balance = max(self.pto_balance, 100)
-                elif years < 15:
-                    self.pto_balance = max(self.pto_balance, 120)
-                elif years < 20:
-                    self.pto_balance = max(self.pto_balance, 140)
-                elif years < 25:
-                    self.pto_balance = max(self.pto_balance, 160)
-                else:
-                    self.pto_balance = max(self.pto_balance, 180)
-                self.final_pto_balance = self.pto_balance
+        else:
+            # For full-time, just mirror current PTO into final_pto_balance.
+            self.final_pto_balance = self.pto_balance
 
-        self.save()
+    def save(self, *args, **kwargs):
+        # Auto-adjust balances whenever a user is saved,
+        # based on service date, tenure, and employment type.
+        self.recalculate_balances()
+        super().save(*args, **kwargs)
 
 
 class OccurrenceType(models.TextChoices):
@@ -146,6 +211,21 @@ class OccurrenceSubtype(models.TextChoices):
     DISCIPLINE = "Discipline", "Discipline"
     WORK_COMP = "Work Comp", "Work Comp"
     DISABILITY = "Disability", "Disability"
+    HOLIDAY_PAID = "Holiday Paid", "Holiday - Paid"
+
+
+# Subtypes that deduct from PTO (and personal time when PTO is exhausted). Used for balance math.
+OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL = [
+    OccurrenceSubtype.TIME_OFF,
+    OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+    OccurrenceSubtype.EXCHANGE,
+    OccurrenceSubtype.FMLA,
+    OccurrenceSubtype.LEAVE_OF_ABSENCE,
+    OccurrenceSubtype.TRANSPORTATION,
+    OccurrenceSubtype.WEATHER_PAID,
+    OccurrenceSubtype.BEREAVEMENT_PAID,
+    OccurrenceSubtype.JURY_DUTY_PAID,
+]
 
 
 class Occurrence(models.Model):
@@ -155,12 +235,50 @@ class Occurrence(models.Model):
     date = models.DateField()
     duration_hours = models.FloatField(default=0.0)
     pto_applied = models.BooleanField(default=False)
+    pto_hours_applied = models.FloatField(default=0.0)  # hours deducted from PTO for this occurrence
+    personal_hours_applied = models.FloatField(default=0.0)  # hours that went to personal for this occurrence
+    is_variance_to_schedule = models.BooleanField(default=False)
+    time_off_request = models.ForeignKey(
+        "TimeOffRequest",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="occurrences",
+    )
+    payroll_period = models.ForeignKey(
+        "PayrollPeriod",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="occurrences_created",
+        help_text="Set when this occurrence was created at payroll finalize (variance or tardy); used to revert on unfinalize.",
+    )
 
-    def apply_pto(self):
+    def _subtype_uses_pto(self):
+        """True if this subtype deducts from user PTO/personal time balance."""
+        return self.subtype in OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # When saved (e.g. from admin) with a PTO-using subtype and not yet applied, deduct from user.
+        # Skip if created at payroll close (payroll_period set); close_payroll applies with 40-hour cap.
+        if not self.pto_applied and self._subtype_uses_pto() and not self.payroll_period_id:
+            self.apply_pto()
+
+    def apply_pto(self, max_pto_to_apply=None):
+        """
+        Deduct from PTO (then personal) for this occurrence. Only if occurrence date has passed.
+        If max_pto_to_apply is set (e.g. 40 - worked for the week), cap PTO deduction so
+        regular + PTO does not exceed the cap. Returns the number of PTO hours deducted.
+        """
+        if self.date > date.today():
+            return 0.0
+
         u = self.user
+        u.refresh_from_db()  # ensure current balance when applying multiple occurrences in one run
         used = self.duration_hours
 
-        # Subtypes that do NOT affect balances
+        # Subtypes that do NOT affect balances (company-paid or fully unpaid/ excused)
         if self.subtype in [
             OccurrenceSubtype.DISCIPLINE,
             OccurrenceSubtype.WORK_COMP,
@@ -169,10 +287,9 @@ class Occurrence(models.Model):
             OccurrenceSubtype.BEREAVEMENT_UNPAID,
             OccurrenceSubtype.JURY_DUTY_UNPAID,
             OccurrenceSubtype.WEATHER_UNPAID,
+            OccurrenceSubtype.HOLIDAY_PAID,
         ]:
-            self.pto_applied = False
-            self.save()
-            return
+            return 0.0
 
         # Subtypes that affect PTO and possibly personal time
         if self.subtype in [
@@ -186,12 +303,391 @@ class Occurrence(models.Model):
             OccurrenceSubtype.BEREAVEMENT_PAID,
             OccurrenceSubtype.JURY_DUTY_PAID,
         ]:
-            if u.pto_balance >= used:
-                u.pto_balance -= used
-            else:
-                remaining = used - u.pto_balance
-                u.pto_balance = 0
-                u.personal_time_balance += remaining  # personal time increases
+            pto_deducted = min(used, u.pto_balance)
+            if max_pto_to_apply is not None:
+                pto_deducted = min(pto_deducted, max_pto_to_apply)
+            personal_deducted = used - pto_deducted
+            u.pto_balance = round(max(0.0, u.pto_balance - pto_deducted), 2)
+            u.personal_time_balance = round(u.personal_time_balance + personal_deducted, 2)
+            self.pto_hours_applied = pto_deducted
+            self.personal_hours_applied = personal_deducted
             self.pto_applied = True
             u.save()
             self.save()
+            return pto_deducted
+        return 0.0
+
+
+def apply_past_due_occurrences(user):
+    """
+    Apply PTO/personal for any occurrences that are due (date <= today) but not yet applied.
+    Call from dashboard or when loading user balance so that when a future approved date passes,
+    the balance is updated on next view.
+    """
+    today = date.today()
+    past_due = Occurrence.objects.filter(
+        user=user,
+        date__lte=today,
+        pto_applied=False,
+        subtype__in=OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL,
+    )
+    for occ in past_due:
+        occ.apply_pto()
+
+
+class TimeOffRequestStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    APPROVED = "approved", "Approved"
+    DENIED = "denied", "Denied"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+class TimeOffRequest(models.Model):
+    """
+    A user-initiated request to use PTO for one or more scheduled work days.
+    Approval will create one or more Occurrence records and apply PTO.
+    """
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="time_off_requests")
+    start_date = models.DateField()
+    end_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    status = models.CharField(
+        max_length=20,
+        choices=TimeOffRequestStatus.choices,
+        default=TimeOffRequestStatus.PENDING,
+    )
+    planned = models.BooleanField(default=False)
+    approver = models.ForeignKey(
+        CustomUser,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_time_off_requests",
+    )
+    subtype = models.CharField(
+        max_length=50,
+        choices=OccurrenceSubtype.choices,
+        default=OccurrenceSubtype.TIME_OFF,
+    )
+    comments = models.TextField(blank=True)
+    reason = models.CharField(max_length=255, blank=True)  # deprecated; use subtype + comments
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.username} PTO {self.start_date} to {self.end_date} ({self.status})"
+
+    def _iter_scheduled_days(self):
+        """
+        Yield (date, schedule) pairs for dates between start_date and end_date
+        where the user has a WorkSchedule.
+        """
+        current = self.start_date
+        while current <= self.end_date:
+            weekday = current.weekday()
+            schedule = self.user.schedules.filter(day=weekday).first()
+            if schedule:
+                yield current, schedule
+            current += timedelta(days=1)
+
+    def compute_requested_hours(self):
+        """
+        Compute total scheduled hours for this request window,
+        based on the user's WorkSchedule.
+        """
+        total = 0.0
+        for _date, schedule in self._iter_scheduled_days():
+            start_dt = datetime.combine(_date, schedule.start_time)
+            end_dt = datetime.combine(_date, schedule.end_time)
+            lunch_out_dt = datetime.combine(_date, schedule.lunch_out)
+            lunch_in_dt = datetime.combine(_date, schedule.lunch_in)
+            daily_hours = (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
+            if daily_hours > 0:
+                total += daily_hours
+        return total
+
+    def mark_planned_or_unplanned(self):
+        """
+        Planned if submitted at least one day before the first requested date,
+        otherwise unplanned.
+        """
+        created_date = self.created_at.date() if self.created_at else date.today()
+        self.planned = created_date <= (self.start_date - timedelta(days=1))
+
+    def approve(self, approver_user):
+        """
+        Approve this request, create PTO occurrences, and apply PTO.
+        """
+        if self.status != TimeOffRequestStatus.PENDING:
+            return
+
+        self.approver = approver_user
+        self.mark_planned_or_unplanned()
+        self.status = TimeOffRequestStatus.APPROVED
+        self.save()
+
+        occurrence_type = (
+            OccurrenceType.PLANNED if self.planned else OccurrenceType.UNPLANNED
+        )
+
+        for _date, schedule in self._iter_scheduled_days():
+            start_dt = datetime.combine(_date, schedule.start_time)
+            end_dt = datetime.combine(_date, schedule.end_time)
+            lunch_out_dt = datetime.combine(_date, schedule.lunch_out)
+            lunch_in_dt = datetime.combine(_date, schedule.lunch_in)
+            daily_hours = (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
+            if daily_hours <= 0:
+                continue
+
+            occ = Occurrence.objects.create(
+                user=self.user,
+                occurrence_type=occurrence_type,
+                subtype=getattr(self, "subtype", OccurrenceSubtype.TIME_OFF),
+                date=_date,
+                duration_hours=daily_hours,
+                time_off_request=self,
+            )
+            occ.apply_pto()
+
+    def deny(self, approver_user):
+        """
+        Deny this request without affecting balances.
+        """
+        if self.status != TimeOffRequestStatus.PENDING:
+            return
+        self.approver = approver_user
+        self.status = TimeOffRequestStatus.DENIED
+        self.save()
+
+    def cancel(self):
+        """
+        Cancel this request. When PENDING: just set status. When APPROVED: reverse
+        PTO (credit user), delete linked occurrences, then set status to CANCELLED.
+        """
+        if self.status == TimeOffRequestStatus.PENDING:
+            self.status = TimeOffRequestStatus.CANCELLED
+            self.save()
+            return
+        if self.status != TimeOffRequestStatus.APPROVED:
+            return
+        u = self.user
+        for occ in self.occurrences.all():
+            if occ.pto_applied:
+                u.pto_balance += occ.pto_hours_applied
+                u.personal_time_balance = max(0, u.personal_time_balance - occ.personal_hours_applied)
+            occ.delete()
+        u.save()
+        self.status = TimeOffRequestStatus.CANCELLED
+        self.save()
+
+
+class PayrollPeriod(models.Model):
+    """
+    Tracks whether a payroll week (ending Saturday) has been finalized.
+    When finalized, time entries for that week are locked; unfinalize to allow corrections.
+    """
+    week_ending = models.DateField(unique=True)  # Saturday
+    is_finalized = models.BooleanField(default=False)
+    finalized_at = models.DateTimeField(null=True, blank=True)
+    finalized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="finalized_payroll_periods",
+    )
+
+    class Meta:
+        ordering = ["-week_ending"]
+
+    def __str__(self):
+        return f"Payroll {self.week_ending} ({'finalized' if self.is_finalized else 'open'})"
+
+
+class PayrollPeriodUserSnapshot(models.Model):
+    """
+    Stores PTO accrued per user when a payroll period is finalized, so we can revert on unfinalize.
+    """
+    period = models.ForeignKey(
+        PayrollPeriod,
+        on_delete=models.CASCADE,
+        related_name="user_snapshots",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="payroll_period_snapshots",
+    )
+    pto_accrued_hours = models.FloatField(default=0.0)
+
+    class Meta:
+        unique_together = ("period", "user")
+        ordering = ["period", "user"]
+
+    def __str__(self):
+        return f"{self.period.week_ending} / {self.user} accrued {self.pto_accrued_hours}"
+
+
+def get_company_holidays(year: int):
+    """
+    Return a dict of {date: name} for company holidays in the given year.
+    Holidays:
+    - New Year's Day (Jan 1)
+    - Memorial Day (last Monday in May)
+    - Independence Day (July 4)
+    - Labor Day (first Monday in September)
+    - Thanksgiving Day (fourth Thursday in November)
+    - Christmas Day (Dec 25)
+    """
+    holidays = {}
+
+    # New Year's Day
+    holidays[date(year, 1, 1)] = "New Year's Day"
+
+    # Memorial Day: last Monday in May
+    may_last = date(year, 5, 31)
+    while may_last.weekday() != 0:  # 0 = Monday
+        may_last -= timedelta(days=1)
+    holidays[may_last] = "Memorial Day"
+
+    # Independence Day
+    holidays[date(year, 7, 4)] = "Independence Day"
+
+    # Labor Day: first Monday in September
+    sept_first = date(year, 9, 1)
+    while sept_first.weekday() != 0:
+        sept_first += timedelta(days=1)
+    holidays[sept_first] = "Labor Day"
+
+    # Thanksgiving: fourth Thursday in November
+    nov_first = date(year, 11, 1)
+    # find first Thursday
+    while nov_first.weekday() != 3:  # 3 = Thursday
+        nov_first += timedelta(days=1)
+    thanksgiving = nov_first + timedelta(weeks=3)
+    holidays[thanksgiving] = "Thanksgiving Day"
+
+    # Christmas Day
+    holidays[date(year, 12, 25)] = "Christmas Day"
+
+    return holidays
+
+
+def _user_met_holiday_attendance_rule(user: CustomUser, holiday_date: date) -> bool:
+    """
+    Full-time employees only receive holiday pay if they reported
+    (worked OR had an approved occurrence) on their last scheduled day
+    before AND their next scheduled day after the holiday.
+    """
+    # Find last scheduled workday before the holiday
+    day = holiday_date - timedelta(days=1)
+    last_before = None
+    while (holiday_date - day).days <= 7 and day < holiday_date:
+        if user.schedules.filter(day=day.weekday()).exists():
+            last_before = day
+            break
+        day -= timedelta(days=1)
+
+    # Find next scheduled workday after the holiday
+    day = holiday_date + timedelta(days=1)
+    next_after = None
+    while (day - holiday_date).days <= 7 and day > holiday_date:
+        if user.schedules.filter(day=day.weekday()).exists():
+            next_after = day
+            break
+        day += timedelta(days=1)
+
+    if not last_before or not next_after:
+        # If we can't find both sides, be conservative and require neither condition
+        return True
+
+    from timeclock.models import TimeEntry
+
+    def _has_time_or_approved_occurrence(the_date: date) -> bool:
+        # Any time entry counts as reporting
+        has_entry = TimeEntry.objects.filter(user=user, date=the_date).exists()
+        if has_entry:
+            return True
+        # Any occurrence (planned/unplanned, paid/unpaid) means they had an approved leave
+        return Occurrence.objects.filter(user=user, date=the_date).exists()
+
+    return _has_time_or_approved_occurrence(last_before) and _has_time_or_approved_occurrence(
+        next_after
+    )
+
+
+def ensure_holiday_occurrences_for_range(start_date: date, end_date: date):
+    """
+    For each active, non-exempt user who is scheduled on a company holiday
+    within the given date range, create a HOLIDAY_PAID Occurrence with
+    duration equal to their normal scheduled shift, if one does not already exist.
+    """
+    if start_date > end_date:
+        return
+
+    years = set()
+    current = start_date
+    while current <= end_date:
+        years.add(current.year)
+        current += timedelta(days=1)
+
+    holiday_dates = {}
+    for y in years:
+        holiday_dates.update(get_company_holidays(y))
+
+    users = CustomUser.objects.filter(is_active=True, is_exempt=False, is_part_time=False)
+
+    for user in users:
+        current = start_date
+        while current <= end_date:
+            if current not in holiday_dates:
+                current += timedelta(days=1)
+                continue
+
+            weekday = current.weekday()
+            schedule = user.schedules.filter(day=weekday).first()
+            if not schedule:
+                current += timedelta(days=1)
+                continue
+
+            # If employee did not meet attendance rule (last before & next after),
+            # ensure any existing holiday pay is removed and skip granting.
+            if not _user_met_holiday_attendance_rule(user, current):
+                Occurrence.objects.filter(
+                    user=user,
+                    date=current,
+                    subtype=OccurrenceSubtype.HOLIDAY_PAID,
+                ).delete()
+                current += timedelta(days=1)
+                continue
+
+            # Skip if a holiday occurrence already exists
+            if Occurrence.objects.filter(
+                user=user,
+                date=current,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).exists():
+                current += timedelta(days=1)
+                continue
+
+            start_dt = datetime.combine(current, schedule.start_time)
+            end_dt = datetime.combine(current, schedule.end_time)
+            lunch_out_dt = datetime.combine(current, schedule.lunch_out)
+            lunch_in_dt = datetime.combine(current, schedule.lunch_in)
+            daily_hours = (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
+            if daily_hours <= 0:
+                current += timedelta(days=1)
+                continue
+
+            Occurrence.objects.create(
+                user=user,
+                occurrence_type=OccurrenceType.PLANNED,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+                date=current,
+                duration_hours=daily_hours,
+            )
+
+            current += timedelta(days=1)

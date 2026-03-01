@@ -9,6 +9,21 @@
     padding: 1.5rem 1rem;
     font-size: 2rem;
   }
+  .timeclock-actions {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: 1fr 1fr;
+  }
+  @media (min-width: 768px) {
+    .timeclock-actions {
+      grid-template-columns: repeat(4, 1fr);
+    }
+  }
+  .timeclock-actions .btn {
+    min-width: 0;
+    min-height: 4.25rem;
+    width: 100%;
+  }
 </style>
 
 <div class="container-fluid h-100 bg-light">
@@ -33,28 +48,46 @@
             {% csrf_token %}
             <div class="row justify-content-center mb-4">
               <div class="col-md-3 col-6">
-                <input type="text" name="login" maxlength="4" placeholder="Login"
-                       class="form-control form-control-lg text-center" required>
+                <input type="password" id="login" name="login" maxlength="4" placeholder="Login"
+                  class="form-control form-control-lg text-center" required
+                  inputmode="numeric" pattern="\d*" autocomplete="off">
               </div>
               <div class="col-md-3 col-6">
-                <input type="password" name="pin" maxlength="4" placeholder="PIN"
-                       class="form-control form-control-lg text-center" required>
+                <input type="password" id="pin" name="pin" maxlength="4" placeholder="PIN"
+                  class="form-control form-control-lg text-center" required
+                  inputmode="numeric" pattern="\d*" autocomplete="off">
               </div>
             </div>
 
-            <div class="row g-3 justify-content-center mt-5">
-              <div class="col-12 col-sm-6 col-md-3">
-                <button name="action" value="clock_in" class="btn btn-success btn-xl w-100">Clock In</button>
+            <div class="row justify-content-center mt-3">
+              <div class="col-12 col-md-6 col-lg-4">
+                <div class="row">
+
+                  {% for num in "123456789" %}
+                  <div class="col-4 p-2">
+                    <button type="button" class="btn btn-secondary btn-xl w-100" onclick="pressKey('{{ num }}')">{{ num }}</button>
+                  </div>
+                  {% endfor %}
+
+                  <div class="col-4 p-2">
+                    <button type="button" class="btn btn-danger btn-xl w-100" onclick="clearField()">C</button>
+                  </div>
+                  <div class="col-4 p-2">
+                    <button type="button" class="btn btn-secondary btn-xl w-100" onclick="pressKey('0')">0</button>
+                  </div>
+                  <div class="col-4 p-2">
+                    <button type="button" class="btn btn-warning btn-xl w-100" onclick="backspace()">←</button>
+                  </div>
+
+                </div>
               </div>
-              <div class="col-12 col-sm-6 col-md-3">
-                <button name="action" value="lunch_out" class="btn btn-warning btn-xl w-100">Lunch Out</button>
-              </div>
-              <div class="col-12 col-sm-6 col-md-3">
-                <button name="action" value="lunch_in" class="btn btn-info btn-xl w-100">Lunch In</button>
-              </div>
-              <div class="col-12 col-sm-6 col-md-3">
-                <button name="action" value="clock_out" class="btn btn-danger btn-xl w-100">Clock Out</button>
-              </div>
+            </div>
+
+            <div class="timeclock-actions mt-5">
+              <button name="action" value="clock_in" class="btn btn-success btn-xl">Clock In</button>
+              <button name="action" value="lunch_out" class="btn btn-warning btn-xl">Lunch Out</button>
+              <button name="action" value="lunch_in" class="btn btn-info btn-xl">Lunch In</button>
+              <button name="action" value="clock_out" class="btn btn-danger btn-xl">Clock Out</button>
             </div>
           </form>
 
@@ -75,5 +108,40 @@
   }
   setInterval(updateClock, 1000);
   updateClock();
+</script>
+
+<script>
+  let activeField = 'login';
+  const loginInput = document.getElementById('login');
+  const pinInput = document.getElementById('pin');
+
+  // Prevent typing on physical keyboard
+  loginInput.addEventListener('keypress', e => e.preventDefault());
+  pinInput.addEventListener('keypress', e => e.preventDefault());
+
+  loginInput.addEventListener('focus', () => activeField = 'login');
+  pinInput.addEventListener('focus', () => activeField = 'pin');
+
+  function pressKey(num) {
+    const field = document.getElementById(activeField);
+    if (field.value.length < 4) {
+      field.value += num;
+    }
+
+    if (field.value.length === 4 && activeField === 'login') {
+      activeField = 'pin';
+      pinInput.focus();
+    }
+  }
+
+  function backspace() {
+    const field = document.getElementById(activeField);
+    field.value = field.value.slice(0, -1);
+  }
+
+  function clearField() {
+    const field = document.getElementById(activeField);
+    field.value = '';
+  }
 </script>
 {% endblock %}

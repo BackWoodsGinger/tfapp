@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load crispy_forms_tags %}
 {% block content %}
 <div class="container mt-4">
   <div class="row justify-content-center">
@@ -21,27 +22,57 @@
           </div>
           {% endif %}
 
-          <h4 class="mb-3">Weekly Time Summary ({{ start_of_week }} – {{ end_of_week }})</h4>
+          <form method="get" action="{% url 'attendance:reports' %}" id="weekly-summary-form" class="mb-3">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+              <label for="week_ending_summary" class="form-label mb-0 fw-bold">Week Ending:</label>
+              <select name="week_ending" id="week_ending_summary" class="form-select form-select-sm" style="width: auto;">
+                {% for value, display in payroll_weeks_display %}
+                  <option value="{{ value }}" {% if end_of_week|date:"Y-m-d" == value %}selected{% endif %}>{{ display }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-sm btn-outline-primary">View</button>
+            </div>
+          </form>
+          <p class="mb-2"><strong>Week Ending: {{ end_of_week|date:"m/d/Y" }}</strong></p>
           <table class="table table-sm table-bordered">
               <thead>
-                  <tr>
-                      <th>User</th><th>Total Hours</th>
-                  </tr>
+                <tr>
+                  <th>User</th>
+                  <th>Total Hours</th>
+                  <th>Scheduled Hours</th>
+                  <th>Delta</th>
+                </tr>
               </thead>
               <tbody>
-                  {% for user, hours in weekly_totals %}
-                  <tr>
-                      <td>{{ user.get_full_name|default:user.username }}</td>
-                      <td>{{ hours }}</td>
-                  </tr>
-                  {% endfor %}
+                {% for user, actual, scheduled, delta in weekly_totals %}
+                <tr>
+                  <td>{{ user.get_full_name|default:user.username }}</td>
+                  <td>{{ actual }}</td>
+                  <td>{{ scheduled }}</td>
+                  <td class="{% if delta < 0 %}text-danger{% elif delta > 0 %}text-success{% endif %}">
+                    {{ delta }}
+                  </td>
+                </tr>
+                {% endfor %}
               </tbody>
           </table>
 
           {% if user.is_staff %}
-          <button type="button" class="btn btn-primary mt-3" data-bs-toggle="modal" data-bs-target="#closePayrollModal">
+          <div class="mt-3 d-flex flex-wrap align-items-center gap-2">
+            {% if payroll_finalized %}
+              <span class="badge bg-success">Finalized</span>
+              <form method="post" action="{% url 'attendance:unfinalize_payroll' %}" class="d-inline" onsubmit="return confirm('Unfinalize this payroll week so you can correct time entries?');">
+                {% csrf_token %}
+                <input type="hidden" name="week_ending" value="{{ end_of_week|date:'Y-m-d' }}">
+                <button type="submit" class="btn btn-warning btn-sm">Unfinalize to make corrections</button>
+              </form>
+            {% else %}
+              <span class="badge bg-secondary">Open</span>
+            {% endif %}
+            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#closePayrollModal">
               Close Payroll
-          </button>
+            </button>
+          </div>
 
           <!-- Modal -->
           <div class="modal fade" id="closePayrollModal" tabindex="-1" aria-labelledby="closePayrollModalLabel" aria-hidden="true">
@@ -56,13 +87,14 @@
                   <div class="modal-body">
                     <label for="week_ending">Select Payroll Week Ending:</label>
                     <select name="week_ending" id="week_ending" class="form-select">
-                      {% for week in payroll_weeks %}
-                        <option value="{{ week }}">{{ week }}</option>
+                      {% for value, display in payroll_weeks_display %}
+                        <option value="{{ value }}" {% if end_of_week|date:"Y-m-d" == value %}selected{% endif %}>{{ display }}</option>
                       {% endfor %}
                     </select>
+                    <p class="small text-muted mt-2 mb-0">Finalizes the week, applies PTO accrual (0–2 yr), tardy occurrences, variance PTO, then exports CSV.</p>
                   </div>
                   <div class="modal-footer">
-                    <button type="submit" class="btn btn-success">Export CSV</button>
+                    <button type="submit" class="btn btn-success">Finalize &amp; Export CSV</button>
                   </div>
                 </div>
               </form>
@@ -76,10 +108,64 @@
       <div class="card">
         <div class="card-body">
           <h3 class="mb-4">Generate Occurrence Report</h3>
-          <form method="get" action="{% url 'attendance:generate_report_pdf' %}" class="form-inline">
-              {{ form.as_p }}
-              <button class="btn btn-sm btn-primary" type="submit">Download PDF</button>
+          <form method="get" action="{% url 'attendance:generate_report_pdf' %}" id="occurrence-report-form" class="mb-0">
+            <div class="mb-2">
+              <label for="id_user" class="form-label">User</label>
+              {{ form.user }}
+            </div>
+            <div class="mb-2">
+              <button type="button" class="btn btn-outline-secondary" id="current-service-year-btn">Current Service Year</button>
+            </div>
+            <div class="row g-2 mb-2">
+              <div class="col-auto">
+                <label for="id_start_date" class="form-label">Start date</label>
+                {{ form.start_date }}
+              </div>
+              <div class="col-auto">
+                <label for="id_end_date" class="form-label">End date</label>
+                {{ form.end_date }}
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Download Report</button>
           </form>
+          <script>
+            (function() {
+              var userServiceDates = {{ user_service_dates_json|safe }};
+              var todayIso = "{{ today_iso|escapejs }}";
+              var btn = document.getElementById("current-service-year-btn");
+              var userSelect = document.getElementById("id_user");
+              var startInput = document.getElementById("id_start_date");
+              var endInput = document.getElementById("id_end_date");
+              if (!btn || !userSelect || !startInput || !endInput) return;
+              function formatDate(d) {
+                var y = d.getFullYear(), m = (d.getMonth() + 1), day = d.getDate();
+                return y + "-" + (m < 10 ? "0" + m : m) + "-" + (day < 10 ? "0" + day : day);
+              }
+              function updateButtonState() {
+                var userId = userSelect.value;
+                btn.disabled = !userId || !userServiceDates[userId];
+              }
+              userSelect.addEventListener("change", updateButtonState);
+              updateButtonState();
+
+              btn.addEventListener("click", function() {
+                var userId = userSelect.value;
+                var serviceDateIso = userServiceDates[userId];
+                if (!serviceDateIso) return;
+                var today = new Date(todayIso + "T12:00:00");
+                var parts = serviceDateIso.split("-");
+                var annivThisYear = new Date(today.getFullYear(), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+                var start, end = today;
+                if (annivThisYear > today) {
+                  start = new Date(today.getFullYear() - 1, parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+                } else {
+                  start = annivThisYear;
+                }
+                startInput.value = formatDate(start);
+                endInput.value = formatDate(end);
+              });
+            })();
+          </script>
 
           {% if occurrences %}
           <h5 class="mt-4">Occurrences for {{ selected_user.get_full_name|default:selected_user.username }}</h5>
