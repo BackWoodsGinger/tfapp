@@ -9,6 +9,8 @@ env/
 # Django
 media/
 staticfiles/
+# Database
+db.sqlite3
 
 # Secrets
 .env
