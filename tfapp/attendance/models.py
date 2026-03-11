@@ -200,6 +200,7 @@ class OccurrenceSubtype(models.TextChoices):
     TARDY_IN_GRACE = "Tardy In Grace", "Tardy In Grace"
     TARDY_OUT_OF_GRACE = "Tardy Out of Grace", "Tardy Out of Grace"
     EXCHANGE = "Exchange", "Exchange"
+    LAYOFF = "Lay-Off", "Lay-Off"
     FMLA = "FMLA", "Family Medical Leave"
     LEAVE_OF_ABSENCE = "LOA", "Leave of Absence"
     TRANSPORTATION = "Transportation", "Transportation"
@@ -334,6 +335,7 @@ class Occurrence(models.Model):
 
         # Subtypes that do NOT affect balances (company-paid or fully unpaid/ excused)
         if self.subtype in [
+            OccurrenceSubtype.LAYOFF,
             OccurrenceSubtype.DISCIPLINE,
             OccurrenceSubtype.WORK_COMP,
             OccurrenceSubtype.DISABILITY,
@@ -364,6 +366,31 @@ class Occurrence(models.Model):
             u = CustomUser.objects.select_for_update().get(pk=self.user_id)
             pto_bal = Decimal(str(u.pto_balance)).quantize(Decimal("0.01"))
             personal_bal = Decimal(str(u.personal_time_balance)).quantize(Decimal("0.01"))
+
+            # For FMLA and Leave of Absence: use PTO when available, but do NOT
+            # convert any remaining hours into personal/unpaid time. Remaining
+            # hours are treated as leave for tracking only.
+            if self.subtype in [OccurrenceSubtype.FMLA, OccurrenceSubtype.LEAVE_OF_ABSENCE]:
+                pto_deducted = min(used, pto_bal)
+                if max_pto_to_apply is not None:
+                    pto_deducted = min(pto_deducted, Decimal(str(max_pto_to_apply)))
+                new_pto = max(Decimal("0"), pto_bal - pto_deducted)
+                u.pto_balance = float(new_pto.quantize(Decimal("0.01")))
+                u.save()
+                if pto_deducted > 0:
+                    PTOBalanceHistory.record(
+                        user=u,
+                        change=float(-pto_deducted.quantize(Decimal("0.01"))),
+                        reason=f"Occurrence apply_pto: {self.get_subtype_display()} ({self.date})",
+                        balance_after=u.pto_balance,
+                    )
+                self.pto_hours_applied = float(pto_deducted.quantize(Decimal("0.01")))
+                self.personal_hours_applied = 0.0
+                self.pto_applied = True
+                self.save()
+                return float(pto_deducted.quantize(Decimal("0.01")))
+
+            # Default behavior: PTO first, then remaining hours to personal time.
             pto_deducted = min(used, pto_bal)
             if max_pto_to_apply is not None:
                 pto_deducted = min(pto_deducted, Decimal(str(max_pto_to_apply)))

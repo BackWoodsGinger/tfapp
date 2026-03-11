@@ -644,9 +644,10 @@ def close_payroll(request):
                         is_variance_to_schedule=True,
                     ).exists()
                     if not has_variance:
+                        expected_week_hours = user_total_scheduled.get(user.id, total_scheduled)
                         subtype = (
                             OccurrenceSubtype.EXCHANGE
-                            if total_worked_hours >= 40
+                            if total_worked_hours >= expected_week_hours
                             else OccurrenceSubtype.TIME_OFF
                         )
                         Occurrence.objects.create(
@@ -682,7 +683,14 @@ def close_payroll(request):
             ).select_related("user").order_by("user_id", "date")
         )
         for occ in exchange_occurrences:
-            if user_total_worked.get(occ.user_id, 0) < 40:
+            worked = user_total_worked.get(occ.user_id, 0)
+            expected = user_total_scheduled.get(occ.user_id)
+            if expected is None:
+                expected = _scheduled_hours_for_range(occ.user, week_start, week_ending)
+                user_total_scheduled[occ.user_id] = expected
+            # Only apply PTO/personal to EXCHANGE when the user did not meet their
+            # scheduled hours for the week.
+            if worked < expected:
                 week_occurrences.append(occ)
         week_occurrences.sort(key=lambda o: (o.user_id, o.date))
 
