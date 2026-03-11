@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<h3>Welcome, {% if user.first_name %}{{ user.first_name }}{% else %}{{ user.username }}{% endif %}</h3>
+
+<h3>Occurrences for {{ date }}</h3>
+
+<h5>Current PTO Balance: {{ current_pto }}</h5>
+<h5>Current Personal Time Balance: {{ current_personal }}</h5>
+
+{% if future_occurrences %}
+<h5>Projected Balances After Future Occurrences</h5>
+<p>PTO After Future: {{ future_pto }}</p>
+<p>Personal Time After Future: {{ future_personal }}</p>
+{% endif %}
+
+<h4>Past Occurrences Since Last Service Anniversary</h4>
+<table class="table table-bordered">
+    <thead>
+        <tr>
+            <th>User</th>
+            <th>Date</th>
+            <th>Type</th>
+            <th>Subtype</th>
+            <th>Hours</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for occ in past_occurrences %}
+        <tr>
+            <td>{{ occ.user.username }}</td>
+            <td>{{ occ.date }}</td>
+            <td>{{ occ.get_occurrence_type_display }}</td>
+            <td>{{ occ.get_subtype_display }}</td>
+            <td>{{ occ.duration_hours }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5">No past occurrences found.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<h4>Upcoming Occurrences</h4>
+<table class="table table-bordered">
+    <thead>
+        <tr>
+            <th>User</th>
+            <th>Date</th>
+            <th>Type</th>
+            <th>Subtype</th>
+            <th>Hours</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for occ in future_occurrences %}
+        <tr>
+            <td>{{ occ.user.username }}</td>
+            <td>{{ occ.date }}</td>
+            <td>{{ occ.get_occurrence_type_display }}</td>
+            <td>{{ occ.get_subtype_display }}</td>
+            <td>{{ occ.duration_hours }}</td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5">No future occurrences found.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

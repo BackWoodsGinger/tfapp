@@ -14,7 +14,7 @@
               <strong>⚠ Incomplete Time Entries Detected</strong>
               <ul>
                   {% for e in alerts %}
-                  <li>{{ e.user.get_full_name|default:e.user.username }} on {{ e.date }} – 
+                  <li>{{ e.user.get_full_name|default:e.user.username }} on {{ e.date }}{% if e.missing_punch_flagged %} <span class="badge bg-warning text-dark">Flagged by nightly job</span>{% endif %} –
                       <a href="{% url 'timeclock:edit_entry' e.id %}">Fix</a>
                   </li>
                   {% endfor %}

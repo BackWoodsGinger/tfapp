@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
@@ -5,12 +6,27 @@ from datetime import timedelta, datetime
 
 
 class TimeEntry(models.Model):
+    """One entry per user per day; enforced by unique constraint to prevent duplicates and race double-creation."""
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     clock_in = models.DateTimeField(null=True, blank=True)
     lunch_out = models.DateTimeField(null=True, blank=True)
     lunch_in = models.DateTimeField(null=True, blank=True)
     clock_out = models.DateTimeField(null=True, blank=True)
     date = models.DateField(default=timezone.now)
+    missing_punch_flagged = models.BooleanField(
+        default=False,
+        help_text="Set by nightly job when entry is incomplete; cleared when entry is fixed.",
+    )
+    missing_punch_flagged_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "date"], name="unique_timeentry_user_date"),
+        ]
+        indexes = [
+            models.Index(fields=["user", "date"]),
+            models.Index(fields=["date"]),
+        ]
 
     def is_incomplete(self):
         """Return True if the entry has only some but not all timestamps filled in."""
@@ -18,17 +34,18 @@ class TimeEntry(models.Model):
         return any(fields) and not all(fields)
 
     def total_worked_time(self):
+        """Return worked hours; uses Decimal for consistent rounding and to avoid float drift."""
         if self.clock_in and self.clock_out:
             worked = self.clock_out - self.clock_in
-
             if self.lunch_out and self.lunch_in:
                 lunch = self.lunch_in - self.lunch_out
                 if lunch < timedelta(minutes=30):
                     lunch = timedelta(minutes=30)
             else:
                 lunch = timedelta(minutes=30)
-            return max((worked - lunch).total_seconds() / 3600, 0)
-        return 0
+            seconds = max((worked - lunch).total_seconds(), 0)
+            return float(Decimal(str(seconds / 3600)).quantize(Decimal("0.01")))
+        return 0.0
 
     def rounded_start(self):
         if self.clock_in:
@@ -82,15 +99,17 @@ class TimeEntry(models.Model):
             adjusted_start = self.round_to_quarter(self.clock_in)
             loss = (adjusted_start - scheduled_time).total_seconds() / 3600
             if loss > 0:
-                occ = Occurrence(
+                occ, created = Occurrence.objects.get_or_create(
                     user=self.user,
                     date=self.date,
-                    occurrence_type=OccurrenceType.UNPLANNED,
                     subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
-                    duration_hours=loss,
+                    defaults={
+                        "occurrence_type": OccurrenceType.UNPLANNED,
+                        "duration_hours": loss,
+                    },
                 )
-                occ.save()
-                occ.apply_pto()
+                if created:
+                    occ.apply_pto()
 
     def check_lunch_tardy(self):
         """
@@ -118,15 +137,24 @@ class TimeEntry(models.Model):
             adjusted_in = self.round_to_quarter(self.lunch_in)
             loss = (adjusted_in - scheduled_lunch_in).total_seconds() / 3600
             if loss > 0:
-                occ = Occurrence(
+                # Use get_or_create to avoid duplicate if rule runs twice (unique constraint)
+                occ, created = Occurrence.objects.get_or_create(
                     user=self.user,
                     date=self.date,
-                    occurrence_type=OccurrenceType.UNPLANNED,
                     subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
-                    duration_hours=loss,
+                    defaults={
+                        "occurrence_type": OccurrenceType.UNPLANNED,
+                        "duration_hours": loss,
+                    },
                 )
-                occ.save()
-                occ.apply_pto()
+                if created:
+                    occ.apply_pto()
+
+    def save(self, *args, **kwargs):
+        if not self.is_incomplete() and self.missing_punch_flagged:
+            self.missing_punch_flagged = False
+            self.missing_punch_flagged_at = None
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.user.username} - {self.date}"

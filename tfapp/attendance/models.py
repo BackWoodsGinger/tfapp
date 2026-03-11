@@ -1,6 +1,7 @@
 import math
+from decimal import Decimal
 from django.db import models
-from django.db.models import JSONField
+from django.db.models import JSONField, Q, UniqueConstraint
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from datetime import date, timedelta, datetime
@@ -228,6 +229,41 @@ OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL = [
 ]
 
 
+class PTOBalanceHistory(models.Model):
+    """
+    Audit trail for PTO/personal balance changes. Use for reconciliation and debugging.
+    """
+    BALANCE_TYPE_PTO = "pto"
+    BALANCE_TYPE_PERSONAL = "personal"
+    BALANCE_TYPE_CHOICES = [(BALANCE_TYPE_PTO, "PTO"), (BALANCE_TYPE_PERSONAL, "Personal")]
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="pto_balance_history")
+    change = models.DecimalField(max_digits=8, decimal_places=2, help_text="Signed change amount")
+    reason = models.CharField(max_length=255)
+    balance_after = models.DecimalField(max_digits=8, decimal_places=2, help_text="Balance after this change")
+    balance_type = models.CharField(
+        max_length=20, choices=BALANCE_TYPE_CHOICES, default=BALANCE_TYPE_PTO
+    )
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-timestamp"]
+        indexes = [models.Index(fields=["user", "timestamp"])]
+
+    def __str__(self):
+        return f"{self.user.username} {self.balance_type} {self.change} @ {self.timestamp}"
+
+    @classmethod
+    def record(cls, user, change, reason, balance_after, balance_type=BALANCE_TYPE_PTO):
+        cls.objects.create(
+            user=user,
+            change=change,
+            reason=reason,
+            balance_after=balance_after,
+            balance_type=balance_type,
+        )
+
+
 class Occurrence(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     occurrence_type = models.CharField(max_length=20, choices=OccurrenceType.choices)
@@ -254,6 +290,25 @@ class Occurrence(models.Model):
         help_text="Set when this occurrence was created at payroll finalize (variance or tardy); used to revert on unfinalize.",
     )
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "date"]),
+        ]
+        constraints = [
+            # Prevent duplicate in-grace tardy when user clocks in twice or rule runs twice
+            UniqueConstraint(
+                fields=["user", "date", "subtype"],
+                condition=Q(subtype=OccurrenceSubtype.TARDY_IN_GRACE),
+                name="unique_tardy_in_grace_per_user_date",
+            ),
+            # One TARDY_OUT_OF_GRACE per (user, date) so rule run twice doesn't create two
+            UniqueConstraint(
+                fields=["user", "date", "subtype"],
+                condition=Q(subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE),
+                name="unique_tardy_out_of_grace_per_user_date",
+            ),
+        ]
+
     def _subtype_uses_pto(self):
         """True if this subtype deducts from user PTO/personal time balance."""
         return self.subtype in OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL
@@ -270,13 +325,12 @@ class Occurrence(models.Model):
         Deduct from PTO (then personal) for this occurrence. Only if occurrence date has passed.
         If max_pto_to_apply is set (e.g. 40 - worked for the week), cap PTO deduction so
         regular + PTO does not exceed the cap. Returns the number of PTO hours deducted.
+        Uses Decimal for calculations to avoid float drift; runs in a transaction with row lock.
         """
+        from django.db import transaction
+
         if self.date > date.today():
             return 0.0
-
-        u = self.user
-        u.refresh_from_db()  # ensure current balance when applying multiple occurrences in one run
-        used = self.duration_hours
 
         # Subtypes that do NOT affect balances (company-paid or fully unpaid/ excused)
         if self.subtype in [
@@ -292,7 +346,7 @@ class Occurrence(models.Model):
             return 0.0
 
         # Subtypes that affect PTO and possibly personal time
-        if self.subtype in [
+        if self.subtype not in [
             OccurrenceSubtype.TIME_OFF,
             OccurrenceSubtype.TARDY_OUT_OF_GRACE,
             OccurrenceSubtype.EXCHANGE,
@@ -303,19 +357,41 @@ class Occurrence(models.Model):
             OccurrenceSubtype.BEREAVEMENT_PAID,
             OccurrenceSubtype.JURY_DUTY_PAID,
         ]:
-            pto_deducted = min(used, u.pto_balance)
+            return 0.0
+
+        used = Decimal(str(self.duration_hours))
+        with transaction.atomic():
+            u = CustomUser.objects.select_for_update().get(pk=self.user_id)
+            pto_bal = Decimal(str(u.pto_balance)).quantize(Decimal("0.01"))
+            personal_bal = Decimal(str(u.personal_time_balance)).quantize(Decimal("0.01"))
+            pto_deducted = min(used, pto_bal)
             if max_pto_to_apply is not None:
-                pto_deducted = min(pto_deducted, max_pto_to_apply)
+                pto_deducted = min(pto_deducted, Decimal(str(max_pto_to_apply)))
             personal_deducted = used - pto_deducted
-            u.pto_balance = round(max(0.0, u.pto_balance - pto_deducted), 2)
-            u.personal_time_balance = round(u.personal_time_balance + personal_deducted, 2)
-            self.pto_hours_applied = pto_deducted
-            self.personal_hours_applied = personal_deducted
-            self.pto_applied = True
+            new_pto = max(Decimal("0"), pto_bal - pto_deducted)
+            new_personal = personal_bal + personal_deducted
+            u.pto_balance = float(new_pto.quantize(Decimal("0.01")))
+            u.personal_time_balance = float(new_personal.quantize(Decimal("0.01")))
             u.save()
+            PTOBalanceHistory.record(
+                user=u,
+                change=float(-pto_deducted.quantize(Decimal("0.01"))),
+                reason=f"Occurrence apply_pto: {self.get_subtype_display()} ({self.date})",
+                balance_after=u.pto_balance,
+            )
+            if personal_deducted > 0:
+                PTOBalanceHistory.record(
+                    user=u,
+                    change=float(personal_deducted.quantize(Decimal("0.01"))),
+                    reason=f"Personal time: {self.get_subtype_display()} ({self.date})",
+                    balance_after=u.personal_time_balance,
+                    balance_type=PTOBalanceHistory.BALANCE_TYPE_PERSONAL,
+                )
+            self.pto_hours_applied = float(pto_deducted.quantize(Decimal("0.01")))
+            self.personal_hours_applied = float(personal_deducted.quantize(Decimal("0.01")))
+            self.pto_applied = True
             self.save()
-            return pto_deducted
-        return 0.0
+        return float(pto_deducted.quantize(Decimal("0.01")))
 
 
 def apply_past_due_occurrences(user):
@@ -466,20 +542,30 @@ class TimeOffRequest(models.Model):
         """
         Cancel this request. When PENDING: just set status. When APPROVED: reverse
         PTO (credit user), delete linked occurrences, then set status to CANCELLED.
+        Runs in a transaction with row lock on user for safety.
         """
+        from django.db import transaction
+
         if self.status == TimeOffRequestStatus.PENDING:
             self.status = TimeOffRequestStatus.CANCELLED
             self.save()
             return
         if self.status != TimeOffRequestStatus.APPROVED:
             return
-        u = self.user
-        for occ in self.occurrences.all():
-            if occ.pto_applied:
-                u.pto_balance += occ.pto_hours_applied
-                u.personal_time_balance = max(0, u.personal_time_balance - occ.personal_hours_applied)
-            occ.delete()
-        u.save()
+        with transaction.atomic():
+            u = CustomUser.objects.select_for_update().get(pk=self.user_id)
+            for occ in self.occurrences.all():
+                if occ.pto_applied:
+                    u.pto_balance += occ.pto_hours_applied
+                    u.personal_time_balance = max(0, u.personal_time_balance - occ.personal_hours_applied)
+                    PTOBalanceHistory.record(
+                        user=u,
+                        change=occ.pto_hours_applied,
+                        reason=f"Time off request cancelled (refund): {self.start_date}–{self.end_date}",
+                        balance_after=u.pto_balance,
+                    )
+                occ.delete()
+            u.save()
         self.status = TimeOffRequestStatus.CANCELLED
         self.save()
 

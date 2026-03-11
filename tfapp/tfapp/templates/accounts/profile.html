@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<!-- ACTIONS -->
+<div class="container">
+    <!-- PROFILE -->
+    <section id="profile">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-9 mt-2">
+                    <div class="card">
+                        <div class="card-header">
+                            <h4>Edit Profile</h4>
+                        </div>
+                        <div class="card-body">
+                            <form method="post">
+                                {% csrf_token %}
+                                <div class="form-group">
+                                    <label for="username">Username</label>
+                                    <input type="text" name="username" class="form-control" value="{{ user.username }}" readonly>
+                                </div>
+                                <div class="form-group">
+                                    <label for="email">Email</label>
+                                    <input type="email" name="email" class="form-control" value="{{ user.email }}" readonly>
+                                </div>
+                                <div class="form-group">
+                                    <label for="phone">Phone</label>
+                                    <input type="tel" class="form-control" name="phone" id="phone" value="{{ user.manager.phone }}" pattern="[0-9]{3}-[0-9]{3}-[0-9]{4}" required>
+                                    <small class="form-text text-muted">Format: 123-456-7890</small>
+                                </div>
+                                <button type="submit" class="btn btn-primary">Save Changes</button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="container mt-4">
+                        <a href="{% url 'password_change' %}" class="btn btn-danger">Update Password</a>
+                    </div>
+                </div>
+                <div class="col-md-3 mt-2">
+                    <h3>Your Avatar</h3>
+                    <img src="{{ user.manager.photo.url }}" alt="" class="d-block img-fluid mb-3">
+                    <form method="post" enctype="multipart/form-data">
+                        {% csrf_token %}
+                        {{ image_form.as_p }}
+                        <button type="submit" class="btn btn-primary btn-block">Edit Image</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+</section>
+{% endblock %}

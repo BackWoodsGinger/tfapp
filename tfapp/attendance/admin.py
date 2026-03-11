@@ -3,7 +3,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.shortcuts import redirect, get_object_or_404
 from django.urls import path
 from django.contrib import messages
-from .models import CustomUser, Occurrence, WorkSchedule, OccurrenceSubtype, PayrollPeriod
+from .models import CustomUser, Occurrence, WorkSchedule, OccurrenceSubtype, PayrollPeriod, PTOBalanceHistory
 
 
 class WorkScheduleInline(admin.TabularInline):
@@ -125,6 +125,15 @@ class OccurrenceAdmin(admin.ModelAdmin):
             OccurrenceSubtype.JURY_DUTY_PAID,
         ]:
             obj.apply_pto()
+
+
+@admin.register(PTOBalanceHistory)
+class PTOBalanceHistoryAdmin(admin.ModelAdmin):
+    list_display = ("user", "balance_type", "change", "balance_after", "reason", "timestamp")
+    list_filter = ("balance_type", "timestamp")
+    search_fields = ("user__username", "reason")
+    readonly_fields = ("user", "change", "reason", "balance_after", "balance_type", "timestamp")
+    ordering = ("-timestamp",)
 
 
 @admin.register(PayrollPeriod)

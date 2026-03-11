@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="row justify-content-center">
+    <div class="col-sm-12 col-md-10 col-lg-12">
+
+      <!-- Main Card -->
+      <div class="card mb-4">
+        <div class="card-body">
+
+          {% if alerts %}
+          <div class="alert alert-danger">
+              <strong>⚠ Incomplete Time Entries Detected</strong>
+              <ul>
+                  {% for e in alerts %}
+                  <li>{{ e.user.get_full_name|default:e.user.username }} on {{ e.date }} – 
+                      <a href="{% url 'timeclock:edit_entry' e.id %}">Fix</a>
+                  </li>
+                  {% endfor %}
+              </ul>
+          </div>
+          {% endif %}
+
+          <h4 class="mb-3">Weekly Time Summary ({{ start_of_week }} – {{ end_of_week }})</h4>
+          <table class="table table-sm table-bordered">
+              <thead>
+                  <tr>
+                      <th>User</th><th>Total Hours</th>
+                  </tr>
+              </thead>
+              <tbody>
+                  {% for user, hours in weekly_totals %}
+                  <tr>
+                      <td>{{ user.get_full_name|default:user.username }}</td>
+                      <td>{{ hours }}</td>
+                  </tr>
+                  {% endfor %}
+              </tbody>
+          </table>
+
+          {% if user.is_staff %}
+          <button type="button" class="btn btn-primary mt-3" data-bs-toggle="modal" data-bs-target="#closePayrollModal">
+              Close Payroll
+          </button>
+
+          <!-- Modal -->
+          <div class="modal fade" id="closePayrollModal" tabindex="-1" aria-labelledby="closePayrollModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+              <form method="post" action="{% url 'attendance:close_payroll' %}">
+                {% csrf_token %}
+                <div class="modal-content">
+                  <div class="modal-header">
+                    <h5 class="modal-title" id="closePayrollModalLabel">Close Payroll</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                  </div>
+                  <div class="modal-body">
+                    <label for="week_ending">Select Payroll Week Ending:</label>
+                    <select name="week_ending" id="week_ending" class="form-select">
+                      {% for week in payroll_weeks %}
+                        <option value="{{ week }}">{{ week }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="submit" class="btn btn-success">Export CSV</button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Occurrence Report Card -->
+      <div class="card">
+        <div class="card-body">
+          <h3 class="mb-4">Generate Occurrence Report</h3>
+          <form method="get" action="{% url 'attendance:generate_report_pdf' %}" class="form-inline">
+              {{ form.as_p }}
+              <button class="btn btn-sm btn-primary" type="submit">Download PDF</button>
+          </form>
+
+          {% if occurrences %}
+          <h5 class="mt-4">Occurrences for {{ selected_user.get_full_name|default:selected_user.username }}</h5>
+          <table class="table table-bordered">
+              <thead>
+                  <tr>
+                      <th>Date</th><th>Type</th><th>Subtype</th><th>Hours</th>
+                  </tr>
+              </thead>
+              <tbody>
+                  {% for occ in occurrences %}
+                  <tr>
+                      <td>{{ occ.date }}</td>
+                      <td>{{ occ.get_occurrence_type_display }}</td>
+                      <td>{{ occ.get_subtype_display }}</td>
+                      <td>{{ occ.duration_hours }}</td>
+                  </tr>
+                  {% endfor %}
+              </tbody>
+          </table>
+          {% endif %}
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h2>Edit Time Entries by Payroll Week</h2>
+
+<form method="get" class="form-inline mb-3">
+    <label for="user">User:</label>
+    <select name="user" class="form-control mx-2">
+        {% for u in users %}
+        <option value="{{ u.id }}" {% if selected_user_id == u.id|stringformat:"s" %}selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="week_ending">Week Ending (Saturday):</label>
+    <input type="date" name="week_ending" value="{{ week_ending }}" class="form-control mx-2">
+
+    <button type="submit" class="btn btn-primary">Load Entries</button>
+</form>
+
+{% if formset %}
+<h5>Entries for {{ selected_user.get_full_name|default:selected_user.username }} ({{ week_start }} - {{ week_end }})</h5>
+<form method="post">{% csrf_token %}
+    {{ formset.management_form }}
+    <table class="table table-bordered">
+        <thead>
+            <tr><th>Date</th><th>Clock In</th><th>Lunch Out</th><th>Lunch In</th><th>Clock Out</th></tr>
+        </thead>
+        <tbody>
+        {% for form in formset %}
+            <tr>
+                {% for field in form.visible_fields %}
+                    <td>{{ field }}</td>
+                {% endfor %}
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <button type="submit" class="btn btn-success">Save Changes</button>
+</form>
+{% endif %}
+{% endblock %}

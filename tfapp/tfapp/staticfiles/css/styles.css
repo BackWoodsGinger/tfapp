@@ -1,0 +1,143 @@
+/* Header Section */
+header {
+  position: relative;
+  height: calc(100vh - 56px);
+  overflow: hidden;
+  background-color: #4d4b4bf3; /* Dark background for the header */
+  color: #ffffff; /* Text color for readability */
+}
+header video {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  min-width: 100%;
+  min-height: 100%;
+  width: auto;
+  height: auto;
+  z-index: 0;
+  transform: translate(-50%, -50%);
+  object-fit: cover;
+  filter: brightness(80%); /* Darkens the video */
+}
+header #video-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 100%;
+  background: rgba(0, 0, 0, 0.493); /* Slightly darker overlay */
+  z-index: 1;
+}
+header #video-overlay #overlay-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #e0e0e0; /* Light gray text for better contrast */
+  text-align: center;
+}
+header #video-overlay #overlay-text h1 {
+  font-size: 3em;
+  color: #ffffff; /* Bright text for headers */
+}
+header #video-overlay #overlay-text p {
+  font-size: 1.5em;
+  color: #b0b0b0; /* Softer contrast for paragraph text */
+}
+header #main-header {
+  position: relative;
+  z-index: 2;
+}
+
+/* Card Section */
+.card-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background-color: #3c3a3a; /* Dark background for cards */
+  color: #ffffff; /* White text for contrast */
+  border-radius: 8px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.6); /* Subtle shadow for depth */
+  padding: 1rem;
+}
+.card-body:hover {
+  background-color: #272727; /* Slightly lighter on hover */
+  transition: background-color 0.3s ease;
+}
+
+/* Title and Icon */
+#survey-title, #icon {
+  text-align: center;
+  color: #e0e0e0; /* Softer text color */
+}
+
+/* Body and Main Layout */
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background-color: #3c393984 !important; /* Dark background for the app */
+  color: #ffffff !important; /* Light text for readability */
+}
+main {
+  flex: 1 0 auto;
+}
+
+/* Buttons */
+button, .btn {
+  background-color: #3c3aaf; /* Dark button background */
+  color: #ffffff; /* White text */
+  border: 1px solid #444444; /* Subtle border */
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  transition: background-color 0.3s ease, transform 0.2s ease;
+}
+button:hover, .btn:hover {
+  background-color: #555555; /* Slightly lighter on hover */
+  transform: scale(1.05); /* Slight zoom effect */
+}
+
+/* Links */
+a {
+  color: #bb86fc; /* Modern purple for links */
+  text-decoration: none;
+}
+a:hover {
+  color: #e0aaff; /* Softer purple on hover */
+  text-decoration: underline;
+}
+
+/* Forms */
+input, textarea, select {
+  background-color: #1e1e1e; /* Dark input background */
+  color: #ffffff; /* Light text */
+  border: 1px solid #444444; /* Subtle border */
+  border-radius: 4px;
+  padding: 0.5rem;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: #bb86fc; /* Highlighted border on focus */
+  outline: none;
+}
+
+/* Navbar */
+.navbar {
+  background-color: #202020; /* Dark navbar background */
+  color: #ffffff;
+}
+.navbar .navbar-brand, .navbar .nav-link {
+  color: #ffffff; /* Light text */
+}
+.navbar .navbar-brand:hover, .navbar .nav-link:hover {
+  color: #bb86fc; /* Highlight on hover */
+}
+
+/* Footer */
+footer {
+  background-color: #1a1a1a;
+  color: #e0e0e0;
+  text-align: center;
+  padding: 1rem 0;
+  border-top: 1px solid #333333;
+}

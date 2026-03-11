@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual env
+venv/
+env/
+
+# Django
+media/
+staticfiles/
+
+# Secrets
+.env
+
+# Mac
+.DS_Store
+
+# VS Code
+.vscode/
