@@ -91,35 +91,40 @@ class CustomUser(AbstractUser):
         Reset PTO for a new service year based on tenure.
         This should be called when a user's service anniversary is reached.
 
-        Years-of-service PTO scale (full-time):
-        - < 2 years: accrual only (handled via accrue_pto)
-        - 2–4 years: 80 hours
-        - 5–8 years: 100 hours
-        - 9–14 years: 120 hours
-        - 15–20 years: 140 hours
-        - 21–24 years: 160 hours
-        - 25+ years: 180 hours
+        Years-of-service PTO scale (full-time), applied for the
+        new service year that starts on the anniversary:
+        - Years 1-2: accrual only (handled via accrue_pto)
+        - Years 3-4: 80 hours
+        - Years 5-8: 100 hours
+        - Years 9-14: 120 hours
+        - Years 15-20: 140 hours
+        - Years 21-24: 160 hours
+        - Years 25+: 180 hours
         """
         if self.is_part_time or not self.service_date:
             return  # Skip part-time or users with no service date
 
-        service_years = self.years_of_service()
+        service_years = self.years_of_service()  # completed years as of today
+
+        # Front-loaded PTO is based on the service year being started.
+        # Example: completed 14 years -> starting year 15 -> 140 hours.
+        starting_service_year = service_years + 1
 
         # PTO allocation scale
-        if 2 <= service_years <= 4:
+        if 3 <= starting_service_year <= 4:
             pto_alloc = 80
-        elif 5 <= service_years <= 8:
+        elif 5 <= starting_service_year <= 8:
             pto_alloc = 100
-        elif 9 <= service_years <= 14:
+        elif 9 <= starting_service_year <= 14:
             pto_alloc = 120
-        elif 15 <= service_years <= 20:
+        elif 15 <= starting_service_year <= 20:
             pto_alloc = 140
-        elif 21 <= service_years <= 24:
+        elif 21 <= starting_service_year <= 24:
             pto_alloc = 160
-        elif service_years >= 25:
+        elif starting_service_year >= 25:
             pto_alloc = 180
         else:
-            pto_alloc = 0  # Years < 2 accrue hourly, handled elsewhere
+            pto_alloc = 0  # Service years 1-2 accrue hourly, handled elsewhere
 
         # Carry out any remaining PTO from the previous year for reporting,
         # then start the new year with the allocated amount and reset unpaid time.
@@ -139,7 +144,7 @@ class CustomUser(AbstractUser):
             return
         if self.is_exempt:
             return
-        service_years = self.years_of_service()
+        service_years = self.years_of_service()  # completed years
         if service_years < 2 or self.is_part_time:
             self.pto_balance = 0.0
             self.final_pto_balance = 0.0
@@ -147,15 +152,19 @@ class CustomUser(AbstractUser):
                 self.personal_time_balance = 0.0
             self.save()
             return
-        if service_years < 5:
+
+        # Baseline/front-load is keyed to the service year being started.
+        starting_service_year = service_years + 1
+
+        if starting_service_year < 5:
             pto_alloc = 80
-        elif service_years < 9:
+        elif starting_service_year < 9:
             pto_alloc = 100
-        elif service_years < 15:
+        elif starting_service_year < 15:
             pto_alloc = 120
-        elif service_years < 21:
+        elif starting_service_year < 21:
             pto_alloc = 140
-        elif service_years < 25:
+        elif starting_service_year < 25:
             pto_alloc = 160
         else:
             pto_alloc = 180
