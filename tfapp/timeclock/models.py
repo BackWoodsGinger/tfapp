@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
@@ -35,17 +35,66 @@ class TimeEntry(models.Model):
 
     def total_worked_time(self):
         """Return worked hours; uses Decimal for consistent rounding and to avoid float drift."""
-        if self.clock_in and self.clock_out:
-            worked = self.clock_out - self.clock_in
-            if self.lunch_out and self.lunch_in:
-                lunch = self.lunch_in - self.lunch_out
-                if lunch < timedelta(minutes=30):
-                    lunch = timedelta(minutes=30)
-            else:
+        return self.actual_worked_hours()
+
+    def _worked_seconds(self):
+        """Worked seconds after lunch deduction with 30-minute minimum lunch."""
+        if not (self.clock_in and self.clock_out):
+            return 0.0
+        worked = self.clock_out - self.clock_in
+        if self.lunch_out and self.lunch_in:
+            lunch = self.lunch_in - self.lunch_out
+            if lunch < timedelta(minutes=30):
                 lunch = timedelta(minutes=30)
-            seconds = max((worked - lunch).total_seconds(), 0)
-            return float(Decimal(str(seconds / 3600)).quantize(Decimal("0.01")))
-        return 0.0
+        else:
+            lunch = timedelta(minutes=30)
+        return max((worked - lunch).total_seconds(), 0)
+
+    def actual_worked_hours(self):
+        """Actual hours from punches, rounded to 2 decimals for display."""
+        seconds = self._worked_seconds()
+        return float(Decimal(str(seconds / 3600)).quantize(Decimal("0.01")))
+
+    def reported_worked_hours(self):
+        """
+        Payroll-reported hours:
+        - clock-in uses schedule grace/tardy policy (<=4 min late = on-time),
+          5+ min late rounds up from scheduled start to next 15-min mark.
+        - clock-out rounds down to prior 15-min mark.
+        - lunch is deducted with a 30-minute minimum using actual lunch punches.
+        Keeps actual punches untouched while reporting payroll-compliant hours.
+        """
+        if not (self.clock_in and self.clock_out):
+            return 0.0
+
+        scheduled_start = self._scheduled_start_time_for_date()
+        if not scheduled_start:
+            actual = Decimal(str(self.actual_worked_hours()))
+            quarter_hours = (actual * Decimal("4")).to_integral_value(rounding=ROUND_DOWN)
+            adjusted = (quarter_hours / Decimal("4")).quantize(Decimal("0.01"))
+            return float(adjusted)
+
+        _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+            self.clock_in, scheduled_start
+        )
+
+        out_local = timezone.localtime(self.clock_out)
+        rounded_out_minutes = (out_local.minute // 15) * 15
+        adjusted_out = out_local.replace(minute=rounded_out_minutes, second=0, microsecond=0)
+
+        if adjusted_out <= adjusted_in:
+            return 0.0
+
+        worked = adjusted_out - adjusted_in
+        if self.lunch_out and self.lunch_in:
+            lunch = self.lunch_in - self.lunch_out
+            if lunch < timedelta(minutes=30):
+                lunch = timedelta(minutes=30)
+        else:
+            lunch = timedelta(minutes=30)
+
+        seconds = max((worked - lunch).total_seconds(), 0)
+        return float(Decimal(str(seconds / 3600)).quantize(Decimal("0.01")))
 
     def rounded_start(self):
         if self.clock_in:
@@ -91,6 +140,20 @@ class TimeEntry(models.Model):
         adjusted_late_minutes = ((minutes_late + 14) // 15) * 15
         adjusted_start = scheduled_local + timedelta(minutes=adjusted_late_minutes)
         return minutes_late, adjusted_start
+
+    def _scheduled_start_time_for_date(self):
+        """
+        Scheduled start time for this entry date from weekly_schedule or WorkSchedule.
+        """
+        schedule = self.user.weekly_schedule or {}
+        weekday_str = self.date.strftime("%A").lower()
+        if schedule and weekday_str in schedule:
+            try:
+                return datetime.strptime(schedule[weekday_str]["start"], "%H:%M").time()
+            except (KeyError, ValueError, TypeError):
+                pass
+        work_schedule = self.user.schedules.filter(day=self.date.weekday()).first()
+        return work_schedule.start_time if work_schedule else None
 
     def check_tardy(self):
         """

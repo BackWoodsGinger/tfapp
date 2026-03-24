@@ -157,19 +157,15 @@ def dashboard(request):
 
     for u in visible_users.filter(is_exempt=False):
         total_actual = 0
+        total_reported = 0
         total_scheduled = 0
         schedule = u.weekly_schedule or {}
 
         entries = TimeEntry.objects.filter(user=u, date__range=[start_of_week, end_of_week])
         for entry in entries:
             if entry.clock_in and entry.clock_out:
-                lunch = timedelta(minutes=30)
-                if entry.lunch_in and entry.lunch_out:
-                    actual_lunch = entry.lunch_in - entry.lunch_out
-                    if actual_lunch.total_seconds() >= 1800:
-                        lunch = actual_lunch
-                worked = entry.clock_out - entry.clock_in - lunch
-                total_actual += worked.total_seconds() / 3600
+                total_actual += entry.actual_worked_hours()
+                total_reported += entry.reported_worked_hours()
 
             weekday = entry.date.strftime("%A").lower()  # "monday", etc.
             if weekday in schedule:
@@ -185,8 +181,14 @@ def dashboard(request):
                 except (KeyError, ValueError):
                     continue
 
-        delta = round(total_actual - total_scheduled, 2)
-        weekly_totals.append((u, round(total_actual, 2), round(total_scheduled, 2), delta))
+        delta = round(total_reported - total_scheduled, 2)
+        weekly_totals.append((
+            u,
+            round(total_actual, 2),
+            round(total_reported, 2),
+            round(total_scheduled, 2),
+            delta,
+        ))
 
     alerts = []
     if user.is_staff:
@@ -320,19 +322,15 @@ def reports_view(request):
 
     for u in visible_users.filter(is_exempt=False):
         total_actual = 0
+        total_reported = 0
         total_scheduled = 0
         schedule = u.weekly_schedule or {}
 
         entries = TimeEntry.objects.filter(user=u, date__range=[start_of_week, end_of_week])
         for entry in entries:
             if entry.clock_in and entry.clock_out:
-                lunch = timedelta(minutes=30)
-                if entry.lunch_in and entry.lunch_out:
-                    actual_lunch = entry.lunch_in - entry.lunch_out
-                    if actual_lunch.total_seconds() >= 1800:
-                        lunch = actual_lunch
-                worked = entry.clock_out - entry.clock_in - lunch
-                total_actual += worked.total_seconds() / 3600
+                total_actual += entry.actual_worked_hours()
+                total_reported += entry.reported_worked_hours()
 
             weekday = entry.date.strftime("%A").lower()  # "monday", etc.
             if weekday in schedule:
@@ -348,8 +346,14 @@ def reports_view(request):
                 except (KeyError, ValueError):
                     continue
 
-        delta = round(total_actual - total_scheduled, 2)
-        weekly_totals.append((u, round(total_actual, 2), round(total_scheduled, 2), delta))
+        delta = round(total_reported - total_scheduled, 2)
+        weekly_totals.append((
+            u,
+            round(total_actual, 2),
+            round(total_reported, 2),
+            round(total_scheduled, 2),
+            delta,
+        ))
 
     alerts = []
     if user.role in [
@@ -578,10 +582,7 @@ def close_payroll(request):
             total_worked_hours = 0
             for e in entries:
                 if e.clock_in and e.clock_out:
-                    lunch = timedelta()
-                    if e.lunch_in and e.lunch_out:
-                        lunch = e.lunch_in - e.lunch_out
-                    total_worked_hours += (e.clock_out - e.clock_in - lunch).total_seconds() / 3600
+                    total_worked_hours += e.reported_worked_hours()
             user_total_worked[user.id] = total_worked_hours
             user_total_scheduled[user.id] = _scheduled_hours_for_range(user, week_start, week_ending)
 
@@ -618,10 +619,7 @@ def close_payroll(request):
                 worked_day = 0
                 for e in entries_day:
                     if e.clock_in and e.clock_out:
-                        lunch = timedelta()
-                        if e.lunch_in and e.lunch_out:
-                            lunch = e.lunch_in - e.lunch_out
-                        worked_day += (e.clock_out - e.clock_in - lunch).total_seconds() / 3600
+                        worked_day += e.reported_worked_hours()
                 approved_day = approved_time_off_by_user_date.get(user.id, {}).get(current, 0)
                 # Include tardy (and any existing variance) so we don't create duplicate shortfall for same time
                 tardy_or_variance_hours = sum(
@@ -704,7 +702,7 @@ def close_payroll(request):
         # Policy: FT under 2 yr and part-time accrue 1 hr PTO per 30 hrs worked (time entries only, not PTO from requests).
         # Cap at 40 regular hours so overtime does not accrue.
         for user in users:
-            total_worked_hours = user_total_worked.get(user.id, 0)  # from time entries only
+            total_worked_hours = user_total_worked.get(user.id, 0)  # from reported (quarter-hour) time entries only
             if total_worked_hours and (user.years_of_service() <= 2 or user.is_part_time):
                 user.refresh_from_db()  # use balance after apply_pto so accrual doesn't overwrite
                 hours_for_accrual = min(total_worked_hours, 40.0)
@@ -735,10 +733,7 @@ def close_payroll(request):
         total_worked_hours = 0
         for e in entries:
             if e.clock_in and e.clock_out:
-                lunch = timedelta()
-                if e.lunch_in and e.lunch_out:
-                    lunch = e.lunch_in - e.lunch_out
-                total_worked_hours += (e.clock_out - e.clock_in - lunch).total_seconds() / 3600
+                total_worked_hours += e.reported_worked_hours()
 
         pto_occurrences = Occurrence.objects.filter(
             user=user,

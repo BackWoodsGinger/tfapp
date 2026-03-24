@@ -95,6 +95,24 @@ class TestTimeEntryModel(TestCase):
         # 7h7m12s - 30m lunch = 6h37m12s = 6.62h
         self.assertAlmostEqual(result, 6.62, places=2)
 
+    def test_reported_worked_hours_floors_to_quarter_hour(self):
+        """reported_worked_hours floors actual hours to prior 0.25 increment."""
+        tz = timezone.get_current_timezone()
+        base = timezone.make_aware(
+            timezone.datetime(2025, 3, 5, 5, 23, 0), tz
+        )
+        # 5:23 -> 15:32 with 11:30-12:00 lunch => 9h39m actual = 9.65
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=base.date(),
+            clock_in=base,
+            lunch_out=timezone.make_aware(timezone.datetime(2025, 3, 5, 11, 30, 0), tz),
+            lunch_in=timezone.make_aware(timezone.datetime(2025, 3, 5, 12, 0, 0), tz),
+            clock_out=timezone.make_aware(timezone.datetime(2025, 3, 5, 15, 32, 0), tz),
+        )
+        self.assertAlmostEqual(entry.actual_worked_hours(), 9.65, places=2)
+        self.assertAlmostEqual(entry.reported_worked_hours(), 9.5, places=2)
+
     def test_save_clears_missing_punch_flagged_when_completed(self):
         """Completing an entry clears missing_punch_flagged."""
         now = timezone.now()
@@ -336,6 +354,20 @@ class TestTardyOccurrence(TestCase):
         ).first()
         self.assertIsNotNone(in_grace)
         self.assertEqual(in_grace.duration_hours, 0.0)
+
+    def test_reported_hours_allow_late_stay_to_recover_tardy(self):
+        """8:08 in (tardy) and 17:47 out reports as 9.00 with quarter-hour rules."""
+        tz = timezone.get_current_timezone()
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2025, 3, 3),
+            clock_in=timezone.make_aware(timezone.datetime(2025, 3, 3, 8, 8, 0), tz),
+            lunch_out=timezone.make_aware(timezone.datetime(2025, 3, 3, 12, 0, 0), tz),
+            lunch_in=timezone.make_aware(timezone.datetime(2025, 3, 3, 12, 30, 0), tz),
+            clock_out=timezone.make_aware(timezone.datetime(2025, 3, 3, 17, 47, 0), tz),
+        )
+        self.assertAlmostEqual(entry.actual_worked_hours(), 9.15, places=2)
+        self.assertAlmostEqual(entry.reported_worked_hours(), 9.0, places=2)
 
 
 class TestReportsIncompleteAlerts(TestCase):

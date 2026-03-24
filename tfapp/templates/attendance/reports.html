@@ -38,16 +38,18 @@
               <thead>
                 <tr>
                   <th>User</th>
-                  <th>Total Hours</th>
+                  <th>Actual Hours</th>
+                  <th>Reported Hours (Payroll)</th>
                   <th>Scheduled Hours</th>
                   <th>Delta</th>
                 </tr>
               </thead>
               <tbody>
-                {% for user, actual, scheduled, delta in weekly_totals %}
+                {% for user, actual, reported, scheduled, delta in weekly_totals %}
                 <tr>
                   <td>{{ user.get_full_name|default:user.username }}</td>
                   <td>{{ actual }}</td>
+                  <td>{{ reported }}</td>
                   <td>{{ scheduled }}</td>
                   <td class="{% if delta < 0 %}text-danger{% elif delta > 0 %}text-success{% endif %}">
                     {{ delta }}
