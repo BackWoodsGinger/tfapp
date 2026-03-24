@@ -65,6 +65,33 @@ class TimeEntry(models.Model):
         hours, minutes = divmod(rounded_minutes, 60)
         return dt.replace(hour=hours % 24, minute=minutes)
 
+    def _scheduled_local_datetime(self, scheduled_time):
+        """
+        Build an aware local datetime for this entry date + scheduled clock time.
+        """
+        naive_dt = datetime.combine(self.date, scheduled_time)
+        return timezone.make_aware(naive_dt, timezone.get_current_timezone())
+
+    def _tardy_minutes_and_adjusted_start(self, punch_dt, scheduled_time):
+        """
+        Return (minutes_late, adjusted_start_local) using local-time comparison.
+        adjusted_start_local equals schedule start for <=4 min late, otherwise
+        rounds lateness up to the next 15-minute increment from scheduled start.
+        """
+        scheduled_local = self._scheduled_local_datetime(scheduled_time)
+        punch_local = timezone.localtime(punch_dt)
+        delta_seconds = (punch_local - scheduled_local).total_seconds()
+        if delta_seconds <= 0:
+            return 0, scheduled_local
+
+        minutes_late = int((delta_seconds + 59) // 60)  # ceil partial minutes
+        if minutes_late <= 4:
+            return minutes_late, scheduled_local
+
+        adjusted_late_minutes = ((minutes_late + 14) // 15) * 15
+        adjusted_start = scheduled_local + timedelta(minutes=adjusted_late_minutes)
+        return minutes_late, adjusted_start
+
     def check_tardy(self):
         """
         Apply start‑of‑shift tardy rules:
@@ -78,13 +105,12 @@ class TimeEntry(models.Model):
         if not schedule or not self.clock_in:
             return
 
-        scheduled_time = datetime.combine(self.date, schedule.start_time).replace(
-            tzinfo=self.clock_in.tzinfo
+        minutes_late, adjusted_start = self._tardy_minutes_and_adjusted_start(
+            self.clock_in, schedule.start_time
         )
-        delta = self.clock_in - scheduled_time
 
         # Within 4‑minute grace window: mark as in‑grace but do not dock time
-        if delta <= timedelta(minutes=4) and delta >= timedelta(0):
+        if 0 < minutes_late <= 4:
             Occurrence.objects.get_or_create(
                 user=self.user,
                 date=self.date,
@@ -95,9 +121,9 @@ class TimeEntry(models.Model):
             return
 
         # 5+ minutes late: round up to next quarter hour and dock time via PTO occurrence
-        if delta > timedelta(minutes=4):
-            adjusted_start = self.round_to_quarter(self.clock_in)
-            loss = (adjusted_start - scheduled_time).total_seconds() / 3600
+        if minutes_late >= 5:
+            scheduled_local = self._scheduled_local_datetime(schedule.start_time)
+            loss = (adjusted_start - scheduled_local).total_seconds() / 3600
             if loss > 0:
                 occ, created = Occurrence.objects.get_or_create(
                     user=self.user,
@@ -124,18 +150,17 @@ class TimeEntry(models.Model):
         if not schedule or not self.lunch_in:
             return
 
-        scheduled_lunch_in = datetime.combine(self.date, schedule.lunch_in).replace(
-            tzinfo=self.lunch_in.tzinfo
+        minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+            self.lunch_in, schedule.lunch_in
         )
-        delta = self.lunch_in - scheduled_lunch_in
 
         # Within 4‑minute grace from lunch: no docking
-        if delta <= timedelta(minutes=4) and delta >= timedelta(0):
+        if minutes_late <= 4:
             return
 
-        if delta > timedelta(minutes=4):
-            adjusted_in = self.round_to_quarter(self.lunch_in)
-            loss = (adjusted_in - scheduled_lunch_in).total_seconds() / 3600
+        if minutes_late >= 5:
+            scheduled_lunch_local = self._scheduled_local_datetime(schedule.lunch_in)
+            loss = (adjusted_in - scheduled_lunch_local).total_seconds() / 3600
             if loss > 0:
                 # Use get_or_create to avoid duplicate if rule runs twice (unique constraint)
                 occ, created = Occurrence.objects.get_or_create(

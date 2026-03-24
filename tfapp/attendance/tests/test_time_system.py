@@ -1,14 +1,14 @@
 """
 Automated tests for the time/clock system: TimeEntry model, punch flow, guards, and rounding.
 """
-from datetime import date, time, timedelta
+from datetime import date, time, timedelta, timezone as dt_timezone
 
 from django.db import IntegrityError
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
 
-from attendance.models import CustomUser, Occurrence, OccurrenceSubtype, WorkSchedule
+from attendance.models import CustomUser, Occurrence, OccurrenceSubtype, RoleChoices, WorkSchedule
 from timeclock.models import TimeEntry
 
 
@@ -271,3 +271,100 @@ class TestTardyOccurrence(TestCase):
         ).first()
         self.assertIsNotNone(occ)
         self.assertEqual(occ.duration_hours, 0.0)
+
+    def test_early_clock_in_does_not_create_tardy_occurrence(self):
+        """Clock in before schedule start should not create tardy occurrence."""
+        tz = timezone.get_current_timezone()
+        clock_in = timezone.make_aware(
+            timezone.datetime(2025, 3, 3, 7, 53, 0), tz
+        )
+        entry = TimeEntry.objects.create(
+            user=self.user, date=clock_in.date(), clock_in=clock_in
+        )
+        entry.check_tardy()
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.user,
+                date=clock_in.date(),
+                subtype__in=[
+                    OccurrenceSubtype.TARDY_IN_GRACE,
+                    OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+                ],
+            ).exists()
+        )
+
+    def test_out_of_grace_rounds_from_scheduled_start(self):
+        """20 minutes late rounds to 30 minutes (0.5h) out-of-grace."""
+        tz = timezone.get_current_timezone()
+        clock_in = timezone.make_aware(
+            timezone.datetime(2025, 3, 3, 8, 20, 0), tz
+        )
+        entry = TimeEntry.objects.create(
+            user=self.user, date=clock_in.date(), clock_in=clock_in
+        )
+        entry.check_tardy()
+        occ = Occurrence.objects.filter(
+            user=self.user,
+            date=clock_in.date(),
+            subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+        ).first()
+        self.assertIsNotNone(occ)
+        self.assertAlmostEqual(occ.duration_hours, 0.5, places=2)
+
+    def test_utc_stored_clock_in_in_grace_not_misread_as_hours_late(self):
+        """UTC-stored 8:01 local punch remains in-grace (no out-of-grace hours)."""
+        local_tz = timezone.get_current_timezone()
+        local_clock_in = timezone.make_aware(
+            timezone.datetime(2025, 3, 3, 8, 1, 0), local_tz
+        )
+        utc_clock_in = local_clock_in.astimezone(dt_timezone.utc)
+        entry = TimeEntry.objects.create(
+            user=self.user, date=local_clock_in.date(), clock_in=utc_clock_in
+        )
+        entry.check_tardy()
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.user,
+                date=local_clock_in.date(),
+                subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+            ).exists()
+        )
+        in_grace = Occurrence.objects.filter(
+            user=self.user,
+            date=local_clock_in.date(),
+            subtype=OccurrenceSubtype.TARDY_IN_GRACE,
+        ).first()
+        self.assertIsNotNone(in_grace)
+        self.assertEqual(in_grace.duration_hours, 0.0)
+
+
+class TestReportsIncompleteAlerts(TestCase):
+    """Reports should only show missing-punch alerts after day completion."""
+
+    def setUp(self):
+        self.client = Client()
+        self.manager = CustomUser.objects.create_user(
+            username="manager1",
+            password="testpass",
+            role=RoleChoices.MANAGER,
+            department="Ops",
+        )
+        self.employee = CustomUser.objects.create_user(
+            username="employee1",
+            password="testpass",
+            department="Ops",
+        )
+
+    def test_reports_excludes_today_incomplete_entry_from_alerts(self):
+        """An active same-day shift should not appear in reports alerts."""
+        now = timezone.now()
+        TimeEntry.objects.create(
+            user=self.employee,
+            date=now.date(),
+            clock_in=now,
+        )
+        self.client.force_login(self.manager)
+        response = self.client.get(reverse("attendance:reports"))
+        self.assertEqual(response.status_code, 200)
+        alerts = response.context.get("alerts", [])
+        self.assertEqual(len(alerts), 0)

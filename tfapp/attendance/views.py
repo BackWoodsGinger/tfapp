@@ -193,7 +193,8 @@ def dashboard(request):
         problem_entries = TimeEntry.objects.filter(date__range=[start_of_week, end_of_week])
         for e in problem_entries:
             fields = [e.clock_in, e.lunch_out, e.lunch_in, e.clock_out]
-            if any(fields) and not all(fields):
+            # Only alert for completed days so active same-day shifts are not flagged.
+            if e.date < today and any(fields) and not all(fields):
                 alerts.append(e)
 
     context = {
@@ -360,7 +361,8 @@ def reports_view(request):
         problem_entries = TimeEntry.objects.filter(date__range=[start_of_week, end_of_week])
         for e in problem_entries:
             fields = [e.clock_in, e.lunch_out, e.lunch_in, e.clock_out]
-            if any(fields) and not all(fields):
+            # Only alert for completed days so active same-day shifts are not flagged.
+            if e.date < today and any(fields) and not all(fields):
                 alerts.append(e)
 
     if form.is_valid():
