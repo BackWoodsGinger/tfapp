@@ -396,7 +396,7 @@ class TestReportsIncompleteAlerts(TestCase):
             clock_in=now,
         )
         self.client.force_login(self.manager)
-        response = self.client.get(reverse("attendance:reports"))
+        response = self.client.get(reverse("attendance:payroll"))
         self.assertEqual(response.status_code, 200)
         alerts = response.context.get("alerts", [])
         self.assertEqual(len(alerts), 0)

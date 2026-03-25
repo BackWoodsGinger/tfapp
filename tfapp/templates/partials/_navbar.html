@@ -64,13 +64,13 @@
                         <a class="nav-link" href="{% url 'attendance:team_time_off_requests' %}">Approvals</a>
                     </li>
                     <li
-                        {% if 'reports' in request.path %}
+                        {% if 'payroll' in request.path or 'reports' in request.path %}
                         class="nav-item active mr-3"
                         {% else %}
                         class="nav-item mr-3"
                         {% endif %}
                     >
-                        <a class="nav-link" href="{% url 'attendance:reports' %}">Reports</a>
+                        <a class="nav-link" href="{% url 'attendance:payroll' %}">Payroll</a>
                     </li>
                     {% endif %}
 

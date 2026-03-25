@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+{% block content %}
+<div class="container mt-4">
+  <div class="row justify-content-center">
+    <div class="col-sm-12 col-md-10 col-lg-12">
+
+      <!-- Main Card -->
+      <div class="card mb-4">
+        <div class="card-body">
+
+          {% if alerts %}
+          <div class="alert alert-danger">
+              <strong>⚠ Incomplete Time Entries Detected</strong>
+              <ul>
+                  {% for e in alerts %}
+                  <li>{{ e.user.get_full_name|default:e.user.username }} on {{ e.date }}{% if e.missing_punch_flagged %} <span class="badge bg-warning text-dark">Flagged by nightly job</span>{% endif %} –
+                      <a href="{% url 'timeclock:edit_entry' e.id %}">Fix</a>
+                  </li>
+                  {% endfor %}
+              </ul>
+          </div>
+          {% endif %}
+
+          <form method="get" action="{% url 'attendance:payroll' %}" id="weekly-summary-form" class="mb-3">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+              <label for="week_ending_summary" class="form-label mb-0 fw-bold">Week Ending:</label>
+              <select name="week_ending" id="week_ending_summary" class="form-select form-select-sm" style="width: auto;">
+                {% for value, display in payroll_weeks_display %}
+                  <option value="{{ value }}" {% if end_of_week|date:"Y-m-d" == value %}selected{% endif %}>{{ display }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-sm btn-outline-primary">View</button>
+            </div>
+          </form>
+          <p class="mb-2"><strong>Week Ending: {{ end_of_week|date:"m/d/Y" }}</strong></p>
+          <table class="table table-sm table-bordered">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Actual Hours</th>
+                  <th>Reported Hours (Payroll)</th>
+                  <th>Scheduled Hours</th>
+                  <th>Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for user, actual, reported, scheduled, delta in weekly_totals %}
+                <tr>
+                  <td>
+                    <a
+                      href="#"
+                      class="payroll-user-link"
+                      data-user-id="{{ user.id }}"
+                      data-week-ending="{{ end_of_week|date:'Y-m-d' }}"
+                      data-bs-toggle="modal"
+                      data-bs-target="#payrollUserModal"
+                    >{{ user.get_full_name|default:user.username }}</a>
+                  </td>
+                  <td>{{ actual }}</td>
+                  <td>{{ reported }}</td>
+                  <td>{{ scheduled }}</td>
+                  <td class="{% if delta < 0 %}text-danger{% elif delta > 0 %}text-success{% endif %}">
+                    {{ delta }}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+          </table>
+
+          {% if user.is_staff %}
+          <div class="mt-3 d-flex flex-wrap align-items-center gap-2">
+            {% if payroll_finalized %}
+              <span class="badge bg-success">Finalized</span>
+              <form method="post" action="{% url 'attendance:unfinalize_payroll' %}" class="d-inline" onsubmit="return confirm('Unfinalize this payroll week so you can correct time entries?');">
+                {% csrf_token %}
+                <input type="hidden" name="week_ending" value="{{ end_of_week|date:'Y-m-d' }}">
+                <button type="submit" class="btn btn-warning btn-sm">Unfinalize to make corrections</button>
+              </form>
+            {% else %}
+              <span class="badge bg-secondary">Open</span>
+            {% endif %}
+            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#closePayrollModal">
+              Close Payroll
+            </button>
+          </div>
+
+          <!-- Modal -->
+          <div class="modal fade" id="closePayrollModal" tabindex="-1" aria-labelledby="closePayrollModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+              <form method="post" action="{% url 'attendance:close_payroll' %}">
+                {% csrf_token %}
+                <div class="modal-content">
+                  <div class="modal-header">
+                    <h5 class="modal-title" id="closePayrollModalLabel">Close Payroll</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                  </div>
+                  <div class="modal-body">
+                    <label for="week_ending">Select Payroll Week Ending:</label>
+                    <select name="week_ending" id="week_ending" class="form-select">
+                      {% for value, display in payroll_weeks_display %}
+                        <option value="{{ value }}" {% if end_of_week|date:"Y-m-d" == value %}selected{% endif %}>{{ display }}</option>
+                      {% endfor %}
+                    </select>
+                    <p class="small text-muted mt-2 mb-0">Finalizes the week, applies PTO accrual (0–2 yr), tardy occurrences, variance PTO, then exports CSV.</p>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="submit" class="btn btn-success">Finalize &amp; Export CSV</button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- User breakdown modal -->
+      <div class="modal fade" id="payrollUserModal" tabindex="-1" aria-labelledby="payrollUserModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="payrollUserModalLabel">Daily Breakdown</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <div id="payrollUserModalMeta" class="small text-muted mb-2"></div>
+              <div class="table-responsive">
+                <table class="table table-sm table-bordered align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Clock In</th>
+                      <th>Lunch Out</th>
+                      <th>Lunch In</th>
+                      <th>Clock Out</th>
+                      <th>Actual</th>
+                      <th>Reported</th>
+                    </tr>
+                  </thead>
+                  <tbody id="payrollUserModalBody">
+                    <tr><td colspan="7" class="text-muted">Loading…</td></tr>
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <th colspan="5" class="text-end">Totals</th>
+                      <th id="payrollUserTotalActual">0.00</th>
+                      <th id="payrollUserTotalReported">0.00</th>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <script>
+        (function () {
+          function esc(s) {
+            return String(s == null ? "" : s)
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/"/g, "&quot;")
+              .replace(/'/g, "&#039;");
+          }
+
+          var modal = document.getElementById("payrollUserModal");
+          if (!modal) return;
+
+          var bodyEl = document.getElementById("payrollUserModalBody");
+          var metaEl = document.getElementById("payrollUserModalMeta");
+          var totalActualEl = document.getElementById("payrollUserTotalActual");
+          var totalReportedEl = document.getElementById("payrollUserTotalReported");
+          var titleEl = document.getElementById("payrollUserModalLabel");
+
+          modal.addEventListener("show.bs.modal", function (event) {
+            var trigger = event.relatedTarget;
+            if (!trigger) return;
+
+            var userId = trigger.getAttribute("data-user-id");
+            var weekEnding = trigger.getAttribute("data-week-ending");
+
+            bodyEl.innerHTML = '<tr><td colspan="7" class="text-muted">Loading…</td></tr>';
+            metaEl.textContent = "";
+            totalActualEl.textContent = "0.00";
+            totalReportedEl.textContent = "0.00";
+            titleEl.textContent = "Daily Breakdown";
+
+            var url = "{% url 'attendance:payroll_user_breakdown' %}" + "?user_id=" + encodeURIComponent(userId) + "&week_ending=" + encodeURIComponent(weekEnding);
+            fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
+              .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, json: j }; }); })
+              .then(function (res) {
+                if (!res.ok) {
+                  bodyEl.innerHTML = '<tr><td colspan="7" class="text-danger">Unable to load breakdown.</td></tr>';
+                  return;
+                }
+
+                var data = res.json;
+                titleEl.textContent = "Daily Breakdown: " + (data.user && data.user.name ? data.user.name : "");
+                metaEl.textContent = "Week " + data.week_start + " to " + data.week_ending;
+
+                var totalActual = 0;
+                var totalReported = 0;
+                var rows = (data.days || []).map(function (d) {
+                  totalActual += Number(d.actual_hours || 0);
+                  totalReported += Number(d.reported_hours || 0);
+                  var dateText = d.date || "";
+                  var warn = d.incomplete ? ' <span class="badge bg-warning text-dark">Incomplete</span>' : "";
+                  return (
+                    "<tr>" +
+                      "<td>" + esc(dateText) + warn + "</td>" +
+                      "<td>" + esc(d.clock_in || "—") + "</td>" +
+                      "<td>" + esc(d.lunch_out || "—") + "</td>" +
+                      "<td>" + esc(d.lunch_in || "—") + "</td>" +
+                      "<td>" + esc(d.clock_out || "—") + "</td>" +
+                      "<td>" + esc((Number(d.actual_hours || 0)).toFixed(2)) + "</td>" +
+                      "<td>" + esc((Number(d.reported_hours || 0)).toFixed(2)) + "</td>" +
+                    "</tr>"
+                  );
+                });
+
+                if (!rows.length) {
+                  bodyEl.innerHTML = '<tr><td colspan="7" class="text-muted">No time entries for this week.</td></tr>';
+                } else {
+                  bodyEl.innerHTML = rows.join("");
+                }
+
+                totalActualEl.textContent = totalActual.toFixed(2);
+                totalReportedEl.textContent = totalReported.toFixed(2);
+              })
+              .catch(function () {
+                bodyEl.innerHTML = '<tr><td colspan="7" class="text-danger">Unable to load breakdown.</td></tr>';
+              });
+          });
+        })();
+      </script>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+

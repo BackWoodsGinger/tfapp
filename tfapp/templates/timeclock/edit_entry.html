@@ -11,7 +11,7 @@
                 <div class="card-body">
                     {% if payroll_finalized %}
                     <div class="alert alert-warning">
-                        This time entry is in a <strong>finalized payroll week</strong>. To make corrections, go to Reports and click <strong>Unfinalize to make corrections</strong> for that week.
+                        This time entry is in a <strong>finalized payroll week</strong>. To make corrections, go to Payroll and click <strong>Unfinalize to make corrections</strong> for that week.
                     </div>
                     {% endif %}
                     <form method="post">
@@ -19,7 +19,7 @@
                         {{ form|crispy }}
                         <div class="mt-3">
                             <button type="submit" class="btn btn-primary" {% if payroll_finalized %}disabled{% endif %}>Save changes</button>
-                            <a href="{% url 'attendance:reports' %}" class="btn btn-secondary">Cancel</a>
+                            <a href="{% url 'attendance:payroll' %}" class="btn btn-secondary">Cancel</a>
                         </div>
                     </form>
                 </div>

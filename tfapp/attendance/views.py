@@ -9,6 +9,7 @@ from timeclock.forms import TimeEntryForm
 from django.db.models import Sum, Q
 from datetime import time, timedelta, date, datetime, timezone
 from django.http import HttpResponse
+from django.http import JsonResponse
 from django.template.loader import get_template
 from xhtml2pdf import pisa
 from .models import (
@@ -199,6 +200,26 @@ def dashboard(request):
             if e.date < today and any(fields) and not all(fields):
                 alerts.append(e)
 
+    # Occurrence report (moved here from Payroll page)
+    report_form = ReportFilterForm(request.GET or None)
+    report_form.fields["user"].queryset = visible_users
+    report_occurrences = []
+    report_selected_user = None
+    report_today = localdate()
+    if report_form.is_valid() and report_form.cleaned_data.get("user"):
+        report_selected_user = report_form.cleaned_data["user"]
+        report_start_date = report_form.cleaned_data["start_date"]
+        report_end_date = report_form.cleaned_data["end_date"]
+        if report_start_date and report_end_date:
+            report_occurrences = Occurrence.objects.filter(
+                user=report_selected_user, date__range=(report_start_date, report_end_date)
+            ).order_by("date")
+
+    user_service_dates = {
+        str(u.pk): u.service_date.isoformat() if u.service_date else None
+        for u in visible_users
+    }
+
     context = {
         "user_list": visible_users,
         "selected_user": selected_user,
@@ -218,6 +239,11 @@ def dashboard(request):
         "alerts": alerts,
         "start_of_week": start_of_week,
         "end_of_week": end_of_week,
+        "report_form": report_form,
+        "report_occurrences": report_occurrences,
+        "report_selected_user": report_selected_user,
+        "user_service_dates_json": json.dumps(user_service_dates),
+        "today_iso": report_today.isoformat(),
     }
     return render(request, "attendance/dashboard.html", context)
 
@@ -282,7 +308,12 @@ def user_can_view_reports(user):
     ]
 
 @login_required
-def reports_view(request):
+def reports_redirect(request):
+    return redirect("attendance:payroll")
+
+
+@login_required
+def payroll_view(request):
     if not user_can_view_reports(request.user):
         return redirect("attendance:dashboard")
 
@@ -390,7 +421,7 @@ def reports_view(request):
 
     payroll_finalized = _is_payroll_week_finalized(end_of_week)
 
-    return render(request, "attendance/reports.html", {
+    return render(request, "attendance/payroll.html", {
         "form": form,
         "occurrences": occurrences,
         "selected_user": selected_user,
@@ -404,6 +435,78 @@ def reports_view(request):
         "user_service_dates_json": json.dumps(user_service_dates),
         "today_iso": today.isoformat(),
     })
+
+
+@login_required
+def payroll_user_breakdown(request):
+    """
+    JSON endpoint for Payroll user modal: daily time-entry breakdown for a given week.
+    """
+    if not user_can_view_reports(request.user):
+        return JsonResponse({"error": "forbidden"}, status=403)
+
+    user_id = request.GET.get("user_id")
+    week_ending_param = request.GET.get("week_ending")
+    if not (user_id and user_id.isdigit() and week_ending_param):
+        return JsonResponse({"error": "missing params"}, status=400)
+
+    try:
+        week_ending = date.fromisoformat(week_ending_param)
+    except ValueError:
+        return JsonResponse({"error": "invalid week_ending"}, status=400)
+
+    # Ensure requested user is within this viewer's visible set (same logic as payroll_view)
+    viewer = request.user
+    if viewer.role == RoleChoices.EXECUTIVE:
+        visible_users = CustomUser.objects.all()
+    elif viewer.role == RoleChoices.MANAGER:
+        visible_users = CustomUser.objects.filter(department=viewer.department)
+    elif viewer.role == RoleChoices.SUPERVISOR:
+        visible_users = CustomUser.objects.filter(Q(supervisor=viewer) | Q(id=viewer.id))
+    elif viewer.role == RoleChoices.GROUP_LEAD:
+        visible_users = CustomUser.objects.filter(Q(group_lead=viewer) | Q(id=viewer.id))
+    else:
+        visible_users = CustomUser.objects.none()
+
+    target_user = get_object_or_404(visible_users, id=int(user_id))
+    week_start = week_ending - timedelta(days=6)
+
+    entries = (
+        TimeEntry.objects.filter(user=target_user, date__range=[week_start, week_ending])
+        .order_by("date")
+    )
+
+    days = []
+    for e in entries:
+        def fmt(dt):
+            if not dt:
+                return None
+            return django_tz.localtime(dt).strftime("%I:%M %p").lstrip("0")
+
+        days.append(
+            {
+                "date": e.date.isoformat(),
+                "clock_in": fmt(e.clock_in),
+                "lunch_out": fmt(e.lunch_out),
+                "lunch_in": fmt(e.lunch_in),
+                "clock_out": fmt(e.clock_out),
+                "actual_hours": round(e.actual_worked_hours(), 2),
+                "reported_hours": round(e.reported_worked_hours(), 2),
+                "incomplete": e.is_incomplete(),
+            }
+        )
+
+    return JsonResponse(
+        {
+            "user": {
+                "id": target_user.id,
+                "name": target_user.get_full_name() or target_user.username,
+            },
+            "week_start": week_start.isoformat(),
+            "week_ending": week_ending.isoformat(),
+            "days": days,
+        }
+    )
 
 
 def _scheduled_hours_from_work_schedule(user, weekday_int):
@@ -546,7 +649,7 @@ def close_payroll(request):
         week_ending = date.fromisoformat(request.POST.get("week_ending"))
     except (TypeError, ValueError):
         messages.error(request, "Invalid week selected.")
-        return redirect("attendance:reports")
+        return redirect("attendance:payroll")
 
     week_start = week_ending - timedelta(days=6)
 
@@ -564,7 +667,7 @@ def close_payroll(request):
 
     if incomplete_entries.exists():
         messages.error(request, "Cannot close payroll. Some time entries are incomplete.")
-        return redirect("attendance:reports")
+        return redirect("attendance:payroll")
 
     period, _ = PayrollPeriod.objects.get_or_create(week_ending=week_ending, defaults={"is_finalized": False})
 
@@ -825,18 +928,18 @@ def unfinalize_payroll(request):
         week_ending = date.fromisoformat(request.POST.get("week_ending"))
     except (TypeError, ValueError):
         messages.error(request, "Invalid week selected.")
-        return redirect("attendance:reports")
+        return redirect("attendance:payroll")
     period = get_object_or_404(PayrollPeriod, week_ending=week_ending)
     if not period.is_finalized:
         messages.info(request, "That payroll period is not finalized.")
-        return redirect("attendance:reports")
+        return redirect("attendance:payroll")
     _unfinalize_payroll_revert(period)
     period.is_finalized = False
     period.finalized_at = None
     period.finalized_by = None
     period.save()
     messages.success(request, f"Payroll for week ending {week_ending} has been unfinalized. PTO accrual and occurrence PTO have been reverted.")
-    return redirect("attendance:reports")
+    return redirect("attendance:payroll")
 
 
 @login_required
@@ -858,7 +961,7 @@ def edit_entry(request, pk):
                 request,
                 "This time entry is in a finalized payroll week. Unfinalize the payroll from Reports to make corrections.",
             )
-            return redirect("attendance:reports")
+            return redirect("attendance:payroll")
         messages.warning(
             request,
             "This week is finalized. Unfinalize from Reports to edit.",
@@ -868,7 +971,7 @@ def edit_entry(request, pk):
         form = TimeEntryForm(request.POST, instance=entry)
         if form.is_valid():
             form.save()
-            return redirect("attendance:reports")
+            return redirect("attendance:payroll")
     else:
         form = TimeEntryForm(instance=entry)
 
@@ -950,7 +1053,7 @@ def generate_report_pdf(request):
         response["Content-Disposition"] = f'attachment; filename="{user.username}_report.pdf"'
         pisa.CreatePDF(html, dest=response)
         return response
-    return redirect("attendance:reports")
+    return redirect("attendance:payroll")
 
 
 @login_required

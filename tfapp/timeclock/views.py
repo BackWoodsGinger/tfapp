@@ -91,7 +91,7 @@ def edit_entry(request, pk):
         if form.is_valid():
             form.save()
             messages.success(request, "Time entry updated successfully.")
-            return redirect("attendance:reports")
+            return redirect("attendance:payroll")
     else:
         form = TimeEntryForm(instance=entry)
 

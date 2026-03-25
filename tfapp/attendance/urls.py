@@ -13,7 +13,11 @@ urlpatterns = [
         name="attendance_list_filtered",
     ),
     path("occurrences/", views.attendance_list, name="attendance_list"),
-    path("reports/", views.reports_view, name="reports"),
+    # Payroll (formerly Reports)
+    path("payroll/", views.payroll_view, name="payroll"),
+    path("payroll/user-breakdown/", views.payroll_user_breakdown, name="payroll_user_breakdown"),
+    # Back-compat: keep old URLs but redirect to Payroll
+    path("reports/", views.reports_redirect, name="reports"),
     path("reports/generate/", views.generate_report_pdf, name="generate_report_pdf"),
     path("close-payroll/", views.close_payroll, name="close_payroll"),
     path("unfinalize-payroll/", views.unfinalize_payroll, name="unfinalize_payroll"),
