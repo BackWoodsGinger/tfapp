@@ -34,7 +34,7 @@
             <tbody>
               {% for occ in daily_occurrences %}
               <tr>
-                <td>{{ occ.user.get_full_name|default:occ.user.username }}</td>
+                <td>{{ occ.user.payroll_display_name }}</td>
                 <td>{{ occ.get_occurrence_type_display }}</td>
                 <td>{{ occ.get_subtype_display }}</td>
                 <td>{{ occ.duration_hours }}</td>
@@ -111,7 +111,7 @@
           </script>
 
           {% if report_occurrences %}
-          <h5 class="mt-4">Occurrences for {{ report_selected_user.get_full_name|default:report_selected_user.username }}</h5>
+          <h5 class="mt-4">Occurrences for {{ report_selected_user.payroll_display_name }}</h5>
           <table class="table table-bordered">
               <thead>
                   <tr>
@@ -136,7 +136,7 @@
       <div class="card mb-4">
         <div class="card-body">
           <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-            <h5 class="mb-0">Paid Time Off Balance ({{ selected_user.get_full_name|default:selected_user.username }})</h5>
+            <h5 class="mb-0">Paid Time Off Balance ({{ selected_user.payroll_display_name }})</h5>
             {% if user_list|length > 1 %}
             <form method="get" class="d-flex flex-wrap align-items-center gap-2 mb-0">
               <input type="hidden" name="date" value="{{ selected_date|date:'Y-m-d' }}">
@@ -144,7 +144,7 @@
               <select name="user_slug" id="user_slug" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
                 {% for u in user_list %}
                 <option value="{{ u.public_slug }}" {% if selected_user.public_slug == u.public_slug %}selected{% endif %}>
-                  {{ u.get_full_name|default:u.username }}
+                  {{ u.payroll_display_name }}
                 </option>
                 {% endfor %}
               </select>

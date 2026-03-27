@@ -102,6 +102,9 @@ class CustomUser(AbstractUser):
             return f"{last_name}, {first_name}"
         return last_name
 
+    def __str__(self):
+        return self.payroll_display_name()
+
     def grace_occurrences_remaining(self):
         if not self.service_date:
             return 0

@@ -121,6 +121,14 @@ def dashboard(request):
     else:
         visible_users = CustomUser.objects.filter(id=user.id)
 
+    visible_users = visible_users.order_by(
+        "payroll_lastname",
+        "payroll_firstname",
+        "last_name",
+        "first_name",
+        "username",
+    )
+
     selected_slug = request.GET.get("user_slug")
     selected_user_id = request.GET.get("user_id")
     if selected_slug:

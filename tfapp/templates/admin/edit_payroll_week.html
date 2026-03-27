@@ -6,7 +6,7 @@
     <label for="user">User:</label>
     <select name="user" class="form-control mx-2">
         {% for u in users %}
-        <option value="{{ u.public_slug }}" {% if selected_user_slug == u.public_slug %}selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>
+        <option value="{{ u.public_slug }}" {% if selected_user_slug == u.public_slug %}selected{% endif %}>{{ u.payroll_display_name }}</option>
         {% endfor %}
     </select>
 
@@ -17,7 +17,7 @@
 </form>
 
 {% if formset %}
-<h5>Entries for {{ selected_user.get_full_name|default:selected_user.username }} ({{ week_start }} - {{ week_end }})</h5>
+<h5>Entries for {{ selected_user.payroll_display_name }} ({{ week_start }} - {{ week_end }})</h5>
 <form method="post">{% csrf_token %}
     {{ formset.management_form }}
     <table class="table table-bordered">
