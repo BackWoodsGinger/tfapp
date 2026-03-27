@@ -83,8 +83,8 @@ def timeclock_home(request):
 
 
 @login_required
-def edit_entry(request, pk):
-    entry = get_object_or_404(TimeEntry, pk=pk)
+def edit_entry(request, slug):
+    entry = get_object_or_404(TimeEntry, slug=slug)
 
     if request.method == "POST":
         form = TimeEntryForm(request.POST, instance=entry)

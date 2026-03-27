@@ -101,7 +101,7 @@ class Command(BaseCommand):
             if getattr(settings, "BASE_URL", None):
                 from django.urls import reverse
                 try:
-                    path = reverse("timeclock:edit_entry", args=[e.pk])
+                    path = reverse("timeclock:edit_entry", args=[e.slug])
                     body_lines.append(f"  Edit: {settings.BASE_URL.rstrip('/')}{path}")
                 except Exception:
                     pass

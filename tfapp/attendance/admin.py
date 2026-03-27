@@ -78,6 +78,9 @@ class CustomUserAdmin(BaseUserAdmin):
             )
         return redirect("admin:attendance_customuser_change", object_id)
 
+    def get_readonly_fields(self, request, obj=None):
+        return list(super().get_readonly_fields(request, obj)) + ["public_slug"]
+
     def change_view(self, request, object_id, form_url="", extra_context=None):
         extra_context = extra_context or {}
         user = get_object_or_404(CustomUser, pk=object_id)
@@ -124,7 +127,7 @@ class CustomUserAdmin(BaseUserAdmin):
     fieldsets = (
         (None, {
             'fields': (
-                'username', 'password', 'email', 'first_name', 'last_name', 'role',
+                'username', 'public_slug', 'password', 'email', 'first_name', 'last_name', 'role',
                 'department', 'supervisor', 'group_lead', 'team_lead',
                 'payroll_lastname', 'payroll_firstname',
                 'hire_date', 'service_date', 'is_part_time', 'is_exempt', 'timeclock_login',

@@ -19,17 +19,61 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-c&a_*#xv07(2=f2f554*&-)#895yfjq2an)aoo$ejag58mvzi7'
+# Set DJANGO_SECRET_KEY in production. The fallback is dev-only.
+SECRET_KEY = os.environ.get(
+    "DJANGO_SECRET_KEY",
+    "django-insecure-c&a_*#xv07(2=f2f554*&-)#895yfjq2an)aoo$ejag58mvzi7",
+)
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("DJANGO_DEBUG", "True").lower() in ("1", "true", "yes")
 
-ALLOWED_HOSTS = ['localhost', 'tfapp.freedomwoods.online', '127.0.0.1']
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.environ.get(
+        "DJANGO_ALLOWED_HOSTS",
+        "localhost,tfapp.freedomwoods.online,127.0.0.1",
+    ).split(",")
+    if h.strip()
+]
 
 CSRF_TRUSTED_ORIGINS = [
-    'https://tfapp.freedomwoods.online',
+    o.strip()
+    for o in os.environ.get(
+        "DJANGO_CSRF_TRUSTED_ORIGINS",
+        "https://tfapp.freedomwoods.online",
+    ).split(",")
+    if o.strip()
 ]
+
+# --- HTTPS / browser security (defaults: strict when DEBUG is False) ---
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return v.lower() in ("1", "true", "yes")
+
+
+SECURE_SSL_REDIRECT = _env_bool("DJANGO_SECURE_SSL_REDIRECT", not DEBUG)
+SESSION_COOKIE_SECURE = _env_bool("DJANGO_SESSION_COOKIE_SECURE", not DEBUG)
+CSRF_COOKIE_SECURE = _env_bool("DJANGO_CSRF_COOKIE_SECURE", not DEBUG)
+SECURE_HSTS_SECONDS = 31536000 if not DEBUG else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
+SECURE_HSTS_PRELOAD = not DEBUG
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"
+X_FRAME_OPTIONS = "DENY"
+
+# If behind a reverse proxy that terminates TLS, set DJANGO_SECURE_PROXY_SSL_HEADER=1
+if os.environ.get("DJANGO_SECURE_PROXY_SSL_HEADER", "").lower() in ("1", "true", "yes"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# --- Sessions: 1.5 hours of inactivity (sliding expiry on each request) ---
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
+SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", str(90 * 60)))
+SESSION_SAVE_EVERY_REQUEST = True
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
 # Application definition
 
 INSTALLED_APPS = [
@@ -39,6 +83,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'accounts.apps.AccountsConfig',
     'attendance',
     'timeclock',
     'crispy_forms',
@@ -53,6 +98,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'accounts.middleware.UserSessionTrackingMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -140,3 +186,47 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# --- Auth redirects (paths match accounts/urls.py, no trailing slash) ---
+LOGIN_URL = "/accounts/login"
+LOGIN_REDIRECT_URL = "/"
+
+# --- Email (password reset & notifications) ---
+#
+# Default: console backend prints messages to the runserver terminal only (no real email).
+#
+# To send real mail (e.g. Gmail for testing): set env vars below. If EMAIL_HOST is set,
+# SMTP is used automatically; you do not need to set EMAIL_BACKEND.
+#
+# Gmail (personal account for testing):
+#   1. Enable 2-Step Verification on the Google account.
+#   2. Create an App Password: https://myaccount.google.com/apppasswords
+#      (Google Account > Security > 2-Step Verification > App passwords)
+#   3. Export before starting Django, e.g. in your shell or a .env loader:
+#        export EMAIL_HOST=smtp.gmail.com
+#        export EMAIL_PORT=587
+#        export EMAIL_USE_TLS=1
+#        export EMAIL_HOST_USER=you@gmail.com
+#        export EMAIL_HOST_PASSWORD=xxxx xxxx xxxx xxxx   # 16-char app password, spaces optional
+#        export DEFAULT_FROM_EMAIL="You <you@gmail.com>"
+#        export SERVER_EMAIL=you@gmail.com
+#   Use the same address for DEFAULT_FROM_EMAIL as EMAIL_HOST_USER unless you have
+#   "Send mail as" configured in Gmail.
+#
+if os.environ.get("EMAIL_HOST"):
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+elif "EMAIL_BACKEND" in os.environ:
+    EMAIL_BACKEND = os.environ["EMAIL_BACKEND"]
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "webmaster@localhost")
+SERVER_EMAIL = os.environ.get("SERVER_EMAIL", DEFAULT_FROM_EMAIL)
+
+if EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
+    EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+    EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+    EMAIL_USE_TLS = _env_bool("EMAIL_USE_TLS", True)
+    EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+    EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "30"))

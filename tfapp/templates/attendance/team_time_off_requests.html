@@ -49,19 +49,25 @@
                                         <td>{{ r.planned|yesno:"Yes,No" }}</td>
                                         <td>{{ r.get_subtype_display|default:"—" }}</td>
                                         <td>{{ r.comments|default:"—" }}</td>
-                                        <td>
+                                        <td class="align-top" style="min-width: 14rem;">
                                             {% if r.other_requests_display %}
-                                                {{ r.other_requests_display|join:", " }}
+                                                <div class="d-flex flex-column gap-2">
+                                                    {% for line in r.other_requests_display %}
+                                                        <div class="px-2 py-2 rounded small bg-body-secondary border-start border-3 border-primary text-wrap">
+                                                            {{ line }}
+                                                        </div>
+                                                    {% endfor %}
+                                                </div>
                                             {% else %}
                                                 —
                                             {% endif %}
                                         </td>
                                         <td class="text-end">
-                                            <form method="post" action="{% url 'attendance:approve_time_off' r.pk %}" class="d-inline">
+                                            <form method="post" action="{% url 'attendance:approve_time_off' r.slug %}" class="d-inline">
                                                 {% csrf_token %}
                                                 <button type="submit" class="btn btn-success btn-sm">Approve</button>
                                             </form>
-                                            <form method="post" action="{% url 'attendance:deny_time_off' r.pk %}" class="d-inline ms-1">
+                                            <form method="post" action="{% url 'attendance:deny_time_off' r.slug %}" class="d-inline ms-1">
                                                 {% csrf_token %}
                                                 <button type="submit" class="btn btn-danger btn-sm">Deny</button>
                                             </form>

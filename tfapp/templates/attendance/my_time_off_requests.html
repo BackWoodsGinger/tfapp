@@ -49,7 +49,7 @@
                                         </td>
                                         <td>
                                             {% if r.status == 'pending' or r.status == 'approved' %}
-                                                <form method="post" action="{% url 'attendance:cancel_time_off' r.pk %}" class="d-inline" onsubmit="return confirm('Cancel this time off request?{% if r.status == 'approved' %} PTO will be credited back.{% endif %}');">
+                                                <form method="post" action="{% url 'attendance:cancel_time_off' r.slug %}" class="d-inline" onsubmit="return confirm('Cancel this time off request?{% if r.status == 'approved' %} PTO will be credited back.{% endif %}');">
                                                     {% csrf_token %}
                                                     <input type="hidden" name="next" value="{% url 'attendance:my_time_off_requests' %}">
                                                     <button type="submit" class="btn btn-outline-danger btn-sm">Cancel</button>

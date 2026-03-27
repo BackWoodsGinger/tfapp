@@ -5,5 +5,5 @@ app_name = "timeclock"
 
 urlpatterns = [
     path('', views.timeclock_home, name='timeclock_home'),
-    path("edit/<int:pk>/", views.edit_entry, name="edit_entry"),
+    path("edit/<slug:slug>/", views.edit_entry, name="edit_entry"),
 ]

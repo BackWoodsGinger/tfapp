@@ -4,9 +4,12 @@ from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta, datetime
 
+from attendance.slug_utils import ensure_unique_slug
+
 
 class TimeEntry(models.Model):
     """One entry per user per day; enforced by unique constraint to prevent duplicates and race double-creation."""
+    slug = models.SlugField(max_length=48, unique=True, editable=False, db_index=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     clock_in = models.DateTimeField(null=True, blank=True)
     lunch_out = models.DateTimeField(null=True, blank=True)
@@ -239,6 +242,8 @@ class TimeEntry(models.Model):
                     occ.apply_pto()
 
     def save(self, *args, **kwargs):
+        if not self.slug:
+            ensure_unique_slug(self, "slug", max_length=48)
         if not self.is_incomplete() and self.missing_punch_flagged:
             self.missing_punch_flagged = False
             self.missing_punch_flagged_at = None

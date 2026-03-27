@@ -6,7 +6,7 @@
     <label for="user">User:</label>
     <select name="user" class="form-control mx-2">
         {% for u in users %}
-        <option value="{{ u.id }}" {% if selected_user_id == u.id|stringformat:"s" %}selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>
+        <option value="{{ u.public_slug }}" {% if selected_user_slug == u.public_slug %}selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>
         {% endfor %}
     </select>
 

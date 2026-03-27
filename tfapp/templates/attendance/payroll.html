@@ -15,7 +15,7 @@
               <ul>
                   {% for e in alerts %}
                   <li>{{ e.user.payroll_display_name }} on {{ e.date }}{% if e.missing_punch_flagged %} <span class="badge bg-warning text-dark">Flagged by nightly job</span>{% endif %} –
-                      <a href="{% url 'timeclock:edit_entry' e.id %}">Fix</a>
+                      <a href="{% url 'timeclock:edit_entry' e.slug %}">Fix</a>
                   </li>
                   {% endfor %}
               </ul>
@@ -52,7 +52,7 @@
                     <a
                       href="#"
                       class="payroll-user-link"
-                      data-user-id="{{ user.id }}"
+                      data-user-slug="{{ user.public_slug }}"
                       data-week-ending="{{ end_of_week|date:'Y-m-d' }}"
                       data-bs-toggle="modal"
                       data-bs-target="#payrollUserModal"
@@ -182,7 +182,7 @@
             var trigger = event.relatedTarget;
             if (!trigger) return;
 
-            var userId = trigger.getAttribute("data-user-id");
+            var userSlug = trigger.getAttribute("data-user-slug");
             var weekEnding = trigger.getAttribute("data-week-ending");
 
             bodyEl.innerHTML = '<tr><td colspan="7" class="text-muted">Loading…</td></tr>';
@@ -191,7 +191,7 @@
             totalReportedEl.textContent = "0.00";
             titleEl.textContent = "Daily Breakdown";
 
-            var url = "{% url 'attendance:payroll_user_breakdown' %}" + "?user_id=" + encodeURIComponent(userId) + "&week_ending=" + encodeURIComponent(weekEnding);
+            var url = "{% url 'attendance:payroll_user_breakdown' %}" + "?user_slug=" + encodeURIComponent(userSlug) + "&week_ending=" + encodeURIComponent(weekEnding);
             fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
               .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, json: j }; }); })
               .then(function (res) {

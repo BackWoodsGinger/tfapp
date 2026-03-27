@@ -18,6 +18,7 @@ class OccurrenceForm(forms.ModelForm):
 class ReportFilterForm(forms.Form):
     user = forms.ModelChoiceField(
         queryset=CustomUser.objects.all(),
+        to_field_name="public_slug",
         label="User",
         widget=forms.Select(attrs={"class": "form-select"}),
     )

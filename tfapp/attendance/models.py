@@ -6,6 +6,8 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from datetime import date, timedelta, datetime
 
+from .slug_utils import ensure_unique_slug
+
 DAYS_OF_WEEK = [
     (0, "Monday"), (1, "Tuesday"), (2, "Wednesday"), (3, "Thursday"),
     (4, "Friday"), (5, "Saturday"), (6, "Sunday"),
@@ -56,6 +58,7 @@ class CustomUser(AbstractUser):
     supervisor = models.ForeignKey(
         'self', null=True, blank=True, on_delete=models.SET_NULL, related_name="supervisees"
     )
+    public_slug = models.SlugField(max_length=48, unique=True, editable=False, db_index=True)
 
     def accrue_pto(self, hours):
         """
@@ -209,6 +212,8 @@ class CustomUser(AbstractUser):
             self.final_pto_balance = self.pto_balance
 
     def save(self, *args, **kwargs):
+        if not self.public_slug:
+            ensure_unique_slug(self, "public_slug", max_length=48)
         # Auto-adjust balances whenever a user is saved,
         # based on service date, tenure, and employment type.
         self.recalculate_balances()
@@ -475,6 +480,7 @@ class TimeOffRequest(models.Model):
     Approval will create one or more Occurrence records and apply PTO.
     """
 
+    slug = models.SlugField(max_length=48, unique=True, editable=False, db_index=True)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="time_off_requests")
     start_date = models.DateField()
     end_date = models.DateField()
@@ -508,6 +514,11 @@ class TimeOffRequest(models.Model):
 
     def __str__(self):
         return f"{self.user.username} PTO {self.start_date} to {self.end_date} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            ensure_unique_slug(self, "slug", max_length=48)
+        super().save(*args, **kwargs)
 
     def _iter_scheduled_days(self):
         """

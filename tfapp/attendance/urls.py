@@ -30,17 +30,17 @@ urlpatterns = [
         name="team_time_off_requests",
     ),
     path(
-        "timeoff/<int:pk>/approve/",
+        "timeoff/<slug:slug>/approve/",
         views.approve_time_off,
         name="approve_time_off",
     ),
     path(
-        "timeoff/<int:pk>/deny/",
+        "timeoff/<slug:slug>/deny/",
         views.deny_time_off,
         name="deny_time_off",
     ),
     path(
-        "timeoff/<int:pk>/cancel/",
+        "timeoff/<slug:slug>/cancel/",
         views.cancel_time_off,
         name="cancel_time_off",
     ),

@@ -10,6 +10,9 @@
 
           <h5 class="mt-4">Occurrences for Selected Day</h5>
           <form method="get" class="row g-2 mb-3 align-items-end">
+            {% if user_list|length > 1 %}
+            <input type="hidden" name="user_slug" value="{{ selected_user.public_slug }}">
+            {% endif %}
             <div class="col-auto">
               <label for="id_date" class="form-label small text-muted mb-0">Date</label>
               <input type="date" name="date" id="id_date" class="form-control" value="{{ selected_date|date:'Y-m-d' }}" style="min-width: 11rem;">
@@ -137,10 +140,10 @@
             {% if user_list|length > 1 %}
             <form method="get" class="d-flex flex-wrap align-items-center gap-2 mb-0">
               <input type="hidden" name="date" value="{{ selected_date|date:'Y-m-d' }}">
-              <label for="user_id" class="small text-muted mb-0">View Absences For:</label>
-              <select name="user_id" id="user_id" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
+              <label for="user_slug" class="small text-muted mb-0">View Absences For:</label>
+              <select name="user_slug" id="user_slug" class="form-select form-select-sm w-auto" onchange="this.form.submit()">
                 {% for u in user_list %}
-                <option value="{{ u.id }}" {% if selected_user.id == u.id %}selected{% endif %}>
+                <option value="{{ u.public_slug }}" {% if selected_user.public_slug == u.public_slug %}selected{% endif %}>
                   {{ u.get_full_name|default:u.username }}
                 </option>
                 {% endfor %}

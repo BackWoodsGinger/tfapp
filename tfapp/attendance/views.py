@@ -116,8 +116,14 @@ def dashboard(request):
     else:
         visible_users = CustomUser.objects.filter(id=user.id)
 
+    selected_slug = request.GET.get("user_slug")
     selected_user_id = request.GET.get("user_id")
-    selected_user = get_object_or_404(CustomUser, id=selected_user_id) if selected_user_id and selected_user_id.isdigit() else user
+    if selected_slug:
+        selected_user = get_object_or_404(visible_users, public_slug=selected_slug)
+    elif selected_user_id and selected_user_id.isdigit():
+        selected_user = get_object_or_404(visible_users, id=int(selected_user_id))
+    else:
+        selected_user = user
 
     # Apply any past-due occurrences so balance is current (future requests only deduct when date passes).
     apply_past_due_occurrences(selected_user)
@@ -224,7 +230,7 @@ def dashboard(request):
             ).order_by("date")
 
     user_service_dates = {
-        str(u.pk): u.service_date.isoformat() if u.service_date else None
+        str(u.public_slug): u.service_date.isoformat() if u.service_date else None
         for u in visible_users
     }
 
@@ -421,7 +427,7 @@ def payroll_view(request):
         payroll_weeks.insert(0, end_of_week.strftime("%Y-%m-%d"))
 
     user_service_dates = {
-        str(u.pk): u.service_date.isoformat() if u.service_date else None
+        str(u.public_slug): u.service_date.isoformat() if u.service_date else None
         for u in visible_users
     }
 
@@ -451,9 +457,10 @@ def payroll_user_breakdown(request):
     if not user_can_view_reports(request.user):
         return JsonResponse({"error": "forbidden"}, status=403)
 
+    user_slug = request.GET.get("user_slug")
     user_id = request.GET.get("user_id")
     week_ending_param = request.GET.get("week_ending")
-    if not (user_id and user_id.isdigit() and week_ending_param):
+    if not week_ending_param or not (user_slug or (user_id and user_id.isdigit())):
         return JsonResponse({"error": "missing params"}, status=400)
 
     try:
@@ -474,7 +481,10 @@ def payroll_user_breakdown(request):
     else:
         visible_users = CustomUser.objects.none()
 
-    target_user = get_object_or_404(visible_users, id=int(user_id))
+    if user_slug:
+        target_user = get_object_or_404(visible_users, public_slug=user_slug)
+    else:
+        target_user = get_object_or_404(visible_users, id=int(user_id))
     week_start = week_ending - timedelta(days=6)
 
     entries = (
@@ -506,6 +516,7 @@ def payroll_user_breakdown(request):
         {
             "user": {
                 "id": target_user.id,
+                "public_slug": target_user.public_slug,
                 "name": target_user.payroll_display_name(),
             },
             "week_start": week_start.isoformat(),
@@ -975,8 +986,8 @@ def unfinalize_payroll(request):
 
 
 @login_required
-def edit_entry(request, pk):
-    entry = get_object_or_404(TimeEntry, pk=pk)
+def edit_entry(request, slug):
+    entry = get_object_or_404(TimeEntry, slug=slug)
 
     if request.user.role not in [
         RoleChoices.GROUP_LEAD,
@@ -1183,8 +1194,8 @@ def team_time_off_requests(request):
 
 @require_POST
 @login_required
-def approve_time_off(request, pk):
-    tor = get_object_or_404(TimeOffRequest, pk=pk)
+def approve_time_off(request, slug):
+    tor = get_object_or_404(TimeOffRequest, slug=slug)
     approver = request.user
 
     if not can_approve_time_off(approver, tor.user):
@@ -1198,8 +1209,8 @@ def approve_time_off(request, pk):
 
 @require_POST
 @login_required
-def deny_time_off(request, pk):
-    tor = get_object_or_404(TimeOffRequest, pk=pk)
+def deny_time_off(request, slug):
+    tor = get_object_or_404(TimeOffRequest, slug=slug)
     approver = request.user
 
     if not can_approve_time_off(approver, tor.user):
@@ -1213,8 +1224,8 @@ def deny_time_off(request, pk):
 
 @require_POST
 @login_required
-def cancel_time_off(request, pk):
-    tor = get_object_or_404(TimeOffRequest, pk=pk)
+def cancel_time_off(request, slug):
+    tor = get_object_or_404(TimeOffRequest, slug=slug)
     if tor.user != request.user:
         messages.error(request, "You can only cancel your own requests.")
         return redirect("attendance:my_time_off_requests")
