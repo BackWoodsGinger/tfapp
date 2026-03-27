@@ -27,6 +27,11 @@ from .models import (
     OccurrenceSubtype,
 )
 from .forms import ReportFilterForm, TimeOffRequestForm
+from .schedule_utils import (
+    get_scheduled_start_for_day,
+    scheduled_duration_hours_for_day,
+    scheduled_hours_for_range,
+)
 from django.views.decorators.http import require_POST
 from django.conf import settings
 from pathlib import Path
@@ -526,75 +531,19 @@ def payroll_user_breakdown(request):
     )
 
 
-def _scheduled_hours_from_work_schedule(user, weekday_int):
-    """Scheduled hours for a weekday (0=Mon..6=Sun) from WorkSchedule model, or 0."""
-    sched = user.schedules.filter(day=weekday_int).first()
-    if not sched:
-        return 0.0
-    # Use a arbitrary date to combine with time for timedelta math
-    d = date(2000, 1, 1)
-    start_dt = datetime.combine(d, sched.start_time)
-    end_dt = datetime.combine(d, sched.end_time)
-    lunch_out_dt = datetime.combine(d, sched.lunch_out)
-    lunch_in_dt = datetime.combine(d, sched.lunch_in)
-    return (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
-
-
 def _scheduled_hours_for_range(user, week_start, week_ending):
     """Total scheduled hours from weekly_schedule or WorkSchedule for [week_start, week_ending]."""
-    schedule = user.weekly_schedule or {}
-    total = 0.0
-    fmt = "%H:%M"
-    current = week_start
-    while current <= week_ending:
-        weekday_str = current.strftime("%A").lower()
-        day_hours = 0.0
-        if schedule and weekday_str in schedule:
-            try:
-                sched = schedule[weekday_str]
-                start = datetime.strptime(sched["start"], fmt)
-                end = datetime.strptime(sched["end"], fmt)
-                lunch_out = datetime.strptime(sched["lunch_out"], fmt)
-                lunch_in = datetime.strptime(sched["lunch_in"], fmt)
-                day_hours = (end - start - (lunch_in - lunch_out)).total_seconds() / 3600
-            except (KeyError, ValueError):
-                pass
-        if day_hours <= 0:
-            day_hours = _scheduled_hours_from_work_schedule(user, current.weekday())
-        total += day_hours
-        current += timedelta(days=1)
-    return total
+    return scheduled_hours_for_range(user, week_start, week_ending)
 
 
 def _scheduled_hours_for_day(user, d):
     """Scheduled hours for a single day from weekly_schedule or WorkSchedule, or 0."""
-    schedule = user.weekly_schedule or {}
-    weekday_str = d.strftime("%A").lower()
-    if schedule and weekday_str in schedule:
-        try:
-            fmt = "%H:%M"
-            sched = schedule[weekday_str]
-            start = datetime.strptime(sched["start"], fmt)
-            end = datetime.strptime(sched["end"], fmt)
-            lunch_out = datetime.strptime(sched["lunch_out"], fmt)
-            lunch_in = datetime.strptime(sched["lunch_in"], fmt)
-            return (end - start - (lunch_in - lunch_out)).total_seconds() / 3600
-        except (KeyError, ValueError):
-            pass
-    return _scheduled_hours_from_work_schedule(user, d.weekday())
+    return scheduled_duration_hours_for_day(user, d)
 
 
 def _get_scheduled_start_time(user, d):
     """Return scheduled start time for user on date d from weekly_schedule or WorkSchedule, or None."""
-    schedule = user.weekly_schedule or {}
-    weekday_str = d.strftime("%A").lower()
-    if schedule and weekday_str in schedule:
-        try:
-            return datetime.strptime(schedule[weekday_str]["start"], "%H:%M").time()
-        except (KeyError, ValueError):
-            pass
-    sched = user.schedules.filter(day=d.weekday()).first()
-    return sched.start_time if sched else None
+    return get_scheduled_start_for_day(user, d)
 
 
 def _create_tardy_occurrences_for_week(week_start, week_ending, period=None):

@@ -89,6 +89,18 @@
               <button name="action" value="lunch_in" class="btn btn-info btn-xl">Lunch In</button>
               <button name="action" value="clock_out" class="btn btn-danger btn-xl">Clock Out</button>
             </div>
+
+            <div class="mt-4 w-100" style="max-width: 800px;">
+              <label for="clock_in_approver" class="form-label small text-muted mb-1">
+                Approver (required only if you are not scheduled today or are clocking in more than 10 minutes before shift start)
+              </label>
+              <select name="clock_in_approver" id="clock_in_approver" class="form-select form-select-lg">
+                <option value="">— Select executive, manager, supervisor, or group lead —</option>
+                {% for a in clock_in_approvers %}
+                <option value="{{ a.pk }}">{{ a.payroll_display_name }}</option>
+                {% endfor %}
+              </select>
+            </div>
           </form>
 
         </div>

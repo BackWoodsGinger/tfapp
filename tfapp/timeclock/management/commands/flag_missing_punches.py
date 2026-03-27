@@ -1,24 +1,34 @@
 """
-Nightly job: find time entries with missing punches (incomplete), flag them, and notify admins.
-Run at 2:30 AM via cron, e.g.:
+Nightly job (e.g. 2:30 AM):
+
+1) For past days: if clock_in and clock_out exist but lunch punches are missing, insert
+   lunch_out / lunch_in from the employee's scheduled lunch times (when those times fall
+   within the actual clock_in–clock_out window). This matches payroll logic that assumes
+   a lunch deduction without requiring manual lunch punches.
+
+2) Remaining incomplete entries are flagged and admins may be emailed.
+
+Run via cron, e.g.:
   30 2 * * * cd /path/to/project && python manage.py flag_missing_punches
 """
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.core import mail
 from django.conf import settings
-
+from attendance.schedule_utils import scheduled_lunch_datetimes_for_entry
 from timeclock.models import TimeEntry
 
 
 class Command(BaseCommand):
-    help = "Find incomplete time entries, set missing_punch_flagged, and email admins."
+    help = (
+        "Apply scheduled lunch punches when missing; then flag incomplete entries and optionally email admins."
+    )
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Only list entries that would be flagged; do not update or email.",
+            help="Only list entries that would be updated or flagged; do not save or email.",
         )
         parser.add_argument(
             "--no-email",
@@ -30,24 +40,72 @@ class Command(BaseCommand):
         dry_run = options["dry_run"]
         no_email = options["no_email"]
         now = timezone.now()
+        today = now.date()
+
+        candidates = (
+            TimeEntry.objects.filter(
+                date__lt=today,
+                clock_in__isnull=False,
+                clock_out__isnull=False,
+                lunch_out__isnull=True,
+                lunch_in__isnull=True,
+            )
+            .select_related("user")
+        )
+
+        filled = []
+        for entry in candidates:
+            times = scheduled_lunch_datetimes_for_entry(entry)
+            if times is None:
+                continue
+            lunch_out_dt, lunch_in_dt = times
+            if dry_run:
+                filled.append(entry)
+                self.stdout.write(
+                    f"  Would apply scheduled lunch: {entry.user.get_full_name() or entry.user.username} "
+                    f"on {entry.date} (lunch {lunch_out_dt} – {lunch_in_dt})"
+                )
+                continue
+            entry.lunch_out = lunch_out_dt
+            entry.lunch_in = lunch_in_dt
+            entry.missing_punch_flagged = False
+            entry.missing_punch_flagged_at = None
+            entry.save(
+                update_fields=[
+                    "lunch_out",
+                    "lunch_in",
+                    "missing_punch_flagged",
+                    "missing_punch_flagged_at",
+                ]
+            )
+            filled.append(entry)
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"  Applied scheduled lunch: {entry.user.get_full_name() or entry.user.username} on {entry.date}"
+                )
+            )
+
+        if filled and not dry_run:
+            self.stdout.write(self.style.SUCCESS(f"Filled scheduled lunch on {len(filled)} entr{'y' if len(filled) == 1 else 'ies'}."))
+        elif dry_run and filled:
+            self.stdout.write(f"Would fill scheduled lunch on {len(filled)} entr{'y' if len(filled) == 1 else 'ies'}.")
 
         # Entries that have at least one punch but not all (incomplete)
-        incomplete = TimeEntry.objects.filter(
-            date__lt=now.date(),  # only past days
-        ).exclude(
+        incomplete = TimeEntry.objects.filter(date__lt=today).exclude(
             clock_in=None,
             lunch_out=None,
             lunch_in=None,
             clock_out=None,
         )
-        # Filter to those that are actually incomplete (any field set but not all)
         to_flag = [e for e in incomplete if e.is_incomplete() and not e.missing_punch_flagged]
 
         if not to_flag:
             self.stdout.write(self.style.SUCCESS("No incomplete entries to flag."))
+            if not filled:
+                return
             return
 
-        self.stdout.write(f"Found {len(to_flag)} incomplete entr{'y' if len(to_flag) == 1 else 'ies'}.")
+        self.stdout.write(f"Found {len(to_flag)} incomplete entr{'y' if len(to_flag) == 1 else 'ies'} to flag.")
 
         if dry_run:
             for e in to_flag:
@@ -66,16 +124,14 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("Flagged; no email sent (--no-email)."))
             return
 
-        # Notify admins: use ADMINS if set, else staff/superuser emails
         recipient_list = []
         if getattr(settings, "ADMINS", None):
             recipient_list = [email for _, email in settings.ADMINS]
         if not recipient_list:
             from django.contrib.auth import get_user_model
+
             User = get_user_model()
-            recipient_list = list(
-                User.objects.filter(is_superuser=True).values_list("email", flat=True)
-            )
+            recipient_list = list(User.objects.filter(is_superuser=True).values_list("email", flat=True))
             if not recipient_list:
                 recipient_list = list(
                     User.objects.filter(is_staff=True, email__isnull=False)
@@ -100,6 +156,7 @@ class Command(BaseCommand):
             )
             if getattr(settings, "BASE_URL", None):
                 from django.urls import reverse
+
                 try:
                     path = reverse("timeclock:edit_entry", args=[e.slug])
                     body_lines.append(f"  Edit: {settings.BASE_URL.rstrip('/')}{path}")

@@ -20,6 +20,10 @@ class WorkSchedule(models.Model):
     lunch_out = models.TimeField()
     lunch_in = models.TimeField()
     end_time = models.TimeField()
+    crosses_midnight = models.BooleanField(
+        default=False,
+        help_text="Set when the shift ends the morning after it starts (e.g. 3:30pm–2:00am).",
+    )
 
     class Meta:
         unique_together = ("user", "day")

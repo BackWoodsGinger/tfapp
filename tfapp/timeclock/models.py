@@ -5,6 +5,7 @@ from django.utils import timezone
 from datetime import timedelta, datetime
 
 from attendance.slug_utils import ensure_unique_slug
+from attendance.schedule_utils import get_scheduled_lunch_in_for_day, get_scheduled_start_for_day
 
 
 class TimeEntry(models.Model):
@@ -21,6 +22,14 @@ class TimeEntry(models.Model):
         help_text="Set by nightly job when entry is incomplete; cleared when entry is fixed.",
     )
     missing_punch_flagged_at = models.DateTimeField(null=True, blank=True)
+    clock_in_authorized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="authorized_clock_ins",
+        help_text="Manager/supervisor who approved clock-in when unscheduled or more than 10 minutes early.",
+    )
 
     class Meta:
         constraints = [
@@ -148,15 +157,7 @@ class TimeEntry(models.Model):
         """
         Scheduled start time for this entry date from weekly_schedule or WorkSchedule.
         """
-        schedule = self.user.weekly_schedule or {}
-        weekday_str = self.date.strftime("%A").lower()
-        if schedule and weekday_str in schedule:
-            try:
-                return datetime.strptime(schedule[weekday_str]["start"], "%H:%M").time()
-            except (KeyError, ValueError, TypeError):
-                pass
-        work_schedule = self.user.schedules.filter(day=self.date.weekday()).first()
-        return work_schedule.start_time if work_schedule else None
+        return get_scheduled_start_for_day(self.user, self.date)
 
     def check_tardy(self):
         """
@@ -167,12 +168,12 @@ class TimeEntry(models.Model):
         """
         from attendance.models import Occurrence, OccurrenceSubtype, OccurrenceType
 
-        schedule = self.user.schedules.filter(day=self.date.weekday()).first()
-        if not schedule or not self.clock_in:
+        start_time = get_scheduled_start_for_day(self.user, self.date)
+        if not start_time or not self.clock_in:
             return
 
         minutes_late, adjusted_start = self._tardy_minutes_and_adjusted_start(
-            self.clock_in, schedule.start_time
+            self.clock_in, start_time
         )
 
         # Within 4‑minute grace window: mark as in‑grace but do not dock time
@@ -188,7 +189,7 @@ class TimeEntry(models.Model):
 
         # 5+ minutes late: round up to next quarter hour and dock time via PTO occurrence
         if minutes_late >= 5:
-            scheduled_local = self._scheduled_local_datetime(schedule.start_time)
+            scheduled_local = self._scheduled_local_datetime(start_time)
             loss = (adjusted_start - scheduled_local).total_seconds() / 3600
             if loss > 0:
                 occ, created = Occurrence.objects.get_or_create(
@@ -212,12 +213,12 @@ class TimeEntry(models.Model):
         """
         from attendance.models import Occurrence, OccurrenceSubtype, OccurrenceType
 
-        schedule = self.user.schedules.filter(day=self.date.weekday()).first()
-        if not schedule or not self.lunch_in:
+        lunch_in_sched = get_scheduled_lunch_in_for_day(self.user, self.date)
+        if not lunch_in_sched or not self.lunch_in:
             return
 
         minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
-            self.lunch_in, schedule.lunch_in
+            self.lunch_in, lunch_in_sched
         )
 
         # Within 4‑minute grace from lunch: no docking
@@ -225,7 +226,7 @@ class TimeEntry(models.Model):
             return
 
         if minutes_late >= 5:
-            scheduled_lunch_local = self._scheduled_local_datetime(schedule.lunch_in)
+            scheduled_lunch_local = self._scheduled_local_datetime(lunch_in_sched)
             loss = (adjusted_in - scheduled_lunch_local).total_seconds() / 3600
             if loss > 0:
                 # Use get_or_create to avoid duplicate if rule runs twice (unique constraint)

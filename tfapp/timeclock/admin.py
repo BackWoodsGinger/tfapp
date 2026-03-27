@@ -4,12 +4,13 @@ from .models import TimeEntry
 
 @admin.register(TimeEntry)
 class TimeEntryAdmin(admin.ModelAdmin):
-    readonly_fields = ("slug",)
+    readonly_fields = ("slug", "clock_in_authorized_by")
     list_display = (
         "slug",
         "user",
         "date",
         "clock_in",
+        "clock_in_authorized_by",
         "lunch_out",
         "lunch_in",
         "clock_out",

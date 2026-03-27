@@ -3,13 +3,45 @@ from django.contrib import messages
 from django.db import transaction, IntegrityError
 from .models import TimeEntry
 from .forms import TimeEntryForm
-from attendance.models import CustomUser
+from attendance.models import CustomUser, RoleChoices
+from attendance.schedule_utils import clock_in_requires_approver
 from django.utils import timezone
 from django.utils.timezone import localtime
 from django.contrib.auth.decorators import login_required
 
 
+def _clock_in_approver_queryset():
+    return CustomUser.objects.filter(
+        role__in=[
+            RoleChoices.EXECUTIVE,
+            RoleChoices.MANAGER,
+            RoleChoices.SUPERVISOR,
+            RoleChoices.GROUP_LEAD,
+        ],
+        is_active=True,
+    ).order_by(
+        "payroll_lastname",
+        "payroll_firstname",
+        "last_name",
+        "first_name",
+        "username",
+    )
+
+
+def _is_valid_clock_in_approver(u: CustomUser) -> bool:
+    if not u or not u.is_active:
+        return False
+    return u.role in (
+        RoleChoices.EXECUTIVE,
+        RoleChoices.MANAGER,
+        RoleChoices.SUPERVISOR,
+        RoleChoices.GROUP_LEAD,
+    )
+
+
 def timeclock_home(request):
+    clock_in_approvers = _clock_in_approver_queryset()
+
     if request.method == "POST":
         login = request.POST.get("login")
         pin = request.POST.get("pin")
@@ -49,6 +81,28 @@ def timeclock_home(request):
                     return redirect("timeclock:timeclock_home")
 
                 if action == "clock_in":
+                    requires_approver, _reason = clock_in_requires_approver(user, now, today)
+                    approver_id = (request.POST.get("clock_in_approver") or "").strip()
+                    if requires_approver:
+                        if not approver_id:
+                            messages.error(
+                                request,
+                                "You are not scheduled today or are more than 10 minutes before your "
+                                "scheduled start. Select an approving executive, manager, supervisor, or "
+                                "group lead, then try Clock In again.",
+                            )
+                            return redirect("timeclock:timeclock_home")
+                        try:
+                            approver = CustomUser.objects.get(pk=approver_id)
+                        except CustomUser.DoesNotExist:
+                            messages.error(request, "Invalid approver selected.")
+                            return redirect("timeclock:timeclock_home")
+                        if not _is_valid_clock_in_approver(approver):
+                            messages.error(request, "The selected user cannot approve this clock-in.")
+                            return redirect("timeclock:timeclock_home")
+                        entry.clock_in_authorized_by = approver
+                    else:
+                        entry.clock_in_authorized_by = None
                     entry.clock_in = now
                 elif action == "lunch_out":
                     entry.lunch_out = now
@@ -79,7 +133,11 @@ def timeclock_home(request):
         )
         return redirect("timeclock:timeclock_home")
 
-    return render(request, "timeclock/timeclock_home.html")
+    return render(
+        request,
+        "timeclock/timeclock_home.html",
+        {"clock_in_approvers": clock_in_approvers},
+    )
 
 
 @login_required
