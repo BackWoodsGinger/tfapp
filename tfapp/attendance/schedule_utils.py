@@ -85,20 +85,38 @@ def get_scheduled_start_for_day(user, d: date):
 
 
 def crosses_midnight_for_day(user, d: date) -> bool:
-    """True if shift end is the calendar day after the shift start day."""
+    """
+    True if shift end is the next calendar morning after shift start (overnight shift).
+
+    Uses explicit crosses_midnight from JSON or WorkSchedule when set; otherwise infers
+    from start/end times: if end_time <= start_time as clock times (e.g. 02:00 vs 15:30),
+    the shift crosses midnight. Without this, scheduled hours become negative.
+    """
     ws = user.weekly_schedule or {}
     weekday_str = d.strftime("%A").lower()
     if ws and weekday_str in ws:
         try:
             row = ws[weekday_str]
+            st = datetime.strptime(row["start"], TIME_FMT).time()
+            et = datetime.strptime(row["end"], TIME_FMT).time()
+            inferred = et <= st
             if row.get("crosses_midnight") is True:
+                return True
+            if inferred:
                 return True
             if row.get("crosses_midnight") is False:
                 return False
-        except (AttributeError, TypeError):
+            # JSON defines this weekday: same-calendar-day shift (no explicit flag)
+            return False
+        except (KeyError, ValueError, TypeError, AttributeError):
             pass
     sched = user.schedules.filter(day=d.weekday()).first()
-    return bool(sched and getattr(sched, "crosses_midnight", False))
+    if sched:
+        if getattr(sched, "crosses_midnight", False):
+            return True
+        if sched.end_time <= sched.start_time:
+            return True
+    return False
 
 
 def scheduled_duration_hours_for_day(user, d: date) -> float:
@@ -124,7 +142,7 @@ def scheduled_duration_hours_for_day(user, d: date) -> float:
     end = datetime.combine(d0, sched.end_time)
     lunch_out_dt = datetime.combine(d0, sched.lunch_out)
     lunch_in_dt = datetime.combine(d0, sched.lunch_in)
-    cm = getattr(sched, "crosses_midnight", False)
+    cm = crosses_midnight_for_day(user, d)
     return _duration_hours_from_parts(start, end, lunch_out_dt, lunch_in_dt, cm)
 
 
