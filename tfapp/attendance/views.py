@@ -81,6 +81,14 @@ def can_approve_time_off(approver: CustomUser, target: CustomUser) -> bool:
 
     return False
 
+
+def _payroll_sort_key(user: CustomUser):
+    return (
+        (user.payroll_lastname or user.last_name or user.username or "").strip().lower(),
+        (user.payroll_firstname or user.first_name or "").strip().lower(),
+        (user.username or "").strip().lower(),
+    )
+
 @login_required
 def dashboard(request):
     user = request.user
@@ -329,7 +337,13 @@ def payroll_view(request):
         visible_users = CustomUser.objects.filter(Q(group_lead=user) | Q(id=user.id))
     else:
         visible_users = CustomUser.objects.none()
-    form.fields["user"].queryset = visible_users
+    form.fields["user"].queryset = visible_users.order_by(
+        "payroll_lastname",
+        "payroll_firstname",
+        "last_name",
+        "first_name",
+        "username",
+    )
 
     occurrences = []
     selected_user = None
@@ -351,11 +365,9 @@ def payroll_view(request):
 
     weekly_totals = []
 
-    for u in visible_users.filter(is_exempt=False):
+    for u in sorted(visible_users.filter(is_exempt=False), key=_payroll_sort_key):
         total_actual = 0
         total_reported = 0
-        total_scheduled = 0
-        schedule = u.weekly_schedule or {}
 
         entries = TimeEntry.objects.filter(user=u, date__range=[start_of_week, end_of_week])
         for entry in entries:
@@ -363,27 +375,21 @@ def payroll_view(request):
                 total_actual += entry.actual_worked_hours()
                 total_reported += entry.reported_worked_hours()
 
-            weekday = entry.date.strftime("%A").lower()  # "monday", etc.
-            if weekday in schedule:
-                try:
-                    fmt = "%H:%M"
-                    sched = schedule[weekday]
-                    start = datetime.strptime(sched["start"], fmt)
-                    end = datetime.strptime(sched["end"], fmt)
-                    lunch_out = datetime.strptime(sched["lunch_out"], fmt)
-                    lunch_in = datetime.strptime(sched["lunch_in"], fmt)
-                    sched_hours = (end - start - (lunch_in - lunch_out)).total_seconds() / 3600
-                    total_scheduled += sched_hours
-                except (KeyError, ValueError):
-                    continue
-
-        delta = round(total_reported - total_scheduled, 2)
+        total_scheduled = _scheduled_hours_for_range(u, start_of_week, end_of_week)
+        week_pto_personal = Occurrence.objects.filter(
+            user=u,
+            date__range=[start_of_week, end_of_week],
+            pto_applied=True,
+        ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
+        pto_applied = sum(o.pto_hours_applied for o in week_pto_personal)
+        personal_applied = sum(o.personal_hours_applied for o in week_pto_personal)
         weekly_totals.append((
             u,
             round(total_actual, 2),
             round(total_reported, 2),
             round(total_scheduled, 2),
-            delta,
+            round(pto_applied, 2),
+            round(personal_applied, 2),
         ))
 
     alerts = []
@@ -500,7 +506,7 @@ def payroll_user_breakdown(request):
         {
             "user": {
                 "id": target_user.id,
-                "name": target_user.get_full_name() or target_user.username,
+                "name": target_user.payroll_display_name(),
             },
             "week_start": week_start.isoformat(),
             "week_ending": week_ending.isoformat(),
@@ -675,7 +681,10 @@ def close_payroll(request):
         # High level: compare each user's schedule to (time entries + approved time off). Shortfall not covered
         # by approved time off gets an auto-generated occurrence; PTO/personal applied per policy; then accrue
         # PTO for 0-2 yr / part-time on time-entry hours only (1 hr per 30 worked, cap 72 for part-time).
-        users = CustomUser.objects.filter(is_active=True, is_exempt=False).order_by("last_name", "first_name")
+        users = sorted(
+            CustomUser.objects.filter(is_active=True, is_exempt=False),
+            key=_payroll_sort_key,
+        )
 
         # Build total worked (time entries only) and total scheduled per user for the week
         user_total_worked = {}
@@ -830,7 +839,14 @@ def close_payroll(request):
     response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
     writer = csv.writer(response)
-    users = CustomUser.objects.filter(is_active=True, is_exempt=False).order_by("last_name", "first_name")
+    users = sorted(
+        CustomUser.objects.filter(is_active=True, is_exempt=False),
+        key=_payroll_sort_key,
+    )
+    total_worked_all = 0.0
+    total_overtime_all = 0.0
+    total_pto_all = 0.0
+    total_holiday_all = 0.0
     for user in users:
         entries = TimeEntry.objects.filter(user=user, date__range=[week_start, week_ending])
         total_worked_hours = 0
@@ -843,7 +859,8 @@ def close_payroll(request):
             date__range=[week_start, week_ending],
             pto_applied=True,
         ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
-        pto_hours = sum(o.duration_hours for o in pto_occurrences)
+        # "Applied PTO" should only include PTO deducted, not total occurrence hours.
+        pto_hours = sum(o.pto_hours_applied for o in pto_occurrences)
 
         holiday_occurrences = Occurrence.objects.filter(
             user=user,
@@ -852,18 +869,33 @@ def close_payroll(request):
         )
         holiday_hours = sum(o.duration_hours for o in holiday_occurrences)
 
-        regular = min(total_worked_hours, 40)
+        worked_hours_capped = min(total_worked_hours, 40)
         overtime = max(total_worked_hours - 40, 0)
+        total_worked_all += worked_hours_capped
+        total_overtime_all += overtime
+        total_pto_all += pto_hours
+        total_holiday_all += holiday_hours
         writer.writerow(
             [
-                (user.last_name or "").title(),
-                (user.first_name or "").title(),
-                round(regular, 2),
+                user.payroll_last_name_for_display() or "",
+                user.payroll_first_name_for_display() or "",
+                round(worked_hours_capped, 2),
                 round(overtime, 2),
                 round(pto_hours, 2),
                 round(holiday_hours, 2),
             ]
         )
+
+    writer.writerow(
+        [
+            "",
+            "",
+            round(total_worked_all, 2),
+            round(total_overtime_all, 2),
+            round(total_pto_all, 2),
+            round(total_holiday_all, 2),
+        ]
+    )
 
     return response
 
@@ -995,6 +1027,10 @@ def generate_report_pdf(request):
             user=user, date__range=(start_date, end_date)
         ).order_by("date")
 
+        # Ensure current balance reflects any occurrences that became due.
+        apply_past_due_occurrences(user)
+        user.refresh_from_db()
+
         # PTO/Personal used in this report period (from tracked split per occurrence)
         pto_using = Occurrence.objects.filter(
             user=user,
@@ -1048,6 +1084,7 @@ def generate_report_pdf(request):
             "logo_uri": logo_uri,
             "pto_used": pto_used,
             "personal_used": personal_used,
+            "pto_remaining": user.pto_balance,
         })
         response = HttpResponse(content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{user.username}_report.pdf"'
@@ -1117,6 +1154,25 @@ def team_time_off_requests(request):
     # Filter to only those the current user can approve
     manageable = [r.id for r in pending if can_approve_time_off(approver, r.user)]
     pending = pending.filter(id__in=manageable)
+
+    # For each pending request, surface overlapping approved requests so approvers
+    # can see who else is already out in the same timeframe.
+    for req in pending:
+        overlapping_other = (
+            TimeOffRequest.objects.filter(
+                status__in=[TimeOffRequestStatus.APPROVED, TimeOffRequestStatus.PENDING],
+                start_date__lte=req.end_date,
+                end_date__gte=req.start_date,
+            )
+            .exclude(pk=req.pk)
+            .exclude(user=req.user)
+            .select_related("user")
+            .order_by("start_date", "user__last_name", "user__first_name")
+        )
+        req.other_requests_display = [
+            f"{o.user.payroll_display_name()} ({o.start_date} - {o.end_date}) [{o.status.upper()}]"
+            for o in overlapping_other
+        ]
 
     return render(
         request,

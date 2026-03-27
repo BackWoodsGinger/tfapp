@@ -37,7 +37,12 @@
                             <tbody>
                                 {% for r in my_requests %}
                                     <tr>
-                                        <td>{{ r.start_date }} – {{ r.end_date }}</td>
+                                        <td>
+                                            {{ r.start_date }} – {{ r.end_date }}
+                                            {% if r.partial_day %}
+                                                <br><small class="text-muted">Partial: {{ r.partial_hours|floatformat:2 }} hrs</small>
+                                            {% endif %}
+                                        </td>
                                         <td>{{ r.get_subtype_display|default:"—" }}</td>
                                         <td class="text-capitalize">{{ r.status }}</td>
                                         <td>{{ r.planned|yesno:"Yes,No" }}</td>

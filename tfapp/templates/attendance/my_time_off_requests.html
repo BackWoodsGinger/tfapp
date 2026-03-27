@@ -32,7 +32,12 @@
                                 {% for r in my_requests %}
                                     <tr>
                                         <td>{{ r.created_at|date:"Y-m-d H:i" }}</td>
-                                        <td>{{ r.start_date }} – {{ r.end_date }}</td>
+                                        <td>
+                                            {{ r.start_date }} – {{ r.end_date }}
+                                            {% if r.partial_day %}
+                                                <br><small class="text-muted">Partial: {{ r.partial_hours|floatformat:2 }} hrs</small>
+                                            {% endif %}
+                                        </td>
                                         <td class="text-capitalize">{{ r.status }}</td>
                                         <td>{{ r.planned|yesno:"Yes,No" }}</td>
                                         <td>

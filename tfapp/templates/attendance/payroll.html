@@ -14,7 +14,7 @@
               <strong>⚠ Incomplete Time Entries Detected</strong>
               <ul>
                   {% for e in alerts %}
-                  <li>{{ e.user.get_full_name|default:e.user.username }} on {{ e.date }}{% if e.missing_punch_flagged %} <span class="badge bg-warning text-dark">Flagged by nightly job</span>{% endif %} –
+                  <li>{{ e.user.payroll_display_name }} on {{ e.date }}{% if e.missing_punch_flagged %} <span class="badge bg-warning text-dark">Flagged by nightly job</span>{% endif %} –
                       <a href="{% url 'timeclock:edit_entry' e.id %}">Fix</a>
                   </li>
                   {% endfor %}
@@ -41,11 +41,12 @@
                   <th>Actual Hours</th>
                   <th>Reported Hours (Payroll)</th>
                   <th>Scheduled Hours</th>
-                  <th>Delta</th>
+                  <th>PTO Applied</th>
+                  <th>Personal Applied</th>
                 </tr>
               </thead>
               <tbody>
-                {% for user, actual, reported, scheduled, delta in weekly_totals %}
+                {% for user, actual, reported, scheduled, pto_applied, personal_applied in weekly_totals %}
                 <tr>
                   <td>
                     <a
@@ -55,14 +56,13 @@
                       data-week-ending="{{ end_of_week|date:'Y-m-d' }}"
                       data-bs-toggle="modal"
                       data-bs-target="#payrollUserModal"
-                    >{{ user.get_full_name|default:user.username }}</a>
+                    >{{ user.payroll_display_name }}</a>
                   </td>
                   <td>{{ actual }}</td>
                   <td>{{ reported }}</td>
                   <td>{{ scheduled }}</td>
-                  <td class="{% if delta < 0 %}text-danger{% elif delta > 0 %}text-success{% endif %}">
-                    {{ delta }}
-                  </td>
+                  <td>{{ pto_applied }}</td>
+                  <td>{{ personal_applied }}</td>
                 </tr>
                 {% endfor %}
               </tbody>

@@ -22,7 +22,7 @@
     <h3>Attendance</h3>
     <p><strong>Employee:</strong> {{ user.get_full_name|default:user.username }}</p>
     <p><strong>Period:</strong> {{ start }} to {{ end }}</p>
-    <p><strong>PTO used:</strong> {{ pto_used|floatformat:1 }} hours &nbsp; <strong>Personal used:</strong> {{ personal_used|floatformat:1 }} hours</p>
+    <p><strong>PTO used:</strong> {{ pto_used|floatformat:1 }} hours &nbsp; <strong>Personal used:</strong> {{ personal_used|floatformat:1 }} hours &nbsp; <strong>PTO remaining:</strong> {{ pto_remaining|floatformat:1 }} hours</p>
     </div>
 
     <table>

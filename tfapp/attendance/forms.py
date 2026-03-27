@@ -51,10 +51,12 @@ class TimeOffRequestForm(forms.ModelForm):
 
     class Meta:
         model = TimeOffRequest
-        fields = ["start_date", "end_date", "subtype", "comments"]
+        fields = ["start_date", "end_date", "partial_day", "partial_hours", "subtype", "comments"]
         widgets = {
             "start_date": forms.DateInput(attrs={"type": "date"}),
             "end_date": forms.DateInput(attrs={"type": "date"}),
+            "partial_day": forms.CheckboxInput(attrs={"class": "form-check-input"}),
+            "partial_hours": forms.NumberInput(attrs={"step": 0.25, "min": 0.25, "class": "form-control"}),
             "subtype": forms.Select(attrs={"class": "form-select"}),
             "comments": forms.Textarea(attrs={"rows": 3, "class": "form-control", "placeholder": "Optional"}),
         }
@@ -73,6 +75,10 @@ class TimeOffRequestForm(forms.ModelForm):
                 Column("start_date", css_class="col-md-6"),
                 Column("end_date", css_class="col-md-6"),
             ),
+            Row(
+                Column("partial_day", css_class="col-md-3"),
+                Column("partial_hours", css_class="col-md-3"),
+            ),
             "subtype",
             "comments",
         )
@@ -81,6 +87,8 @@ class TimeOffRequestForm(forms.ModelForm):
         cleaned_data = super().clean()
         start_date = cleaned_data.get("start_date")
         end_date = cleaned_data.get("end_date")
+        partial_day = cleaned_data.get("partial_day")
+        partial_hours = cleaned_data.get("partial_hours")
 
         if not start_date or not end_date:
             return cleaned_data
@@ -98,9 +106,32 @@ class TimeOffRequestForm(forms.ModelForm):
                 "Please submit separate requests for each week."
             )
 
+        if partial_day:
+            if start_date != end_date:
+                raise forms.ValidationError(
+                    "Partial-day requests must be for a single date."
+                )
+            if partial_hours is None or partial_hours <= 0:
+                raise forms.ValidationError(
+                    "Enter partial-day hours greater than 0."
+                )
+
         user = self.request_user
         if not user:
             return cleaned_data
+
+        if partial_day:
+            # Ensure partial hours do not exceed the scheduled hours for that date.
+            temp_request = TimeOffRequest(user=user, start_date=start_date, end_date=end_date)
+            scheduled_hours = temp_request.compute_requested_hours()
+            if scheduled_hours <= 0:
+                raise forms.ValidationError(
+                    "You do not have scheduled hours on that date."
+                )
+            if float(partial_hours) > float(scheduled_hours):
+                raise forms.ValidationError(
+                    f"Partial-day hours cannot exceed scheduled hours ({scheduled_hours:.2f}) for that date."
+                )
 
         from .models import TimeOffRequestStatus
 

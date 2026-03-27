@@ -3,6 +3,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.shortcuts import redirect, get_object_or_404
 from django.urls import path
 from django.contrib import messages
+from decimal import Decimal
 from .models import CustomUser, Occurrence, WorkSchedule, OccurrenceSubtype, PayrollPeriod, PTOBalanceHistory
 
 
@@ -38,10 +39,16 @@ def refresh_pto_baseline(modeladmin, request, queryset):
 class CustomUserAdmin(BaseUserAdmin):
     inlines = [WorkScheduleInline]
     list_display = (
-        'username', 'email', 'role', 'department', 'hire_date', 'service_date', 'is_exempt', 'pto_balance'
+        'payroll_name', 'email', 'role', 'department', 'hire_date', 'service_date', 'is_exempt', 'pto_balance'
     )
+    ordering = ("payroll_lastname", "payroll_firstname", "username")
+    search_fields = ("payroll_lastname", "payroll_firstname", "username", "first_name", "last_name", "email")
     actions = [recalculate_pto, refresh_pto_baseline]
     change_form_template = "admin/attendance/customuser/change_form.html"
+
+    @admin.display(description="Employee", ordering="payroll_lastname")
+    def payroll_name(self, obj):
+        return obj.payroll_display_name()
 
     def get_urls(self):
         urls = super().get_urls()
@@ -79,11 +86,47 @@ class CustomUserAdmin(BaseUserAdmin):
         )
         return super().change_view(request, object_id, form_url, extra_context)
 
+    def save_model(self, request, obj, form, change):
+        # Record manual balance edits made directly in admin user form.
+        old_pto = None
+        old_personal = None
+        if change and obj.pk:
+            original = CustomUser.objects.filter(pk=obj.pk).first()
+            if original:
+                old_pto = Decimal(str(original.pto_balance)).quantize(Decimal("0.01"))
+                old_personal = Decimal(str(original.personal_time_balance)).quantize(Decimal("0.01"))
+
+        super().save_model(request, obj, form, change)
+
+        if old_pto is not None:
+            new_pto = Decimal(str(obj.pto_balance)).quantize(Decimal("0.01"))
+            delta_pto = new_pto - old_pto
+            if delta_pto != 0:
+                PTOBalanceHistory.record(
+                    user=obj,
+                    change=float(delta_pto),
+                    reason=f"Manual admin edit by {request.user.username}",
+                    balance_after=float(new_pto),
+                    balance_type=PTOBalanceHistory.BALANCE_TYPE_PTO,
+                )
+
+            new_personal = Decimal(str(obj.personal_time_balance)).quantize(Decimal("0.01"))
+            delta_personal = new_personal - old_personal
+            if delta_personal != 0:
+                PTOBalanceHistory.record(
+                    user=obj,
+                    change=float(delta_personal),
+                    reason=f"Manual admin edit by {request.user.username}",
+                    balance_after=float(new_personal),
+                    balance_type=PTOBalanceHistory.BALANCE_TYPE_PERSONAL,
+                )
+
     fieldsets = (
         (None, {
             'fields': (
                 'username', 'password', 'email', 'first_name', 'last_name', 'role',
                 'department', 'supervisor', 'group_lead', 'team_lead',
+                'payroll_lastname', 'payroll_firstname',
                 'hire_date', 'service_date', 'is_part_time', 'is_exempt', 'timeclock_login',
                 'timeclock_pin'
             )

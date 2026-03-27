@@ -50,6 +50,8 @@ class CustomUser(AbstractUser):
     hours_worked = models.FloatField(default=0.0)
     timeclock_login = models.CharField(max_length=4, blank=True, null=True)
     timeclock_pin = models.CharField(max_length=4, blank=True, null=True)
+    payroll_lastname = models.CharField(max_length=150, blank=True, default="")
+    payroll_firstname = models.CharField(max_length=150, blank=True, default="")
     weekly_schedule = JSONField(default=dict, blank=True, null=True)  # e.g. {"monday": {"start": "05:00", "lunch_out": "12:00", "lunch_in": "12:30", "end": "14:00"}, ...}
     supervisor = models.ForeignKey(
         'self', null=True, blank=True, on_delete=models.SET_NULL, related_name="supervisees"
@@ -79,6 +81,19 @@ class CustomUser(AbstractUser):
         if not self.service_date:
             return 0
         return (date.today() - self.service_date).days // 365
+
+    def payroll_last_name_for_display(self):
+        return self.payroll_lastname or self.last_name or self.username
+
+    def payroll_first_name_for_display(self):
+        return self.payroll_firstname or self.first_name or ""
+
+    def payroll_display_name(self):
+        last_name = self.payroll_last_name_for_display()
+        first_name = self.payroll_first_name_for_display()
+        if first_name:
+            return f"{last_name}, {first_name}"
+        return last_name
 
     def grace_occurrences_remaining(self):
         if not self.service_date:
@@ -471,6 +486,8 @@ class TimeOffRequest(models.Model):
         default=TimeOffRequestStatus.PENDING,
     )
     planned = models.BooleanField(default=False)
+    partial_day = models.BooleanField(default=False)
+    partial_hours = models.FloatField(null=True, blank=True)
     approver = models.ForeignKey(
         CustomUser,
         null=True,
@@ -510,6 +527,8 @@ class TimeOffRequest(models.Model):
         Compute total scheduled hours for this request window,
         based on the user's WorkSchedule.
         """
+        if self.partial_day:
+            return max(float(self.partial_hours or 0), 0.0)
         total = 0.0
         for _date, schedule in self._iter_scheduled_days():
             start_dt = datetime.combine(_date, schedule.start_time)
@@ -546,11 +565,17 @@ class TimeOffRequest(models.Model):
         )
 
         for _date, schedule in self._iter_scheduled_days():
-            start_dt = datetime.combine(_date, schedule.start_time)
-            end_dt = datetime.combine(_date, schedule.end_time)
-            lunch_out_dt = datetime.combine(_date, schedule.lunch_out)
-            lunch_in_dt = datetime.combine(_date, schedule.lunch_in)
-            daily_hours = (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
+            if self.partial_day:
+                if _date != self.start_date:
+                    continue
+                daily_hours = max(float(self.partial_hours or 0), 0.0)
+            else:
+                start_dt = datetime.combine(_date, schedule.start_time)
+                end_dt = datetime.combine(_date, schedule.end_time)
+                lunch_out_dt = datetime.combine(_date, schedule.lunch_out)
+                lunch_in_dt = datetime.combine(_date, schedule.lunch_in)
+                daily_hours = (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
+
             if daily_hours <= 0:
                 continue
 
