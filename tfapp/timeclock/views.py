@@ -8,6 +8,8 @@ from attendance.schedule_utils import clock_in_requires_approver
 from django.utils import timezone
 from django.utils.timezone import localtime
 from django.contrib.auth.decorators import login_required
+from django.views.decorators.http import require_POST
+from django.http import JsonResponse
 
 
 def _clock_in_approver_queryset():
@@ -36,6 +38,32 @@ def _is_valid_clock_in_approver(u: CustomUser) -> bool:
         RoleChoices.MANAGER,
         RoleChoices.SUPERVISOR,
         RoleChoices.GROUP_LEAD,
+    )
+
+
+@require_POST
+def check_clock_in(request):
+    """
+    Returns whether clock-in requires a manager override (unscheduled or >15 min before start).
+    Used by the timeclock UI before submitting the clock-in punch.
+    """
+    login = (request.POST.get("login") or "").strip()
+    pin = (request.POST.get("pin") or "").strip()
+    if not login or not pin:
+        return JsonResponse({"error": "missing_credentials"}, status=400)
+    try:
+        user = CustomUser.objects.get(timeclock_login=login, timeclock_pin=pin)
+    except CustomUser.DoesNotExist:
+        return JsonResponse({"error": "invalid_credentials"}, status=401)
+
+    now = timezone.now()
+    today = now.date()
+    requires_override, reason = clock_in_requires_approver(user, now, today)
+    return JsonResponse(
+        {
+            "requires_override": requires_override,
+            "reason": reason,
+        }
     )
 
 
@@ -87,7 +115,7 @@ def timeclock_home(request):
                         if not approver_id:
                             messages.error(
                                 request,
-                                "You are not scheduled today or are more than 10 minutes before your "
+                                "You are not scheduled today or are more than 15 minutes before your "
                                 "scheduled start. Select an approving executive, manager, supervisor, or "
                                 "group lead, then try Clock In again.",
                             )

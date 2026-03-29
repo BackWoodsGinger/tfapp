@@ -1,6 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
+  /* Global styles.css sets body { color: #fff !important }; modal panel is light, so text was white-on-white. */
+  #clockInOverrideModal .modal-content,
+  #clockInOverrideModal .modal-content .modal-title,
+  #clockInOverrideModal .modal-content .modal-body,
+  #clockInOverrideModal .modal-content .modal-body p {
+    color: #212529 !important;
+  }
+  #clockInOverrideModal .modal-content .form-label {
+    color: #212529 !important;
+  }
+</style>
+<style>
   html, body {
     height: 100%;
     margin: 0;
@@ -44,7 +56,7 @@
           </div>
           {% endif %}
 
-          <form method="post" class="w-100" style="max-width: 800px;">
+          <form method="post" class="w-100" style="max-width: 800px;" id="timeclock-form">
             {% csrf_token %}
             <div class="row justify-content-center mb-4">
               <div class="col-md-3 col-6">
@@ -84,22 +96,43 @@
             </div>
 
             <div class="timeclock-actions mt-5">
-              <button name="action" value="clock_in" class="btn btn-success btn-xl">Clock In</button>
-              <button name="action" value="lunch_out" class="btn btn-warning btn-xl">Lunch Out</button>
-              <button name="action" value="lunch_in" class="btn btn-info btn-xl">Lunch In</button>
-              <button name="action" value="clock_out" class="btn btn-danger btn-xl">Clock Out</button>
+              <button type="button" id="btn-clock-in" class="btn btn-success btn-xl">Clock In</button>
+              <button type="submit" name="action" value="lunch_out" class="btn btn-warning btn-xl">Lunch Out</button>
+              <button type="submit" name="action" value="lunch_in" class="btn btn-info btn-xl">Lunch In</button>
+              <button type="submit" name="action" value="clock_out" class="btn btn-danger btn-xl">Clock Out</button>
             </div>
 
-            <div class="mt-4 w-100" style="max-width: 800px;">
-              <label for="clock_in_approver" class="form-label small text-muted mb-1">
-                Approver (required only if you are not scheduled today or are clocking in more than 10 minutes before shift start)
-              </label>
-              <select name="clock_in_approver" id="clock_in_approver" class="form-select form-select-lg">
-                <option value="">— Select executive, manager, supervisor, or group lead —</option>
-                {% for a in clock_in_approvers %}
-                <option value="{{ a.pk }}">{{ a.payroll_display_name }}</option>
-                {% endfor %}
-              </select>
+            {# modal-content: force dark text on light panel — global body { color: white !important } otherwise makes message invisible on white modal #}
+            <div class="modal fade" id="clockInOverrideModal" tabindex="-1" aria-labelledby="clockInOverrideModalLabel" aria-hidden="true">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content bg-white text-dark">
+                  <div class="modal-header border-secondary">
+                    <h5 class="modal-title" id="clockInOverrideModalLabel">Clock-in authorization</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                  </div>
+                  <div class="modal-body">
+                    <div id="override-step-warning">
+                      <div id="override-msg-unscheduled" class="d-none mb-3">
+                        <p class="mb-0 text-body">You are not scheduled to work today. To clock in anyway, continue and choose the executive, manager, supervisor, or group lead who authorized this override.</p>
+                      </div>
+                      <div id="override-msg-early" class="d-none mb-3">
+                        <p class="mb-0 text-body">You are attempting to clock in more than 15 minutes prior to your scheduled shift start. Please wait until you are within 15 minutes of your start time, or continue and select the supervisor or manager who authorized clocking in early.</p>
+                      </div>
+                      <button type="button" class="btn btn-primary" id="override-continue-btn">Continue to select authorizer</button>
+                    </div>
+                    <div id="override-step-approver" class="d-none">
+                      <label for="clock_in_approver" class="form-label">Who authorized this clock-in?</label>
+                      <select name="clock_in_approver" id="clock_in_approver" class="form-select form-select-lg">
+                        <option value="">— Select executive, manager, supervisor, or group lead —</option>
+                        {% for a in clock_in_approvers %}
+                        <option value="{{ a.pk }}">{{ a.payroll_display_name }}</option>
+                        {% endfor %}
+                      </select>
+                      <button type="button" class="btn btn-success mt-3 w-100" id="override-record-btn">Record clock in</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </form>
 
@@ -127,7 +160,6 @@
   const loginInput = document.getElementById('login');
   const pinInput = document.getElementById('pin');
 
-  // Prevent typing on physical keyboard
   loginInput.addEventListener('keypress', e => e.preventDefault());
   pinInput.addEventListener('keypress', e => e.preventDefault());
 
@@ -155,5 +187,142 @@
     const field = document.getElementById(activeField);
     field.value = '';
   }
+</script>
+
+<script>
+/**
+ * Clock-in flow runs after DOMContentLoaded so bootstrap.bundle.min.js (loaded at end of
+ * base.html) has defined `bootstrap`. Login/PIN are read via getElementById here because
+ * other script blocks do not share const scope with this block.
+ */
+document.addEventListener('DOMContentLoaded', function () {
+  const form = document.getElementById('timeclock-form');
+  const btnClockIn = document.getElementById('btn-clock-in');
+  const modalEl = document.getElementById('clockInOverrideModal');
+  const checkUrl = "{% url 'timeclock:check_clock_in' %}";
+  const csrfInput = form ? form.querySelector('[name=csrfmiddlewaretoken]') : null;
+
+  function getCsrfToken() {
+    return csrfInput ? csrfInput.value : '';
+  }
+
+  function submitClockIn() {
+    const existing = form.querySelector('input[name="action"][data-js-clock-in="1"]');
+    if (existing) existing.remove();
+    const inp = document.createElement('input');
+    inp.type = 'hidden';
+    inp.name = 'action';
+    inp.value = 'clock_in';
+    inp.setAttribute('data-js-clock-in', '1');
+    form.appendChild(inp);
+    form.submit();
+  }
+
+  if (!btnClockIn || !form) return;
+
+  let modalInstance = null;
+  function getModal() {
+    if (!modalEl || typeof bootstrap === 'undefined') return null;
+    if (!modalInstance) modalInstance = new bootstrap.Modal(modalEl);
+    return modalInstance;
+  }
+
+  const msgUnscheduled = document.getElementById('override-msg-unscheduled');
+  const msgEarly = document.getElementById('override-msg-early');
+  const stepWarning = document.getElementById('override-step-warning');
+  const stepApprover = document.getElementById('override-step-approver');
+  const continueBtn = document.getElementById('override-continue-btn');
+  const recordBtn = document.getElementById('override-record-btn');
+  const approverSelect = document.getElementById('clock_in_approver');
+
+  function hideOverrideMessages() {
+    if (msgUnscheduled) msgUnscheduled.classList.add('d-none');
+    if (msgEarly) msgEarly.classList.add('d-none');
+  }
+
+  function showOverrideMessage(reason) {
+    hideOverrideMessages();
+    if (reason === 'unscheduled' && msgUnscheduled) {
+      msgUnscheduled.classList.remove('d-none');
+    } else if (msgEarly) {
+      msgEarly.classList.remove('d-none');
+    }
+  }
+
+  function resetOverrideModal() {
+    hideOverrideMessages();
+    if (stepWarning) stepWarning.classList.remove('d-none');
+    if (stepApprover) stepApprover.classList.add('d-none');
+    if (approverSelect) approverSelect.value = '';
+  }
+
+  if (modalEl) {
+    modalEl.addEventListener('hidden.bs.modal', resetOverrideModal);
+  }
+
+  if (continueBtn && stepWarning && stepApprover) {
+    continueBtn.addEventListener('click', function () {
+      stepWarning.classList.add('d-none');
+      stepApprover.classList.remove('d-none');
+    });
+  }
+
+  if (recordBtn && approverSelect) {
+    recordBtn.addEventListener('click', function () {
+      if (!approverSelect.value) {
+        alert('Select who authorized this clock-in.');
+        return;
+      }
+      const m = getModal();
+      if (m) m.hide();
+      submitClockIn();
+    });
+  }
+
+  btnClockIn.addEventListener('click', async function () {
+    const loginEl = document.getElementById('login');
+    const pinEl = document.getElementById('pin');
+    const login = loginEl ? loginEl.value.trim() : '';
+    const pin = pinEl ? pinEl.value.trim() : '';
+    if (login.length !== 4 || pin.length !== 4) {
+      alert('Enter your 4-digit login and PIN.');
+      return;
+    }
+
+    const fd = new FormData();
+    fd.append('login', login);
+    fd.append('pin', pin);
+    fd.append('csrfmiddlewaretoken', getCsrfToken());
+
+    try {
+      const r = await fetch(checkUrl, {
+        method: 'POST',
+        body: fd,
+        headers: { 'X-Requested-With': 'XMLHttpRequest', 'X-CSRFToken': getCsrfToken() },
+        credentials: 'same-origin',
+      });
+      if (r.status === 401) {
+        alert('Invalid login or PIN.');
+        return;
+      }
+      if (!r.ok) {
+        const err = await r.json().catch(function () { return {}; });
+        alert(err.error ? 'Unable to verify clock-in. Check your entries.' : 'Unable to verify clock-in. Try again.');
+        return;
+      }
+      const data = await r.json();
+      if (!data.requires_override) {
+        submitClockIn();
+        return;
+      }
+      resetOverrideModal();
+      showOverrideMessage(data.reason === 'unscheduled' ? 'unscheduled' : 'early');
+      const m = getModal();
+      if (m) m.show();
+    } catch (e) {
+      alert('Could not verify clock-in. Check your connection and try again.');
+    }
+  });
+});
 </script>
 {% endblock %}

@@ -28,7 +28,7 @@ class TimeEntry(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="authorized_clock_ins",
-        help_text="Manager/supervisor who approved clock-in when unscheduled or more than 10 minutes early.",
+        help_text="Manager/supervisor who approved clock-in when unscheduled or more than 15 minutes early.",
     )
 
     class Meta:

@@ -8,6 +8,33 @@
         <div class="card-body">
           <h3>Welcome, {% if user.first_name %}{{ user.first_name }}{% else %}{{ user.username }}{% endif %}</h3>
 
+          <h5 class="mt-4">Clock-in overrides</h5>
+          <p class="text-muted small mb-2">Punches in the last 90 days that required a manager, supervisor, executive, or group lead because the employee was not scheduled or clocked in more than 15 minutes before shift start.</p>
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered align-middle">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Employee</th>
+                  <th>Clock in</th>
+                  <th>Authorized by</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for entry in clock_in_overrides %}
+                <tr>
+                  <td>{{ entry.date|date:"m/d/Y" }}</td>
+                  <td>{{ entry.user.payroll_display_name }}</td>
+                  <td>{% if entry.clock_in %}{{ entry.clock_in|date:"m/d/Y g:i A" }}{% else %}—{% endif %}</td>
+                  <td>{{ entry.clock_in_authorized_by.payroll_display_name }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="text-muted">No clock-in overrides in the last 90 days for people you can view.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
           <h5 class="mt-4">Occurrences for Selected Day</h5>
           <form method="get" class="row g-2 mb-3 align-items-end">
             {% if user_list|length > 1 %}

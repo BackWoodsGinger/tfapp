@@ -247,6 +247,17 @@ def dashboard(request):
         for u in visible_users
     }
 
+    override_cutoff = today - timedelta(days=90)
+    clock_in_overrides = (
+        TimeEntry.objects.filter(
+            clock_in_authorized_by__isnull=False,
+            user__in=visible_users,
+            date__gte=override_cutoff,
+        )
+        .select_related("user", "clock_in_authorized_by")
+        .order_by("-date", "-clock_in")[:75]
+    )
+
     context = {
         "user_list": visible_users,
         "selected_user": selected_user,
@@ -271,6 +282,7 @@ def dashboard(request):
         "report_selected_user": report_selected_user,
         "user_service_dates_json": json.dumps(user_service_dates),
         "today_iso": report_today.isoformat(),
+        "clock_in_overrides": clock_in_overrides,
     }
     return render(request, "attendance/dashboard.html", context)
 

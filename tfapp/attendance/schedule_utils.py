@@ -163,14 +163,14 @@ def scheduled_hours_for_range(user, week_start: date, week_ending: date) -> floa
 
 def earliest_clock_in_allowed(user, d: date):
     """
-    Earliest moment the user may clock in without manager approval (10 min before scheduled start).
+    Earliest moment the user may clock in without manager approval (15 min before scheduled start).
     Returns None if not scheduled that day.
     """
     start = get_scheduled_start_for_day(user, d)
     if not start:
         return None
     scheduled_local = _combine_local(d, start)
-    return scheduled_local - timedelta(minutes=10)
+    return scheduled_local - timedelta(minutes=15)
 
 
 def clock_in_requires_approver(user, now, d: date) -> tuple[bool, str | None]:
