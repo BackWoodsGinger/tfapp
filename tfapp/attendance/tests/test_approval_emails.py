@@ -3,6 +3,7 @@ from datetime import date
 
 from django.core import mail
 from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from attendance import approval_emails
 from attendance.models import (
@@ -19,7 +20,6 @@ from timeclock.models import TimeEntry
 @override_settings(
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
     DEFAULT_FROM_EMAIL="app@example.com",
-    SITE_BASE_URL="https://app.example.com",
 )
 class ApprovalEmailRoutingTests(TestCase):
     def test_recipient_prefers_group_lead_when_email_set(self):
@@ -55,7 +55,6 @@ class ApprovalEmailRoutingTests(TestCase):
 @override_settings(
     EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
     DEFAULT_FROM_EMAIL="app@example.com",
-    SITE_BASE_URL="https://app.example.com",
 )
 class ApprovalEmailSendTests(TestCase):
     def setUp(self):
@@ -65,6 +64,16 @@ class ApprovalEmailSendTests(TestCase):
         self.emp = CustomUser.objects.create_user(
             username="emp", password="x", email="emp@example.com", group_lead=self.lead
         )
+
+    def _assert_review_instruction(self, msg):
+        self.assertIn("Time Management", msg.body)
+        self.assertIn("Approvals", msg.body)
+        self.assertTrue(getattr(msg, "alternatives", None))
+        html = msg.alternatives[0][0]
+        self.assertEqual(msg.alternatives[0][1], "text/html")
+        self.assertIn("Time Management", html)
+        self.assertIn("Approvals", html)
+        self.assertNotIn("href=", html.lower())
 
     def test_time_off_submitted_email(self):
         tor = TimeOffRequest.objects.create(
@@ -78,12 +87,7 @@ class ApprovalEmailSendTests(TestCase):
         msg = mail.outbox[0]
         self.assertEqual(msg.to, ["lead@example.com"])
         self.assertIn("Time off", msg.subject)
-        self.assertIn("https://app.example.com", msg.body)
-        self.assertTrue(getattr(msg, "alternatives", None))
-        html = msg.alternatives[0][0]
-        self.assertEqual(msg.alternatives[0][1], "text/html")
-        self.assertIn("https://app.example.com/attendance/timeoff/team/", html)
-        self.assertIn('href="https://app.example.com/attendance/timeoff/team/"', html)
+        self._assert_review_instruction(msg)
 
     def test_time_off_cancelled_email(self):
         tor = TimeOffRequest.objects.create(
@@ -95,6 +99,10 @@ class ApprovalEmailSendTests(TestCase):
         approval_emails.notify_time_off_cancelled(tor, was_approved=False)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("cancelled", mail.outbox[0].subject.lower())
+        msg = mail.outbox[0]
+        self.assertNotIn("Time Management", msg.body)
+        html = msg.alternatives[0][0]
+        self.assertNotIn("Time Management", html)
 
     def test_work_through_lunch_submitted(self):
         wtl = WorkThroughLunchRequest.objects.create(
@@ -104,11 +112,10 @@ class ApprovalEmailSendTests(TestCase):
         approval_emails.notify_work_through_lunch_submitted(wtl)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("lunch", mail.outbox[0].subject.lower())
+        self._assert_review_instruction(mail.outbox[0])
 
     def test_adjust_punch_submitted(self):
         entry = TimeEntry.objects.create(user=self.emp, date=date(2026, 6, 3))
-        from django.utils import timezone
-
         t = timezone.now()
         apr = AdjustPunchRequest.objects.create(
             user=self.emp,
@@ -120,3 +127,4 @@ class ApprovalEmailSendTests(TestCase):
         approval_emails.notify_adjust_punch_submitted(apr)
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn("edit", mail.outbox[0].subject.lower())
+        self._assert_review_instruction(mail.outbox[0])

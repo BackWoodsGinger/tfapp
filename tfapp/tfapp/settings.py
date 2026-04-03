@@ -215,11 +215,9 @@ LOGIN_REDIRECT_URL = "/"
 #   Use the same address for DEFAULT_FROM_EMAIL as EMAIL_HOST_USER unless you have
 #   "Send mail as" configured in Gmail.
 #
-# Optional: set DJANGO_SITE_BASE_URL (or SITE_BASE_URL) to your public origin, e.g.
-#   https://tfapp.example.com
-# Approval notification emails are sent as HTML with a real link to the team requests page.
-# If unset, the app may infer https://<ALLOWED_HOSTS> when there is exactly one non-local host
-# and SECURE_SSL_REDIRECT is True (https); otherwise http. For localhost, set the URL explicitly.
+# Optional: set DJANGO_SITE_BASE_URL (or SITE_BASE_URL) for management commands that need
+# an absolute site URL (e.g. some email utilities). Approval notifications use in-app navigation
+# text instead of hyperlinks.
 #
 if os.environ.get("EMAIL_HOST"):
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
@@ -231,9 +229,9 @@ else:
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "webmaster@localhost")
 SERVER_EMAIL = os.environ.get("SERVER_EMAIL", DEFAULT_FROM_EMAIL)
 
-# Absolute site URL for links in emails (no trailing slash), e.g. https://tfapp.example.com
+# Optional absolute site URL (no trailing slash), e.g. for management commands / legacy tools
 SITE_BASE_URL = os.environ.get("DJANGO_SITE_BASE_URL", os.environ.get("SITE_BASE_URL", "")).strip().rstrip("/")
-BASE_URL = SITE_BASE_URL  # alias for management commands / legacy
+BASE_URL = SITE_BASE_URL
 
 if EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
     EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
