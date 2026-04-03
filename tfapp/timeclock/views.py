@@ -4,6 +4,8 @@ from django.db import transaction, IntegrityError
 from .models import TimeEntry
 from .forms import TimeEntryForm
 from attendance.models import CustomUser, RoleChoices
+from attendance.payroll_utils import week_ending_for_date, is_payroll_week_finalized
+from .tardy_sync import sync_tardy_occurrences_for_time_entry
 from attendance.schedule_utils import clock_in_requires_approver
 from django.utils import timezone
 from django.utils.timezone import localtime
@@ -84,6 +86,13 @@ def timeclock_home(request):
         now = timezone.now()
         today = now.date()
         timestamp_str = localtime(now).strftime("%I:%M %p").lstrip("0")
+
+        if is_payroll_week_finalized(week_ending_for_date(today)):
+            messages.error(
+                request,
+                "This payroll week is finalized. Punches cannot be recorded until payroll is unfinalized for this week.",
+            )
+            return redirect("timeclock:timeclock_home")
 
         try:
             with transaction.atomic():
@@ -172,10 +181,35 @@ def timeclock_home(request):
 def edit_entry(request, slug):
     entry = get_object_or_404(TimeEntry, slug=slug)
 
+    if request.user.role not in [
+        RoleChoices.GROUP_LEAD,
+        RoleChoices.SUPERVISOR,
+        RoleChoices.MANAGER,
+        RoleChoices.EXECUTIVE,
+    ]:
+        return redirect("attendance:dashboard")
+
+    week_ending = week_ending_for_date(entry.date)
+    _payroll_ok = request.user.role == RoleChoices.EXECUTIVE
+
+    if is_payroll_week_finalized(week_ending):
+        if request.method == "POST":
+            messages.error(
+                request,
+                "This time entry is in a finalized payroll week. Unfinalize payroll for that week to make corrections.",
+            )
+            return redirect("attendance:payroll" if _payroll_ok else "attendance:dashboard")
+        messages.warning(
+            request,
+            "This week is finalized. Unfinalize payroll to edit.",
+        )
+
     if request.method == "POST":
         form = TimeEntryForm(request.POST, instance=entry)
         if form.is_valid():
-            form.save()
+            entry = form.save()
+            if not is_payroll_week_finalized(week_ending):
+                sync_tardy_occurrences_for_time_entry(entry)
             messages.success(request, "Time entry updated successfully.")
             if request.user.role == RoleChoices.EXECUTIVE:
                 return redirect("attendance:payroll")
@@ -183,4 +217,12 @@ def edit_entry(request, slug):
     else:
         form = TimeEntryForm(instance=entry)
 
-    return render(request, "timeclock/edit_entry.html", {"form": form})
+    return render(
+        request,
+        "timeclock/edit_entry.html",
+        {
+            "form": form,
+            "entry": entry,
+            "payroll_finalized": is_payroll_week_finalized(week_ending),
+        },
+    )

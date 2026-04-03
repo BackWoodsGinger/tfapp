@@ -34,6 +34,10 @@ from .models import (
 )
 from . import approval_emails
 from .forms import ReportFilterForm, TimeOffRequestForm, WorkThroughLunchRequestForm, AdjustPunchRequestForm
+from .payroll_utils import (
+    week_ending_for_date as _week_ending_for_date,
+    is_payroll_week_finalized as _is_payroll_week_finalized,
+)
 from .schedule_utils import (
     earliest_clock_in_allowed,
     get_scheduled_shift_end_datetime,
@@ -1024,20 +1028,6 @@ def close_payroll(request):
     return response
 
 
-def _week_ending_for_date(d):
-    """Saturday of the payroll week containing date d."""
-    days_until_saturday = (5 - d.weekday()) % 7
-    return d + timedelta(days=days_until_saturday)
-
-
-def _is_payroll_week_finalized(week_ending_date):
-    """Return True if the payroll week ending on this Saturday is finalized."""
-    return PayrollPeriod.objects.filter(
-        week_ending=week_ending_date,
-        is_finalized=True,
-    ).exists()
-
-
 def _unfinalize_payroll_revert(period):
     """
     Revert all effects of finalizing this payroll period: PTO accrued, occurrence PTO applied,
@@ -1128,7 +1118,11 @@ def edit_entry(request, slug):
     if request.method == "POST":
         form = TimeEntryForm(request.POST, instance=entry)
         if form.is_valid():
-            form.save()
+            entry = form.save()
+            if not _is_payroll_week_finalized(week_ending):
+                from timeclock.tardy_sync import sync_tardy_occurrences_for_time_entry
+
+                sync_tardy_occurrences_for_time_entry(entry)
             return redirect("attendance:payroll" if _payroll_ok else "attendance:dashboard")
     else:
         form = TimeEntryForm(instance=entry)

@@ -401,6 +401,11 @@ class Occurrence(models.Model):
         """
         from django.db import transaction
 
+        # ``Occurrence.save()`` already calls ``apply_pto`` once; callers that also call
+        # ``apply_pto`` after ``create``/``get_or_create`` must not deduct twice.
+        if self.pto_applied:
+            return float(self.pto_hours_applied or 0.0)
+
         if self.date > date.today():
             return 0.0
 
@@ -653,7 +658,7 @@ class TimeOffRequest(models.Model):
                 daily_hours = scheduled_duration_hours_for_day(self.user, current)
 
             if daily_hours > 0:
-                occ = Occurrence.objects.create(
+                Occurrence.objects.create(
                     user=self.user,
                     occurrence_type=occurrence_type,
                     subtype=getattr(self, "subtype", OccurrenceSubtype.TIME_OFF),
@@ -661,7 +666,6 @@ class TimeOffRequest(models.Model):
                     duration_hours=daily_hours,
                     time_off_request=self,
                 )
-                occ.apply_pto()
             current += timedelta(days=1)
 
     def deny(self, approver_user):

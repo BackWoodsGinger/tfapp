@@ -234,7 +234,7 @@ class TimeEntry(models.Model):
             scheduled_local = self._scheduled_local_datetime(start_time)
             loss = (adjusted_start - scheduled_local).total_seconds() / 3600
             if loss > 0:
-                occ, created = Occurrence.objects.get_or_create(
+                Occurrence.objects.get_or_create(
                     user=self.user,
                     date=self.date,
                     subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
@@ -243,8 +243,6 @@ class TimeEntry(models.Model):
                         "duration_hours": loss,
                     },
                 )
-                if created:
-                    occ.apply_pto()
 
     def check_lunch_tardy(self):
         """
@@ -272,7 +270,7 @@ class TimeEntry(models.Model):
             loss = (adjusted_in - scheduled_lunch_local).total_seconds() / 3600
             if loss > 0:
                 # Use get_or_create to avoid duplicate if rule runs twice (unique constraint)
-                occ, created = Occurrence.objects.get_or_create(
+                Occurrence.objects.get_or_create(
                     user=self.user,
                     date=self.date,
                     subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
@@ -281,8 +279,6 @@ class TimeEntry(models.Model):
                         "duration_hours": loss,
                     },
                 )
-                if created:
-                    occ.apply_pto()
 
     def save(self, *args, **kwargs):
         if not self.slug:
