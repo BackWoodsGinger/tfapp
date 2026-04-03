@@ -272,7 +272,13 @@ def _parse_overlay_stock_quotes() -> list[tuple[str, str]]:
     Env OVERLAY_STOCK_SYMBOLS (optional):
       unset — built-in Dow, Nasdaq-100 proxy, S&P 500 (^IXIC/^GSPC are N/D on Stooq).
       "" — disable stock pills.
-      "^DJI:Dow,QQQ:Invesco QQQ" — optional "SYM:Label" per segment; bare SYM uses SYM as label.
+
+    Add or replace quotes (comma-separated). Use SYM:Label for a friendly pill title; bare SYM uses
+    the symbol as the label. Examples:
+      "^DJI:Dow,^SPX:S&P,QQQ,MSFT,AAPL"
+      "^RUT:Small cap,GLD:Gold,TLT:Bonds"
+
+    Indices: leading ^, Stooq style ^DJI, ^SPX, ^NDX. US equities/ETFs: e.g. QQQ, MSFT (queried as .us).
     """
     raw = os.environ.get("OVERLAY_STOCK_SYMBOLS")
     if raw is None:
