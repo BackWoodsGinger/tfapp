@@ -53,13 +53,35 @@ header #main-header {
 .card-body {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  background-color: #3c3a3a; /* Dark background for cards */
+  justify-content: flex-start;
+  /* stretch + min-width:0 so wide tables stay inside the card and scroll (mobile) */
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background-color: #2c2b2b; /* Dark background for cards */
   color: #ffffff; /* White text for contrast */
   border-radius: 8px;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.6); /* Subtle shadow for depth */
   padding: 1rem;
+}
+
+/* Flex/grid columns: allow shrinking so nested tables don’t force page width */
+.container .row > [class*="col-"] {
+  min-width: 0;
+}
+
+.card {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Horizontal scroll for wide tables; smooth touch scrolling on iOS */
+.table-responsive {
+  max-width: 100%;
+  min-width: 0;
+  -webkit-overflow-scrolling: touch;
 }
 .card-body:hover {
   background-color: #272727; /* Slightly lighter on hover */
@@ -140,4 +162,23 @@ footer {
   text-align: center;
   padding: 1rem 0;
   border-top: 1px solid #333333;
+}
+
+/* Date picker: prevent truncation in forms/dashboard */
+input[type="date"].form-control {
+  min-width: 11rem;
+  max-width: 100%;
+}
+
+/* Narrow phones: slightly smaller root size so layouts and tables read better */
+@media (max-width: 575.98px) {
+  html {
+    font-size: 0.9375rem; /* ~15px from 16px baseline */
+  }
+}
+
+@media (max-width: 399.98px) {
+  html {
+    font-size: 0.875rem; /* ~14px on very small screens */
+  }
 }
