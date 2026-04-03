@@ -102,7 +102,7 @@
                         <option value="{{ value }}" {% if end_of_week|date:"Y-m-d" == value %}selected{% endif %}>{{ display }}</option>
                       {% endfor %}
                     </select>
-                    <p class="small text-muted mt-2 mb-0">Finalizes the week, applies PTO accrual (0–2 yr), tardy occurrences, variance PTO, then exports CSV.</p>
+                    <p class="small text-muted mt-2 mb-0">Finalizes the week, applies PTO accrual (0–2 yr), tardy absences, variance PTO, then exports CSV.</p>
                   </div>
                   <div class="modal-footer">
                     <button type="submit" class="btn btn-success">Finalize &amp; Export CSV</button>

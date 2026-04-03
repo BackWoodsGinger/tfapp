@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: sans-serif; font-size: 12px; padding: 70px 8px 8px 8px; margin: 0; }
+        .logo-header { position: fixed; top: 0; left: 0; padding: 8px; z-index: 1; }
+        .logo-header img { height: 72px; width: auto; }
+        .report-header { margin: 0; padding: 0; line-height: 1.3; }
+        .report-header h3 { margin: 0 0 2px 0; font-size: 14px; text-align: left; }
+        .report-header p { margin: 0; padding: 0; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #333; padding: 4px 6px; text-align: left; }
+        td.num { text-align: right; }
+        tfoot td { font-weight: bold; }
+    </style>
+</head>
+<body>
+    {% if logo_uri %}
+    <div class="logo-header">
+        <img src="{{ logo_uri }}" alt="Logo" />
+    </div>
+    {% endif %}
+    <div class="report-header">
+        <h3>Perfect Attendance</h3>
+        <p><strong>Period:</strong> {{ period_description }}</p>
+        <p><strong>Generated:</strong> {{ generated_at }}</p>
+        <p class="small">Reported hours are from completed time entries (payroll-reported work time). PTO and absence hours are excluded.</p>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Employee</th>
+                <th>Total reported hours</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                <td>{{ row.user.payroll_display_name }}</td>
+                <td class="num">{{ row.total_hours|floatformat:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="2">No employees qualify for this period (no unplanned absences and at least one completed time entry).</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        {% if rows %}
+        <tfoot>
+            <tr>
+                <td>Total</td>
+                <td class="num">{{ pa_hours_total|floatformat:2 }}</td>
+            </tr>
+        </tfoot>
+        {% endif %}
+    </table>
+</body>
+</html>

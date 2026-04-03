@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+
+{% block title %}- Work Through Lunch{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-12 col-md-10 col-sm-12">
+
+            <h1 class="mb-4">Work through lunch</h1>
+
+            <p class="text-muted mb-4">
+                Request permission to skip your scheduled lunch break for a specific day. If approved by your
+                group lead, supervisor, or manager, no lunch time will be deducted from your hours
+                for that day and scheduled lunch punches will not be applied automatically.
+            </p>
+
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="mb-3">Your requests</h5>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <thead>
+                                <tr>
+                                    <th>Submitted</th>
+                                    <th>Work date</th>
+                                    <th>Status</th>
+                                    <th>Approver</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for r in my_requests %}
+                                    <tr>
+                                        <td>{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                                        <td>{{ r.work_date }}</td>
+                                        <td class="text-capitalize">{{ r.status }}</td>
+                                        <td>
+                                            {% if r.approver %}
+                                                {{ r.approver.get_full_name|default:r.approver.username }}
+                                            {% else %}
+                                                —
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            {% if r.status == 'pending' or r.status == 'approved' %}
+                                                <form method="post" action="{% url 'attendance:cancel_work_through_lunch' r.slug %}" class="d-inline" onsubmit="return confirm('Cancel this work-through-lunch request?');">
+                                                    {% csrf_token %}
+                                                    <input type="hidden" name="next" value="{% url 'attendance:request_work_through_lunch' %}">
+                                                    <button type="submit" class="btn btn-outline-danger btn-sm">Cancel</button>
+                                                </form>
+                                            {% else %}
+                                                —
+                                            {% endif %}
+                                        </td>
+                                    </tr>
+                                {% empty %}
+                                    <tr>
+                                        <td colspan="5" class="text-muted text-center py-3">No requests yet.</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="mb-3">New request</h5>
+                    <form method="post" action="">
+                        {% csrf_token %}
+                        <div class="row justify-content-center">
+                            <div class="col-12 col-md-12 col-lg-11">
+                                {{ form|crispy }}
+                                <button type="submit" class="btn btn-primary">Submit request</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}

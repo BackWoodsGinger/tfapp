@@ -5,7 +5,12 @@ from django.utils import timezone
 from datetime import timedelta, datetime
 
 from attendance.slug_utils import ensure_unique_slug
-from attendance.schedule_utils import get_scheduled_lunch_in_for_day, get_scheduled_start_for_day
+from attendance.schedule_utils import (
+    get_scheduled_lunch_in_for_day,
+    get_scheduled_start_for_day,
+    scheduled_lunch_datetimes_for_entry,
+    work_through_lunch_approved_for_day,
+)
 
 
 class TimeEntry(models.Model):
@@ -43,23 +48,48 @@ class TimeEntry(models.Model):
     def is_incomplete(self):
         """Return True if the entry has only some but not all timestamps filled in."""
         fields = [self.clock_in, self.lunch_out, self.lunch_in, self.clock_out]
-        return any(fields) and not all(fields)
+        if not any(fields):
+            return False
+        if all(fields):
+            return False
+        if (
+            self.clock_in
+            and self.clock_out
+            and self.lunch_out is None
+            and self.lunch_in is None
+            and work_through_lunch_approved_for_day(self.user, self.date)
+        ):
+            return False
+        return True
 
     def total_worked_time(self):
         """Return worked hours; uses Decimal for consistent rounding and to avoid float drift."""
         return self.actual_worked_hours()
 
-    def _worked_seconds(self):
-        """Worked seconds after lunch deduction with 30-minute minimum lunch."""
+    def _lunch_deduction_timedelta(self):
+        """
+        Unpaid lunch duration subtracted from clock_in–clock_out span.
+        Uses actual lunch punches when both present (30-minute minimum).
+        If both punches are missing and an approved work-through-lunch request exists for this date,
+        deducts nothing. Otherwise uses a flat 30 minutes when punches are incomplete.
+        """
         if not (self.clock_in and self.clock_out):
-            return 0.0
-        worked = self.clock_out - self.clock_in
+            return timedelta(0)
         if self.lunch_out and self.lunch_in:
             lunch = self.lunch_in - self.lunch_out
             if lunch < timedelta(minutes=30):
                 lunch = timedelta(minutes=30)
-        else:
-            lunch = timedelta(minutes=30)
+            return lunch
+        if work_through_lunch_approved_for_day(self.user, self.date):
+            return timedelta(0)
+        return timedelta(minutes=30)
+
+    def _worked_seconds(self):
+        """Worked seconds after lunch deduction."""
+        if not (self.clock_in and self.clock_out):
+            return 0.0
+        worked = self.clock_out - self.clock_in
+        lunch = self._lunch_deduction_timedelta()
         return max((worked - lunch).total_seconds(), 0)
 
     def actual_worked_hours(self):
@@ -98,12 +128,7 @@ class TimeEntry(models.Model):
             return 0.0
 
         worked = adjusted_out - adjusted_in
-        if self.lunch_out and self.lunch_in:
-            lunch = self.lunch_in - self.lunch_out
-            if lunch < timedelta(minutes=30):
-                lunch = timedelta(minutes=30)
-        else:
-            lunch = timedelta(minutes=30)
+        lunch = self._lunch_deduction_timedelta()
 
         seconds = max((worked - lunch).total_seconds(), 0)
         return float(Decimal(str(seconds / 3600)).quantize(Decimal("0.01")))
@@ -245,6 +270,16 @@ class TimeEntry(models.Model):
     def save(self, *args, **kwargs):
         if not self.slug:
             ensure_unique_slug(self, "slug", max_length=48)
+        if (
+            self.clock_in
+            and self.clock_out
+            and self.lunch_out is None
+            and self.lunch_in is None
+            and not work_through_lunch_approved_for_day(self.user, self.date)
+        ):
+            scheduled = scheduled_lunch_datetimes_for_entry(self)
+            if scheduled:
+                self.lunch_out, self.lunch_in = scheduled
         if not self.is_incomplete() and self.missing_punch_flagged:
             self.missing_punch_flagged = False
             self.missing_punch_flagged_at = None

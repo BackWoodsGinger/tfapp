@@ -6,7 +6,9 @@ from django.utils import timezone as django_tz
 from django.utils.timezone import now, localdate
 from timeclock.models import TimeEntry
 from timeclock.forms import TimeEntryForm
+from django.db import transaction
 from django.db.models import Sum, Q
+from calendar import month_name, monthrange
 from datetime import time, timedelta, date, datetime, timezone
 from django.http import HttpResponse
 from django.http import JsonResponse
@@ -22,15 +24,20 @@ from .models import (
     RoleChoices,
     TimeOffRequest,
     TimeOffRequestStatus,
+    WorkThroughLunchRequest,
+    AdjustPunchRequest,
+    AdjustPunchField,
+    revert_tardy_occurrences_for_adjust_punch,
     apply_past_due_occurrences,
     ensure_holiday_occurrences_for_range,
     OccurrenceSubtype,
 )
-from .forms import ReportFilterForm, TimeOffRequestForm
+from .forms import ReportFilterForm, TimeOffRequestForm, WorkThroughLunchRequestForm, AdjustPunchRequestForm
 from .schedule_utils import (
     get_scheduled_start_for_day,
     scheduled_duration_hours_for_day,
     scheduled_hours_for_range,
+    scheduled_lunch_datetimes_for_entry,
 )
 from django.views.decorators.http import require_POST
 from django.conf import settings
@@ -87,12 +94,102 @@ def can_approve_time_off(approver: CustomUser, target: CustomUser) -> bool:
     return False
 
 
+def get_pending_approval_counts_for_user(approver: CustomUser):
+    """
+    Count PENDING requests this user is allowed to approve (time off, work-through-lunch, adjust punch).
+    Same rules as team_time_off_requests.
+    """
+    if approver.role not in [
+        RoleChoices.GROUP_LEAD,
+        RoleChoices.SUPERVISOR,
+        RoleChoices.MANAGER,
+        RoleChoices.EXECUTIVE,
+    ]:
+        return {"time_off": 0, "work_through_lunch": 0, "adjust_punch": 0, "total": 0}
+
+    pending_to = TimeOffRequest.objects.filter(status=TimeOffRequestStatus.PENDING)
+    n_to = sum(1 for r in pending_to if can_approve_time_off(approver, r.user))
+
+    pending_wtl = WorkThroughLunchRequest.objects.filter(status=TimeOffRequestStatus.PENDING)
+    n_wtl = sum(1 for r in pending_wtl if can_approve_time_off(approver, r.user))
+
+    pending_adj = AdjustPunchRequest.objects.filter(status=TimeOffRequestStatus.PENDING)
+    n_adj = sum(1 for r in pending_adj if can_approve_time_off(approver, r.user))
+
+    return {
+        "time_off": n_to,
+        "work_through_lunch": n_wtl,
+        "adjust_punch": n_adj,
+        "total": n_to + n_wtl + n_adj,
+    }
+
+
 def _payroll_sort_key(user: CustomUser):
     return (
         (user.payroll_lastname or user.last_name or user.username or "").strip().lower(),
         (user.payroll_firstname or user.first_name or "").strip().lower(),
         (user.username or "").strip().lower(),
     )
+
+
+def _last_day_of_month(year: int, month: int) -> date:
+    return date(year, month, monthrange(year, month)[1])
+
+
+def _scheduled_but_not_clocked_in(visible_users, on_date: date):
+    """Users with a schedule on ``on_date`` who have not clocked in (no entry or no clock_in)."""
+    out = []
+    for u in visible_users:
+        if get_scheduled_start_for_day(u, on_date) is None:
+            continue
+        entry = TimeEntry.objects.filter(user=u, date=on_date).first()
+        if entry is None or entry.clock_in is None:
+            out.append(u)
+    out.sort(key=_payroll_sort_key)
+    return out
+
+
+def _users_with_no_unplanned_absences(visible_users, first: date, period_end: date):
+    """All visible users with zero UNPLANNED absences in [first, period_end]."""
+    names = []
+    for u in visible_users:
+        has_unplanned = Occurrence.objects.filter(
+            user=u,
+            occurrence_type=OccurrenceType.UNPLANNED,
+            date__gte=first,
+            date__lte=period_end,
+        ).exists()
+        if not has_unplanned:
+            names.append(u)
+    names.sort(key=_payroll_sort_key)
+    return names
+
+
+def _perfect_attendance_with_hours(visible_users, first: date, period_end: date):
+    """
+    Non-exempt users with no unplanned absences in range who have at least one completed time entry;
+    total is sum of reported_worked_hours (payroll-reported time entry hours, not PTO absence hours).
+    """
+    rows = []
+    for u in visible_users.filter(is_exempt=False):
+        has_unplanned = Occurrence.objects.filter(
+            user=u,
+            occurrence_type=OccurrenceType.UNPLANNED,
+            date__gte=first,
+            date__lte=period_end,
+        ).exists()
+        if has_unplanned:
+            continue
+        entries = TimeEntry.objects.filter(user=u, date__gte=first, date__lte=period_end)
+        completed = entries.filter(clock_in__isnull=False, clock_out__isnull=False)
+        if not completed.exists():
+            continue
+        total_hours = 0.0
+        for e in completed:
+            total_hours += e.reported_worked_hours()
+        rows.append({"user": u, "total_hours": round(total_hours, 2)})
+    rows.sort(key=lambda r: _payroll_sort_key(r["user"]))
+    return rows
 
 @login_required
 def dashboard(request):
@@ -258,6 +355,55 @@ def dashboard(request):
         .order_by("-date", "-clock_in")[:75]
     )
 
+    # Perfect Attendance month (default: previous month on the 1st; else current month)
+    pa_year_str = request.GET.get("pa_year")
+    pa_month_str = request.GET.get("pa_month")
+    pa_year = None
+    pa_month = None
+    if pa_year_str and pa_month_str:
+        try:
+            py, pm = int(pa_year_str), int(pa_month_str)
+            if 1 <= pm <= 12 and 2000 <= py <= 2100:
+                pa_year, pa_month = py, pm
+        except (ValueError, TypeError):
+            pass
+    if pa_year is None:
+        if today.day == 1:
+            if today.month == 1:
+                pa_year, pa_month = today.year - 1, 12
+            else:
+                pa_year, pa_month = today.year, today.month - 1
+        else:
+            pa_year, pa_month = today.year, today.month
+
+    pa_first = date(pa_year, pa_month, 1)
+    pa_last = _last_day_of_month(pa_year, pa_month)
+    pa_month_choices = [(i, month_name[i]) for i in range(1, 13)]
+    pa_year_choices = list(range(2020, today.year + 2))
+    if pa_first > today:
+        pa_period_end = None
+        pa_period_description = ""
+        no_unplanned_users = []
+        perfect_attendance_rows = []
+        pa_hours_total = 0.0
+    else:
+        pa_period_end = min(pa_last, today)
+        if pa_period_end < pa_last:
+            pa_period_description = (
+                f"{pa_first:%B %d} – {pa_period_end:%B %d, %Y} (month to date)"
+            )
+        else:
+            pa_period_description = f"{pa_first:%B %Y}"
+        no_unplanned_users = _users_with_no_unplanned_absences(
+            visible_users, pa_first, pa_period_end
+        )
+        perfect_attendance_rows = _perfect_attendance_with_hours(
+            visible_users, pa_first, pa_period_end
+        )
+        pa_hours_total = sum(r["total_hours"] for r in perfect_attendance_rows)
+
+    scheduled_not_clocked = _scheduled_but_not_clocked_in(visible_users, today)
+
     context = {
         "user_list": visible_users,
         "selected_user": selected_user,
@@ -283,6 +429,18 @@ def dashboard(request):
         "user_service_dates_json": json.dumps(user_service_dates),
         "today_iso": report_today.isoformat(),
         "clock_in_overrides": clock_in_overrides,
+        "scheduled_not_clocked": scheduled_not_clocked,
+        "pa_year": pa_year,
+        "pa_month": pa_month,
+        "pa_first": pa_first,
+        "pa_last": pa_last,
+        "pa_month_choices": pa_month_choices,
+        "pa_year_choices": pa_year_choices,
+        "pa_period_description": pa_period_description,
+        "pa_period_end": pa_period_end,
+        "no_unplanned_users": no_unplanned_users,
+        "perfect_attendance_rows": perfect_attendance_rows,
+        "pa_hours_total": pa_hours_total,
     }
     return render(request, "attendance/dashboard.html", context)
 
@@ -346,6 +504,10 @@ def user_can_view_reports(user):
         RoleChoices.EXECUTIVE,
     ]
 
+
+def user_can_view_payroll(user):
+    return user.role == RoleChoices.EXECUTIVE
+
 @login_required
 def reports_redirect(request):
     return redirect("attendance:payroll")
@@ -353,21 +515,12 @@ def reports_redirect(request):
 
 @login_required
 def payroll_view(request):
-    if not user_can_view_reports(request.user):
+    if not user_can_view_payroll(request.user):
         return redirect("attendance:dashboard")
 
     user = request.user
     form = ReportFilterForm(request.GET or None)
-    if user.role == RoleChoices.EXECUTIVE:
-        visible_users = CustomUser.objects.all()
-    elif user.role == RoleChoices.MANAGER:
-        visible_users = CustomUser.objects.filter(department=user.department)
-    elif user.role == RoleChoices.SUPERVISOR:
-        visible_users = CustomUser.objects.filter(Q(supervisor=user) | Q(id=user.id))
-    elif user.role == RoleChoices.GROUP_LEAD:
-        visible_users = CustomUser.objects.filter(Q(group_lead=user) | Q(id=user.id))
-    else:
-        visible_users = CustomUser.objects.none()
+    visible_users = CustomUser.objects.all()
     form.fields["user"].queryset = visible_users.order_by(
         "payroll_lastname",
         "payroll_firstname",
@@ -479,7 +632,7 @@ def payroll_user_breakdown(request):
     """
     JSON endpoint for Payroll user modal: daily time-entry breakdown for a given week.
     """
-    if not user_can_view_reports(request.user):
+    if not user_can_view_payroll(request.user):
         return JsonResponse({"error": "forbidden"}, status=403)
 
     user_slug = request.GET.get("user_slug")
@@ -493,18 +646,7 @@ def payroll_user_breakdown(request):
     except ValueError:
         return JsonResponse({"error": "invalid week_ending"}, status=400)
 
-    # Ensure requested user is within this viewer's visible set (same logic as payroll_view)
-    viewer = request.user
-    if viewer.role == RoleChoices.EXECUTIVE:
-        visible_users = CustomUser.objects.all()
-    elif viewer.role == RoleChoices.MANAGER:
-        visible_users = CustomUser.objects.filter(department=viewer.department)
-    elif viewer.role == RoleChoices.SUPERVISOR:
-        visible_users = CustomUser.objects.filter(Q(supervisor=viewer) | Q(id=viewer.id))
-    elif viewer.role == RoleChoices.GROUP_LEAD:
-        visible_users = CustomUser.objects.filter(Q(group_lead=viewer) | Q(id=viewer.id))
-    else:
-        visible_users = CustomUser.objects.none()
+    visible_users = CustomUser.objects.all()
 
     if user_slug:
         target_user = get_object_or_404(visible_users, public_slug=user_slug)
@@ -950,7 +1092,7 @@ def unfinalize_payroll(request):
     period.finalized_at = None
     period.finalized_by = None
     period.save()
-    messages.success(request, f"Payroll for week ending {week_ending} has been unfinalized. PTO accrual and occurrence PTO have been reverted.")
+    messages.success(request, f"Payroll for week ending {week_ending} has been unfinalized. PTO accrual and absence PTO have been reverted.")
     return redirect("attendance:payroll")
 
 
@@ -967,23 +1109,25 @@ def edit_entry(request, slug):
         return redirect("attendance:dashboard")
 
     week_ending = _week_ending_for_date(entry.date)
+    _payroll_ok = request.user.role == RoleChoices.EXECUTIVE
+
     if _is_payroll_week_finalized(week_ending):
         if request.method == "POST":
             messages.error(
                 request,
-                "This time entry is in a finalized payroll week. Unfinalize the payroll from Reports to make corrections.",
+                "This time entry is in a finalized payroll week. Unfinalize payroll for that week to make corrections.",
             )
-            return redirect("attendance:payroll")
+            return redirect("attendance:payroll" if _payroll_ok else "attendance:dashboard")
         messages.warning(
             request,
-            "This week is finalized. Unfinalize from Reports to edit.",
+            "This week is finalized. Unfinalize payroll to edit.",
         )
 
     if request.method == "POST":
         form = TimeEntryForm(request.POST, instance=entry)
         if form.is_valid():
             form.save()
-            return redirect("attendance:payroll")
+            return redirect("attendance:payroll" if _payroll_ok else "attendance:dashboard")
     else:
         form = TimeEntryForm(instance=entry)
 
@@ -1070,7 +1214,118 @@ def generate_report_pdf(request):
         response["Content-Disposition"] = f'attachment; filename="{user.username}_report.pdf"'
         pisa.CreatePDF(html, dest=response)
         return response
-    return redirect("attendance:payroll")
+    return redirect("attendance:dashboard")
+
+
+@login_required
+def perfect_attendance_pdf(request):
+    """PDF of Perfect Attendance (reported time-entry hours; same visibility as dashboard)."""
+    request_user = request.user
+    today = date.today()
+
+    if request_user.role == RoleChoices.EXECUTIVE:
+        visible_users = CustomUser.objects.all()
+    elif request_user.role == RoleChoices.MANAGER:
+        visible_users = CustomUser.objects.filter(department=request_user.department)
+    elif request_user.role == RoleChoices.SUPERVISOR:
+        visible_users = CustomUser.objects.filter(Q(supervisor=request_user) | Q(id=request_user.id))
+    elif request_user.role == RoleChoices.GROUP_LEAD:
+        visible_users = CustomUser.objects.filter(Q(group_lead=request_user) | Q(id=request_user.id))
+    elif request_user.role == RoleChoices.TEAM_LEAD:
+        visible_users = CustomUser.objects.filter(Q(team_lead=request_user) | Q(id=request_user.id))
+    else:
+        visible_users = CustomUser.objects.filter(id=request_user.id)
+
+    visible_users = visible_users.order_by(
+        "payroll_lastname",
+        "payroll_firstname",
+        "last_name",
+        "first_name",
+        "username",
+    )
+
+    pa_year_str = request.GET.get("pa_year")
+    pa_month_str = request.GET.get("pa_month")
+    pa_year = None
+    pa_month = None
+    if pa_year_str and pa_month_str:
+        try:
+            py, pm = int(pa_year_str), int(pa_month_str)
+            if 1 <= pm <= 12 and 2000 <= py <= 2100:
+                pa_year, pa_month = py, pm
+        except (ValueError, TypeError):
+            pass
+    if pa_year is None:
+        if today.day == 1:
+            if today.month == 1:
+                pa_year, pa_month = today.year - 1, 12
+            else:
+                pa_year, pa_month = today.year, today.month - 1
+        else:
+            pa_year, pa_month = today.year, today.month
+
+    pa_first = date(pa_year, pa_month, 1)
+    pa_last = _last_day_of_month(pa_year, pa_month)
+    if pa_first > today:
+        messages.error(request, "Choose a month that has already started.")
+        return redirect("attendance:dashboard")
+
+    pa_period_end = min(pa_last, today)
+    if pa_period_end < pa_last:
+        pa_period_description = (
+            f"{pa_first:%B %d} – {pa_period_end:%B %d, %Y} (month to date)"
+        )
+    else:
+        pa_period_description = f"{pa_first:%B %Y}"
+
+    perfect_attendance_rows = _perfect_attendance_with_hours(
+        visible_users, pa_first, pa_period_end
+    )
+    pa_hours_total = sum(r["total_hours"] for r in perfect_attendance_rows)
+
+    static_dirs = getattr(settings, "STATICFILES_DIRS", []) or []
+    static_root = Path(static_dirs[0]) if static_dirs else Path(settings.BASE_DIR) / "static"
+    img_dir = static_root / "img"
+    logo_uri = None
+    for name in ("pdfimage.jpg", "logo.webp", "logo.png"):
+        logo_path = img_dir / name
+        if not logo_path.exists():
+            continue
+        try:
+            raw = logo_path.read_bytes()
+            if name.endswith(".webp"):
+                from PIL import Image
+
+                img = Image.open(BytesIO(raw))
+                buf = BytesIO()
+                img.save(buf, format="PNG")
+                raw = buf.getvalue()
+                mime = "image/png"
+            elif name.endswith(".jpg") or name.endswith(".jpeg"):
+                mime = "image/jpeg"
+            else:
+                mime = "image/png"
+            b64 = base64.b64encode(raw).decode("ascii")
+            logo_uri = f"data:{mime};base64,{b64}"
+        except Exception:
+            logo_uri = None
+        break
+
+    template = get_template("attendance/perfect_attendance_pdf.html")
+    html = template.render(
+        {
+            "logo_uri": logo_uri,
+            "period_description": pa_period_description,
+            "rows": perfect_attendance_rows,
+            "pa_hours_total": pa_hours_total,
+            "generated_at": today,
+        }
+    )
+    response = HttpResponse(content_type="application/pdf")
+    fname = f"perfect_attendance_{pa_year}_{pa_month:02d}.pdf"
+    response["Content-Disposition"] = f'attachment; filename="{fname}"'
+    pisa.CreatePDF(html, dest=response)
+    return response
 
 
 @login_required
@@ -1135,6 +1390,14 @@ def team_time_off_requests(request):
     manageable = [r.id for r in pending if can_approve_time_off(approver, r.user)]
     pending = pending.filter(id__in=manageable)
 
+    pending_wtl = WorkThroughLunchRequest.objects.filter(status=TimeOffRequestStatus.PENDING)
+    manageable_wtl = [r.id for r in pending_wtl if can_approve_time_off(approver, r.user)]
+    pending_wtl = pending_wtl.filter(id__in=manageable_wtl).select_related("user")
+
+    pending_adjust = AdjustPunchRequest.objects.filter(status=TimeOffRequestStatus.PENDING)
+    manageable_adj = [r.id for r in pending_adjust if can_approve_time_off(approver, r.user)]
+    pending_adjust = pending_adjust.filter(id__in=manageable_adj).select_related("user", "time_entry")
+
     # For each pending request, surface overlapping approved requests so approvers
     # can see who else is already out in the same timeframe.
     for req in pending:
@@ -1157,7 +1420,11 @@ def team_time_off_requests(request):
     return render(
         request,
         "attendance/team_time_off_requests.html",
-        {"pending_requests": pending},
+        {
+            "pending_requests": pending,
+            "pending_work_through_lunch": pending_wtl,
+            "pending_adjust_punch": pending_adjust,
+        },
     )
 
 
@@ -1211,3 +1478,279 @@ def cancel_time_off(request, slug):
     if next_url and next_url.startswith("/"):
         return redirect(next_url)
     return redirect("attendance:my_time_off_requests")
+
+
+@login_required
+def request_work_through_lunch(request):
+    """Submit a request to work through a scheduled lunch (no automatic lunch deduction)."""
+    user = request.user
+
+    if request.method == "POST":
+        form = WorkThroughLunchRequestForm(request.POST, request_user=user)
+        if form.is_valid():
+            wtl = form.save(commit=False)
+            wtl.user = user
+            wtl.save()
+            messages.success(request, "Work-through-lunch request submitted.")
+            return redirect("attendance:request_work_through_lunch")
+    else:
+        form = WorkThroughLunchRequestForm(request_user=user)
+
+    my_requests = WorkThroughLunchRequest.objects.filter(user=user).order_by("-created_at")
+
+    return render(
+        request,
+        "attendance/request_work_through_lunch.html",
+        {"form": form, "my_requests": my_requests},
+    )
+
+
+@require_POST
+@login_required
+def approve_work_through_lunch(request, slug):
+    wtl = get_object_or_404(WorkThroughLunchRequest, slug=slug)
+    approver = request.user
+
+    if not can_approve_time_off(approver, wtl.user):
+        messages.error(request, "You do not have permission to approve this request.")
+        return redirect("attendance:team_time_off_requests")
+
+    wtl.approve(approver)
+    entry = TimeEntry.objects.filter(user=wtl.user, date=wtl.work_date).first()
+    if entry and entry.clock_in and entry.clock_out:
+        scheduled = scheduled_lunch_datetimes_for_entry(entry)
+        if scheduled:
+            lo, li = scheduled
+            if entry.lunch_out == lo and entry.lunch_in == li:
+                entry.lunch_out = None
+                entry.lunch_in = None
+                entry.save(update_fields=["lunch_out", "lunch_in"])
+    messages.success(request, "Work-through-lunch request approved.")
+    return redirect("attendance:team_time_off_requests")
+
+
+@require_POST
+@login_required
+def deny_work_through_lunch(request, slug):
+    wtl = get_object_or_404(WorkThroughLunchRequest, slug=slug)
+    approver = request.user
+
+    if not can_approve_time_off(approver, wtl.user):
+        messages.error(request, "You do not have permission to deny this request.")
+        return redirect("attendance:team_time_off_requests")
+
+    wtl.deny(approver)
+    messages.info(request, "Work-through-lunch request denied.")
+    return redirect("attendance:team_time_off_requests")
+
+
+@require_POST
+@login_required
+def cancel_work_through_lunch(request, slug):
+    wtl = get_object_or_404(WorkThroughLunchRequest, slug=slug)
+    if wtl.user != request.user:
+        messages.error(request, "You can only cancel your own requests.")
+        return redirect("attendance:request_work_through_lunch")
+    if wtl.status not in (TimeOffRequestStatus.PENDING, TimeOffRequestStatus.APPROVED):
+        messages.error(request, "Only pending or approved requests can be cancelled.")
+        return redirect("attendance:request_work_through_lunch")
+    was_approved = wtl.status == TimeOffRequestStatus.APPROVED
+    wtl.cancel()
+    if was_approved:
+        entry = TimeEntry.objects.filter(user=wtl.user, date=wtl.work_date).first()
+        if entry:
+            entry.save()
+    messages.success(request, "Work-through-lunch request cancelled.")
+    next_url = request.POST.get("next") or request.GET.get("next") or request.META.get("HTTP_REFERER")
+    if next_url and next_url.startswith("/"):
+        return redirect(next_url)
+    return redirect("attendance:request_work_through_lunch")
+
+
+@login_required
+def request_adjust_punch(request):
+    """Submit a request to correct a recorded punch time for a day in the selected week."""
+    user = request.user
+    today = date.today()
+    payroll_weeks_list = get_recent_saturdays(12)
+    if not payroll_weeks_list:
+        payroll_weeks_list = [_week_ending_for_date(today)]
+
+    week_ending_str = request.GET.get("week_ending")
+    if week_ending_str:
+        try:
+            end_of_week = date.fromisoformat(week_ending_str)
+        except ValueError:
+            end_of_week = _week_ending_for_date(today)
+    else:
+        end_of_week = _week_ending_for_date(today)
+
+    week_start = end_of_week - timedelta(days=6)
+    entries = TimeEntry.objects.filter(user=user, date__range=[week_start, end_of_week]).order_by("date")
+
+    if request.method == "POST":
+        form = AdjustPunchRequestForm(request.POST, request_user=user, time_entry_queryset=entries)
+        if form.is_valid():
+            entry = form.cleaned_data["_entry"]
+            apr = AdjustPunchRequest(
+                user=user,
+                time_entry=entry,
+                punch_field=form.cleaned_data["punch_field"],
+                previous_at=getattr(entry, form.cleaned_data["punch_field"]),
+                requested_at=form.cleaned_data["requested_at"],
+                comments=form.cleaned_data.get("comments") or "",
+            )
+            apr.save()
+            messages.success(request, "Adjust punch request submitted.")
+            return redirect("attendance:request_adjust_punch")
+    else:
+        form = AdjustPunchRequestForm(request_user=user, time_entry_queryset=entries)
+
+    my_requests = (
+        AdjustPunchRequest.objects.filter(user=user)
+        .select_related("time_entry")
+        .order_by("-created_at")[:50]
+    )
+    payroll_weeks_display = [(d.strftime("%Y-%m-%d"), d.strftime("%m/%d/%Y")) for d in payroll_weeks_list]
+    week_keys = [d.strftime("%Y-%m-%d") for d in payroll_weeks_list]
+    if end_of_week.strftime("%Y-%m-%d") not in week_keys:
+        payroll_weeks_display.insert(0, (end_of_week.strftime("%Y-%m-%d"), end_of_week.strftime("%m/%d/%Y")))
+
+    return render(
+        request,
+        "attendance/request_adjust_punch.html",
+        {
+            "form": form,
+            "my_requests": my_requests,
+            "week_ending": end_of_week,
+            "payroll_weeks_display": payroll_weeks_display,
+        },
+    )
+
+
+@login_required
+def adjust_punch_my_week_json(request):
+    """JSON for adjust-punch page: current user's time entries for the selected week."""
+    week_ending_param = request.GET.get("week_ending")
+    if not week_ending_param:
+        return JsonResponse({"error": "missing week_ending"}, status=400)
+    try:
+        week_ending = date.fromisoformat(week_ending_param)
+    except ValueError:
+        return JsonResponse({"error": "invalid week_ending"}, status=400)
+
+    week_start = week_ending - timedelta(days=6)
+    user = request.user
+    entries = TimeEntry.objects.filter(user=user, date__range=[week_start, week_ending]).order_by("date")
+
+    def iso(dt):
+        if not dt:
+            return None
+        return django_tz.localtime(dt).isoformat()
+
+    def fmt_ampm(dt):
+        if not dt:
+            return None
+        return django_tz.localtime(dt).strftime("%I:%M %p").lstrip("0")
+
+    days = []
+    for e in entries:
+        days.append(
+            {
+                "date": e.date.isoformat(),
+                "slug": e.slug,
+                "clock_in": iso(e.clock_in),
+                "lunch_out": iso(e.lunch_out),
+                "lunch_in": iso(e.lunch_in),
+                "clock_out": iso(e.clock_out),
+                "clock_in_display": fmt_ampm(e.clock_in),
+                "lunch_out_display": fmt_ampm(e.lunch_out),
+                "lunch_in_display": fmt_ampm(e.lunch_in),
+                "clock_out_display": fmt_ampm(e.clock_out),
+            }
+        )
+
+    return JsonResponse(
+        {
+            "week_start": week_start.isoformat(),
+            "week_ending": week_ending.isoformat(),
+            "days": days,
+        }
+    )
+
+
+@require_POST
+@login_required
+def approve_adjust_punch(request, slug):
+    apr = get_object_or_404(AdjustPunchRequest, slug=slug)
+    approver = request.user
+
+    if not can_approve_time_off(approver, apr.user):
+        messages.error(request, "You do not have permission to approve this request.")
+        return redirect("attendance:team_time_off_requests")
+
+    if apr.status != TimeOffRequestStatus.PENDING:
+        messages.error(request, "This request is no longer pending.")
+        return redirect("attendance:team_time_off_requests")
+
+    week_ending = _week_ending_for_date(apr.time_entry.date)
+    if _is_payroll_week_finalized(week_ending):
+        messages.error(
+            request,
+            "That payroll week is finalized. Unfinalize payroll before approving this adjustment.",
+        )
+        return redirect("attendance:team_time_off_requests")
+
+    try:
+        with transaction.atomic():
+            u = CustomUser.objects.select_for_update().get(pk=apr.user_id)
+            revert_tardy_occurrences_for_adjust_punch(u, apr.time_entry.date)
+            entry = TimeEntry.objects.select_for_update().get(pk=apr.time_entry_id)
+            setattr(entry, apr.punch_field, apr.requested_at)
+            entry.save()
+            if apr.punch_field == AdjustPunchField.CLOCK_IN:
+                entry.check_tardy()
+            elif apr.punch_field == AdjustPunchField.LUNCH_IN:
+                entry.check_lunch_tardy()
+            apr.approver = approver
+            apr.status = TimeOffRequestStatus.APPROVED
+            apr.save()
+    except Exception:
+        messages.error(request, "Could not apply the punch adjustment. Try again or contact support.")
+        return redirect("attendance:team_time_off_requests")
+
+    messages.success(request, "Adjust punch request approved; time entry updated.")
+    return redirect("attendance:team_time_off_requests")
+
+
+@require_POST
+@login_required
+def deny_adjust_punch(request, slug):
+    apr = get_object_or_404(AdjustPunchRequest, slug=slug)
+    approver = request.user
+
+    if not can_approve_time_off(approver, apr.user):
+        messages.error(request, "You do not have permission to deny this request.")
+        return redirect("attendance:team_time_off_requests")
+
+    apr.deny(approver)
+    messages.info(request, "Adjust punch request denied.")
+    return redirect("attendance:team_time_off_requests")
+
+
+@require_POST
+@login_required
+def cancel_adjust_punch(request, slug):
+    apr = get_object_or_404(AdjustPunchRequest, slug=slug)
+    if apr.user != request.user:
+        messages.error(request, "You can only cancel your own requests.")
+        return redirect("attendance:request_adjust_punch")
+    if apr.status != TimeOffRequestStatus.PENDING:
+        messages.error(request, "Only pending requests can be cancelled.")
+        return redirect("attendance:request_adjust_punch")
+    apr.cancel()
+    messages.success(request, "Adjust punch request cancelled.")
+    next_url = request.POST.get("next") or request.GET.get("next") or request.META.get("HTTP_REFERER")
+    if next_url and next_url.startswith("/"):
+        return redirect(next_url)
+    return redirect("attendance:request_adjust_punch")

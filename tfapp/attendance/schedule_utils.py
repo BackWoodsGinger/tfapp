@@ -173,6 +173,20 @@ def earliest_clock_in_allowed(user, d: date):
     return scheduled_local - timedelta(minutes=15)
 
 
+def work_through_lunch_approved_for_day(user, d: date) -> bool:
+    """
+    True if the user has an approved request to work through lunch on date d
+    (no automatic scheduled lunch punches; no lunch deduction).
+    """
+    from attendance.models import TimeOffRequestStatus, WorkThroughLunchRequest
+
+    return WorkThroughLunchRequest.objects.filter(
+        user=user,
+        work_date=d,
+        status=TimeOffRequestStatus.APPROVED,
+    ).exists()
+
+
 def clock_in_requires_approver(user, now, d: date) -> tuple[bool, str | None]:
     """
     Returns (requires_approver, reason) where reason is 'unscheduled' or 'early' or None.

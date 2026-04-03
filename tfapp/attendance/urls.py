@@ -19,11 +19,61 @@ urlpatterns = [
     # Back-compat: keep old URLs but redirect to Payroll
     path("reports/", views.reports_redirect, name="reports"),
     path("reports/generate/", views.generate_report_pdf, name="generate_report_pdf"),
+    path(
+        "dashboard/perfect-attendance-pdf/",
+        views.perfect_attendance_pdf,
+        name="perfect_attendance_pdf",
+    ),
     path("close-payroll/", views.close_payroll, name="close_payroll"),
     path("unfinalize-payroll/", views.unfinalize_payroll, name="unfinalize_payroll"),
     # Time off request and approval workflow
     path("timeoff/request/", views.request_time_off, name="request_time_off"),
     path("timeoff/mine/", views.my_time_off_requests, name="my_time_off_requests"),
+    path(
+        "timeoff/adjust-punch/",
+        views.request_adjust_punch,
+        name="request_adjust_punch",
+    ),
+    path(
+        "timeoff/adjust-punch/week.json",
+        views.adjust_punch_my_week_json,
+        name="adjust_punch_my_week_json",
+    ),
+    path(
+        "timeoff/adjust-punch/<slug:slug>/approve/",
+        views.approve_adjust_punch,
+        name="approve_adjust_punch",
+    ),
+    path(
+        "timeoff/adjust-punch/<slug:slug>/deny/",
+        views.deny_adjust_punch,
+        name="deny_adjust_punch",
+    ),
+    path(
+        "timeoff/adjust-punch/<slug:slug>/cancel/",
+        views.cancel_adjust_punch,
+        name="cancel_adjust_punch",
+    ),
+    path(
+        "timeoff/work-through-lunch/",
+        views.request_work_through_lunch,
+        name="request_work_through_lunch",
+    ),
+    path(
+        "timeoff/work-through-lunch/<slug:slug>/approve/",
+        views.approve_work_through_lunch,
+        name="approve_work_through_lunch",
+    ),
+    path(
+        "timeoff/work-through-lunch/<slug:slug>/deny/",
+        views.deny_work_through_lunch,
+        name="deny_work_through_lunch",
+    ),
+    path(
+        "timeoff/work-through-lunch/<slug:slug>/cancel/",
+        views.cancel_work_through_lunch,
+        name="cancel_work_through_lunch",
+    ),
     path(
         "timeoff/team/",
         views.team_time_off_requests,

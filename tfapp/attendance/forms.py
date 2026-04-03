@@ -1,8 +1,18 @@
 from django import forms
-from datetime import timedelta
+from datetime import timedelta, date, datetime
 from crispy_forms.helper import FormHelper
 from crispy_forms.layout import Layout, Row, Column, Submit, Div
-from .models import Occurrence, CustomUser, TimeOffRequest
+from .models import (
+    AdjustPunchField,
+    AdjustPunchRequest,
+    Occurrence,
+    CustomUser,
+    PayrollPeriod,
+    TimeOffRequest,
+    TimeOffRequestStatus,
+    WorkThroughLunchRequest,
+)
+from timeclock.models import TimeEntry
 
 
 class OccurrenceForm(forms.ModelForm):
@@ -161,6 +171,157 @@ class TimeOffRequestForm(forms.ModelForm):
         if existing_hours + new_hours > 40:
             raise forms.ValidationError(
                 "Total PTO requested for this payroll week would exceed 40 hours."
+            )
+
+        return cleaned_data
+
+
+def _week_ending_saturday_for_date(d: date) -> date:
+    return d + timedelta(days=(5 - d.weekday()) % 7)
+
+
+class AdjustPunchRequestForm(forms.Form):
+    """Request a correction to one punch on a time entry the user already recorded."""
+
+    time_entry_slug = forms.CharField(
+        label="Time entry",
+        widget=forms.Select(attrs={"class": "form-select", "id": "id_time_entry_slug"}),
+    )
+    punch_field = forms.ChoiceField(
+        label="Punch to correct",
+        choices=AdjustPunchField.choices,
+        widget=forms.Select(attrs={"class": "form-select", "id": "id_punch_field"}),
+    )
+    requested_time = forms.TimeField(
+        label="Corrected time",
+        help_text="Only the time is set here; the date comes from the selected time entry and punch.",
+        widget=forms.TimeInput(
+            attrs={"type": "time", "class": "form-control", "id": "id_requested_time", "step": "60"},
+            format="%H:%M",
+        ),
+        input_formats=["%H:%M", "%H:%M:%S"],
+    )
+    comments = forms.CharField(
+        label="Reason (optional)",
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 3, "class": "form-control", "placeholder": "e.g. Forgot to clock in at start of shift"}),
+    )
+
+    def __init__(self, *args, request_user=None, time_entry_queryset=None, **kwargs):
+        self.request_user = request_user
+        super().__init__(*args, **kwargs)
+        if time_entry_queryset is not None:
+            self.fields["time_entry_slug"].widget = forms.Select(
+                choices=[("", "— Select day —")]
+                + [(e.slug, f"{e.date} ({e.date.strftime('%A')})") for e in time_entry_queryset],
+                attrs={"class": "form-select", "id": "id_time_entry_slug"},
+            )
+
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "time_entry_slug",
+            "punch_field",
+            "requested_time",
+            "comments",
+        )
+
+    def clean(self):
+        from django.utils import timezone as django_tz
+
+        cleaned_data = super().clean()
+        slug = (cleaned_data.get("time_entry_slug") or "").strip()
+        punch_field = cleaned_data.get("punch_field")
+        requested_time = cleaned_data.get("requested_time")
+        user = self.request_user
+        if not slug or not user or not punch_field:
+            return cleaned_data
+
+        try:
+            entry = TimeEntry.objects.get(slug=slug, user=user)
+        except TimeEntry.DoesNotExist:
+            raise forms.ValidationError("Invalid time entry.")
+
+        current = getattr(entry, punch_field)
+        if current is None:
+            raise forms.ValidationError(
+                "That punch is not recorded for that day. There is nothing to adjust for this field."
+            )
+
+        we = _week_ending_saturday_for_date(entry.date)
+        if PayrollPeriod.objects.filter(week_ending=we, is_finalized=True).exists():
+            raise forms.ValidationError(
+                "That week is payroll-finalized. Ask an administrator to unfinalize payroll before punch adjustments."
+            )
+
+        if AdjustPunchRequest.objects.filter(
+            time_entry=entry,
+            status=TimeOffRequestStatus.PENDING,
+        ).exists():
+            raise forms.ValidationError(
+                "You already have a pending adjust-punch request for this day. Cancel it or wait for a decision."
+            )
+
+        if requested_time is None:
+            return cleaned_data
+
+        # Same calendar date as the existing punch in local time (handles overnight shifts).
+        anchor_date = django_tz.localtime(current).date()
+        naive_dt = datetime.combine(anchor_date, requested_time)
+        cleaned_data["requested_at"] = django_tz.make_aware(
+            naive_dt, django_tz.get_current_timezone()
+        )
+
+        cleaned_data["_entry"] = entry
+        return cleaned_data
+
+
+class WorkThroughLunchRequestForm(forms.ModelForm):
+    """Request to work through a scheduled lunch for a single date."""
+
+    class Meta:
+        model = WorkThroughLunchRequest
+        fields = ["work_date", "comments"]
+        widgets = {
+            "work_date": forms.DateInput(attrs={"type": "date", "class": "form-control"}),
+            "comments": forms.Textarea(attrs={"rows": 3, "class": "form-control", "placeholder": "Optional"}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        self.request_user = kwargs.pop("request_user", None)
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+        self.helper.form_tag = False
+        self.helper.form_method = "post"
+        self.helper.layout = Layout(
+            "work_date",
+            "comments",
+        )
+
+    def clean(self):
+        from .schedule_utils import get_scheduled_lunch_in_for_day, get_scheduled_lunch_out_for_day
+
+        cleaned_data = super().clean()
+        work_date = cleaned_data.get("work_date")
+        user = self.request_user
+        if not work_date or not user:
+            return cleaned_data
+
+        if not get_scheduled_lunch_out_for_day(user, work_date) or not get_scheduled_lunch_in_for_day(
+            user, work_date
+        ):
+            raise forms.ValidationError(
+                "You do not have a scheduled lunch on that date, so this request does not apply."
+            )
+
+        if WorkThroughLunchRequest.objects.filter(
+            user=user,
+            work_date=work_date,
+            status__in=[TimeOffRequestStatus.PENDING, TimeOffRequestStatus.APPROVED],
+        ).exists():
+            raise forms.ValidationError(
+                "You already have a pending or approved work-through-lunch request for that date."
             )
 
         return cleaned_data

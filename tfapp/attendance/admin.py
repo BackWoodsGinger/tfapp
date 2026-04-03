@@ -4,7 +4,16 @@ from django.shortcuts import redirect, get_object_or_404
 from django.urls import path
 from django.contrib import messages
 from decimal import Decimal
-from .models import CustomUser, Occurrence, WorkSchedule, OccurrenceSubtype, PayrollPeriod, PTOBalanceHistory
+from .models import (
+    CustomUser,
+    Occurrence,
+    WorkSchedule,
+    OccurrenceSubtype,
+    PayrollPeriod,
+    PTOBalanceHistory,
+    WorkThroughLunchRequest,
+    AdjustPunchRequest,
+)
 
 
 class WorkScheduleInline(admin.TabularInline):
@@ -180,6 +189,22 @@ class PTOBalanceHistoryAdmin(admin.ModelAdmin):
     search_fields = ("user__username", "reason")
     readonly_fields = ("user", "change", "reason", "balance_after", "balance_type", "timestamp")
     ordering = ("-timestamp",)
+
+
+@admin.register(WorkThroughLunchRequest)
+class WorkThroughLunchRequestAdmin(admin.ModelAdmin):
+    list_display = ("user", "work_date", "status", "approver", "created_at")
+    list_filter = ("status", "work_date")
+    search_fields = ("user__username", "user__last_name", "slug")
+    readonly_fields = ("slug", "created_at", "updated_at")
+
+
+@admin.register(AdjustPunchRequest)
+class AdjustPunchRequestAdmin(admin.ModelAdmin):
+    list_display = ("user", "time_entry", "punch_field", "status", "approver", "created_at")
+    list_filter = ("status", "punch_field")
+    search_fields = ("user__username", "slug")
+    readonly_fields = ("slug", "previous_at", "created_at", "updated_at")
 
 
 @admin.register(PayrollPeriod)

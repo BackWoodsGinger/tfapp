@@ -15,7 +15,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.core import mail
 from django.conf import settings
-from attendance.schedule_utils import scheduled_lunch_datetimes_for_entry
+from attendance.schedule_utils import scheduled_lunch_datetimes_for_entry, work_through_lunch_approved_for_day
 from timeclock.models import TimeEntry
 
 
@@ -55,6 +55,8 @@ class Command(BaseCommand):
 
         filled = []
         for entry in candidates:
+            if work_through_lunch_approved_for_day(entry.user, entry.date):
+                continue
             times = scheduled_lunch_datetimes_for_entry(entry)
             if times is None:
                 continue

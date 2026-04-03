@@ -43,26 +43,40 @@
                         <a class="nav-link" href="{% url 'attendance:dashboard' %}">Dashboard</a>
                     </li>
 
-                    <li
-                        {% if 'timeoff' in request.path and 'team' not in request.path %}
-                        class="nav-item active mr-3"
-                        {% else %}
-                        class="nav-item mr-3"
-                        {% endif %}
-                    >
-                        <a class="nav-link" href="{% url 'attendance:request_time_off' %}">Time Off</a>
+                    <li class="nav-item dropdown mr-3">
+                        <a
+                            class="nav-link dropdown-toggle {% if 'timeoff' in request.path or 'adjust-punch' in request.path %}active{% endif %}"
+                            href="#"
+                            id="navbarTimeOff"
+                            role="button"
+                            data-bs-toggle="dropdown"
+                            aria-expanded="false"
+                        >Time Management{% if pending_approval_counts and pending_approval_counts.total %} <span class="badge bg-warning text-dark rounded-pill">{{ pending_approval_counts.total }}</span>{% endif %}</a>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="navbarTimeOff">
+                            <li>
+                                <a class="dropdown-item" href="{% url 'attendance:request_time_off' %}">Request time off</a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item" href="{% url 'attendance:request_work_through_lunch' %}">Work through lunch</a>
+                            </li>
+                            <li>
+                                <a class="dropdown-item" href="{% url 'attendance:request_adjust_punch' %}">Adjust punch</a>
+                            </li>
+                            {% if user.role == 'group_lead' or user.role == 'supervisor' or user.role == 'manager' or user.role == 'executive' %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li>
+                                <a class="dropdown-item d-flex justify-content-between align-items-center gap-2" href="{% url 'attendance:team_time_off_requests' %}">
+                                    <span>Approvals</span>
+                                    {% if pending_approval_counts and pending_approval_counts.total %}
+                                    <span class="badge bg-danger rounded-pill">{{ pending_approval_counts.total }}</span>
+                                    {% endif %}
+                                </a>
+                            </li>
+                            {% endif %}
+                        </ul>
                     </li>
 
-                    {% if user.role in 'group_lead supervisor manager executive' %}
-                    <li
-                        {% if 'timeoff/team' in request.path %}
-                        class="nav-item active mr-3"
-                        {% else %}
-                        class="nav-item mr-3"
-                        {% endif %}
-                    >
-                        <a class="nav-link" href="{% url 'attendance:team_time_off_requests' %}">Approvals</a>
-                    </li>
+                    {% if user.role == 'executive' %}
                     <li
                         {% if 'payroll' in request.path or 'reports' in request.path %}
                         class="nav-item active mr-3"

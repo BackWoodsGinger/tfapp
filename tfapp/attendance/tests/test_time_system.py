@@ -1,14 +1,22 @@
 """
 Automated tests for the time/clock system: TimeEntry model, punch flow, guards, and rounding.
 """
-from datetime import date, time, timedelta, timezone as dt_timezone
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 
 from django.db import IntegrityError
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
 
-from attendance.models import CustomUser, Occurrence, OccurrenceSubtype, RoleChoices, WorkSchedule
+from attendance.models import (
+    CustomUser,
+    Occurrence,
+    OccurrenceSubtype,
+    RoleChoices,
+    TimeOffRequestStatus,
+    WorkSchedule,
+    WorkThroughLunchRequest,
+)
 from timeclock.models import TimeEntry
 
 
@@ -370,15 +378,77 @@ class TestTardyOccurrence(TestCase):
         self.assertAlmostEqual(entry.reported_worked_hours(), 9.0, places=2)
 
 
+class TestScheduledLunchAutoFill(TestCase):
+    """When lunch punches are missing, save() applies scheduled lunch_in/out within the shift."""
+
+    def setUp(self):
+        self.user = CustomUser.objects.create_user(
+            username="lunchfill",
+            password="testpass",
+        )
+        WorkSchedule.objects.create(
+            user=self.user,
+            day=0,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+
+    def test_save_applies_scheduled_lunch_when_both_punches_missing(self):
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)
+        ci = timezone.make_aware(datetime(2025, 3, 3, 5, 0, 0), tz)
+        co = timezone.make_aware(datetime(2025, 3, 3, 15, 30, 0), tz)
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=d,
+            clock_in=ci,
+            clock_out=co,
+        )
+        entry.refresh_from_db()
+        self.assertIsNotNone(entry.lunch_out)
+        self.assertIsNotNone(entry.lunch_in)
+        lo = timezone.localtime(entry.lunch_out)
+        li = timezone.localtime(entry.lunch_in)
+        self.assertEqual(lo.hour, 11)
+        self.assertEqual(lo.minute, 0)
+        self.assertEqual(li.hour, 11)
+        self.assertEqual(li.minute, 30)
+        self.assertAlmostEqual(entry.actual_worked_hours(), 10.0, places=2)
+
+    def test_work_through_lunch_approved_no_deduction_and_no_auto_fill(self):
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)
+        WorkThroughLunchRequest.objects.create(
+            user=self.user,
+            work_date=d,
+            status=TimeOffRequestStatus.APPROVED,
+        )
+        ci = timezone.make_aware(datetime(2025, 3, 3, 5, 0, 0), tz)
+        co = timezone.make_aware(datetime(2025, 3, 3, 15, 30, 0), tz)
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=d,
+            clock_in=ci,
+            clock_out=co,
+        )
+        entry.refresh_from_db()
+        self.assertIsNone(entry.lunch_out)
+        self.assertIsNone(entry.lunch_in)
+        self.assertAlmostEqual(entry.actual_worked_hours(), 10.5, places=2)
+        self.assertFalse(entry.is_incomplete())
+
+
 class TestReportsIncompleteAlerts(TestCase):
     """Reports should only show missing-punch alerts after day completion."""
 
     def setUp(self):
         self.client = Client()
-        self.manager = CustomUser.objects.create_user(
-            username="manager1",
+        self.executive = CustomUser.objects.create_user(
+            username="exec1",
             password="testpass",
-            role=RoleChoices.MANAGER,
+            role=RoleChoices.EXECUTIVE,
             department="Ops",
         )
         self.employee = CustomUser.objects.create_user(
@@ -395,7 +465,7 @@ class TestReportsIncompleteAlerts(TestCase):
             date=now.date(),
             clock_in=now,
         )
-        self.client.force_login(self.manager)
+        self.client.force_login(self.executive)
         response = self.client.get(reverse("attendance:payroll"))
         self.assertEqual(response.status_code, 200)
         alerts = response.context.get("alerts", [])

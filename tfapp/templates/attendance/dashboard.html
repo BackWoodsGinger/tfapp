@@ -4,9 +4,46 @@
   <div class="row justify-content-center">
     <div class="col-lg-12 col-md-10 col-sm-12">
 
+      {% if pending_approval_counts and pending_approval_counts.total %}
+      <div class="alert alert-warning border-0 shadow-sm mb-4" role="alert">
+        <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+          <div>
+            <strong class="d-block mb-1">Pending approvals</strong>
+            <p class="mb-0 small">
+              You have <strong>{{ pending_approval_counts.total }}</strong> request(s) waiting for your decision
+              (time off: {{ pending_approval_counts.time_off }}, work through lunch: {{ pending_approval_counts.work_through_lunch }}, adjust punch: {{ pending_approval_counts.adjust_punch }}).
+              Pending clock-in authorizations are handled at the timeclock when an employee punches in, not in this queue.
+            </p>
+          </div>
+          <a class="btn btn-sm btn-dark flex-shrink-0" href="{% url 'attendance:team_time_off_requests' %}">Review approvals</a>
+        </div>
+      </div>
+      {% endif %}
+
       <div class="card mb-4">
         <div class="card-body">
           <h3>Welcome, {% if user.first_name %}{{ user.first_name }}{% else %}{{ user.username }}{% endif %}</h3>
+
+          <h5 class="mt-4">Scheduled today — not clocked in</h5>
+          <p class="text-muted small mb-2">Employees with a schedule for today who have not clocked in yet (no time entry or missing clock-in).</p>
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for u in scheduled_not_clocked %}
+                <tr>
+                  <td>{{ u.payroll_display_name }}</td>
+                </tr>
+                {% empty %}
+                <tr><td class="text-muted">No one in your view is scheduled without a clock-in, or everyone scheduled has clocked in.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
 
           <h5 class="mt-4">Clock-in overrides</h5>
           <p class="text-muted small mb-2">Punches in the last 90 days that required a manager, supervisor, executive, or group lead because the employee was not scheduled or clocked in more than 15 minutes before shift start.</p>
@@ -35,7 +72,7 @@
             </table>
           </div>
 
-          <h5 class="mt-4">Occurrences for Selected Day</h5>
+          <h5 class="mt-4">Absences for Selected Day</h5>
           <form method="get" class="row g-2 mb-3 align-items-end">
             {% if user_list|length > 1 %}
             <input type="hidden" name="user_slug" value="{{ selected_user.public_slug }}">
@@ -67,18 +104,106 @@
                 <td>{{ occ.duration_hours }}</td>
               </tr>
               {% empty %}
-              <tr><td colspan="4">No occurrences on this day.</td></tr>
+              <tr><td colspan="4">No absences on this day.</td></tr>
               {% endfor %}
             </tbody>
           </table>
         </div>
       </div>
 
-      <!-- Occurrence Report Card (moved from Payroll) -->
       <div class="card mb-4">
         <div class="card-body">
-          <h3 class="mb-4">Generate Occurrence Report</h3>
-          <form method="get" action="{% url 'attendance:generate_report_pdf' %}" id="occurrence-report-form" class="mb-0">
+          <h4 class="card-title">Perfect Attendance</h4>
+          {% if today.day == 1 %}
+          <p class="alert alert-info small py-2 mb-3">The month selector defaults to the previous calendar month so you can review a completed month on the first of the month.</p>
+          {% endif %}
+          <form method="get" class="row g-2 mb-4 align-items-end flex-wrap">
+            {% if user_list|length > 1 %}
+            <input type="hidden" name="user_slug" value="{{ selected_user.public_slug }}">
+            {% endif %}
+            <input type="hidden" name="date" value="{{ selected_date|date:'Y-m-d' }}">
+            <div class="col-auto">
+              <label for="id_pa_month" class="form-label small text-muted mb-0">Month</label>
+              <select name="pa_month" id="id_pa_month" class="form-select form-select-sm" style="min-width: 10rem;">
+                {% for num, label in pa_month_choices %}
+                <option value="{{ num }}" {% if num == pa_month %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-auto">
+              <label for="id_pa_year" class="form-label small text-muted mb-0">Year</label>
+              <select name="pa_year" id="id_pa_year" class="form-select form-select-sm" style="min-width: 6rem;">
+                {% for y in pa_year_choices %}
+                <option value="{{ y }}" {% if y == pa_year %}selected{% endif %}>{{ y }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-auto">
+              <button type="submit" class="btn btn-sm btn-primary">View</button>
+            </div>
+            {% if pa_period_end %}
+            <div class="col-auto ms-auto">
+              <a class="btn btn-sm btn-outline-secondary" href="{% url 'attendance:perfect_attendance_pdf' %}?pa_year={{ pa_year }}&pa_month={{ pa_month }}">Export PDF</a>
+            </div>
+            {% endif %}
+          </form>
+
+          {% if pa_first > today %}
+          <p class="text-muted mb-0">Choose a month that has already started.</p>
+          {% else %}
+          <p class="text-muted small mb-2"><strong>Period:</strong> {{ pa_period_description }}</p>
+
+          <h5 class="mt-3">Employees with no unplanned absences</h5>
+          <p class="text-muted small">Anyone in your view with zero unplanned absences in this period (planned time off and holidays do not count).</p>
+          {% if no_unplanned_users %}
+          <ul class="mb-4">
+            {% for u in no_unplanned_users %}
+            <li>{{ u.payroll_display_name }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="text-muted mb-4">None.</p>
+          {% endif %}
+
+          <h5>Completed time entries (reported hours)</h5>
+          <p class="text-muted small mb-2">Non-exempt employees with no unplanned absences in the period who have at least one completed time entry. Hours are payroll-reported time entry totals (PTO hours are not included).</p>
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th class="text-end">Total reported hours</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in perfect_attendance_rows %}
+                <tr>
+                  <td>{{ row.user.payroll_display_name }}</td>
+                  <td class="text-end">{{ row.total_hours|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="2" class="text-muted">No employees qualify for this period.</td></tr>
+                {% endfor %}
+              </tbody>
+              {% if perfect_attendance_rows %}
+              <tfoot>
+                <tr>
+                  <th>Total</th>
+                  <th class="text-end">{{ pa_hours_total|floatformat:2 }}</th>
+                </tr>
+              </tfoot>
+              {% endif %}
+            </table>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Absence report card (moved from Payroll) -->
+      <div class="card mb-4">
+        <div class="card-body">
+          <h3 class="mb-4">Generate Absence Report</h3>
+          <form method="get" action="{% url 'attendance:generate_report_pdf' %}" id="absence-report-form" class="mb-0">
             <div class="mb-2">
               <label for="id_user" class="form-label">User</label>
               {{ report_form.user }}
@@ -138,7 +263,7 @@
           </script>
 
           {% if report_occurrences %}
-          <h5 class="mt-4">Occurrences for {{ report_selected_user.payroll_display_name }}</h5>
+          <h5 class="mt-4">Absences for {{ report_selected_user.payroll_display_name }}</h5>
           <table class="table table-bordered">
               <thead>
                   <tr>
@@ -162,6 +287,7 @@
 
       <div class="card mb-4">
         <div class="card-body">
+          <h3 class="mb-4">Balance Summary</h3>
           <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
             <h5 class="mb-0">Paid Time Off Balance ({{ selected_user.payroll_display_name }})</h5>
             {% if user_list|length > 1 %}
@@ -193,7 +319,7 @@
 
       <div class="card mb-4">
         <div class="card-body">
-          <h5>Past Occurrences (since last service date)</h5>
+          <h5>Past Absences (since last service date)</h5>
           <table class="table table-bordered">
             <thead>
               <tr>
@@ -209,7 +335,7 @@
                 <td>{{ occ.duration_hours }}</td>
               </tr>
               {% empty %}
-              <tr><td colspan="4">No past occurrences.</td></tr>
+              <tr><td colspan="4">No past absences.</td></tr>
               {% endfor %}
             </tbody>
           </table>
@@ -218,7 +344,7 @@
 
       <div class="card mb-4">
         <div class="card-body">
-          <h5>Upcoming Occurrences</h5>
+          <h5>Upcoming Absences</h5>
           <table class="table table-bordered">
             <thead>
               <tr>
@@ -234,7 +360,7 @@
                 <td>{{ occ.duration_hours }}</td>
               </tr>
               {% empty %}
-              <tr><td colspan="4">No upcoming occurrences.</td></tr>
+              <tr><td colspan="4">No upcoming absences.</td></tr>
               {% endfor %}
             </tbody>
           </table>

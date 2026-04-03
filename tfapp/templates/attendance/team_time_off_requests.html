@@ -7,7 +7,8 @@
     <div class="row justify-content-center">
         <div class="col-lg-12 col-md-10 col-sm-12">
 
-            <h1 class="mb-4">Team Time Off Requests</h1>
+            <h1 class="mb-4">Approvals</h1>
+            <p class="text-muted mb-4">Pending time off, work-through-lunch, and adjust-punch requests for your team.</p>
 
             {% if messages %}
                 {% for message in messages %}
@@ -20,7 +21,7 @@
 
             <div class="card mb-4">
                 <div class="card-body">
-                    <h5 class="mb-3">Pending requests</h5>
+                    <h5 class="mb-3">Pending time off</h5>
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered">
                             <thead>
@@ -62,20 +63,118 @@
                                                 —
                                             {% endif %}
                                         </td>
-                                        <td class="text-end">
-                                            <form method="post" action="{% url 'attendance:approve_time_off' r.slug %}" class="d-inline">
-                                                {% csrf_token %}
-                                                <button type="submit" class="btn btn-success btn-sm">Approve</button>
-                                            </form>
-                                            <form method="post" action="{% url 'attendance:deny_time_off' r.slug %}" class="d-inline ms-1">
-                                                {% csrf_token %}
-                                                <button type="submit" class="btn btn-danger btn-sm">Deny</button>
-                                            </form>
+                                        <td class="text-md-end">
+                                            <div class="d-flex flex-column flex-md-row gap-2 justify-content-md-end align-items-start align-items-md-center">
+                                                <form method="post" action="{% url 'attendance:approve_time_off' r.slug %}" class="m-0">
+                                                    {% csrf_token %}
+                                                    <button type="submit" class="btn btn-success btn-sm">Approve</button>
+                                                </form>
+                                                <form method="post" action="{% url 'attendance:deny_time_off' r.slug %}" class="m-0">
+                                                    {% csrf_token %}
+                                                    <button type="submit" class="btn btn-danger btn-sm">Deny</button>
+                                                </form>
+                                            </div>
                                         </td>
                                     </tr>
                                 {% empty %}
                                     <tr>
                                         <td colspan="8" class="text-muted text-center py-3">No pending requests to review.</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="mb-3">Pending work through lunch</h5>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Submitted</th>
+                                    <th>Work date</th>
+                                    <th>Comments</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for r in pending_work_through_lunch %}
+                                    <tr>
+                                        <td>{{ r.user.get_full_name|default:r.user.username }}</td>
+                                        <td>{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                                        <td>{{ r.work_date }}</td>
+                                        <td>{{ r.comments|default:"—" }}</td>
+                                        <td class="text-md-end">
+                                            <div class="d-flex flex-column flex-md-row gap-2 justify-content-md-end align-items-start align-items-md-center">
+                                                <form method="post" action="{% url 'attendance:approve_work_through_lunch' r.slug %}" class="m-0">
+                                                    {% csrf_token %}
+                                                    <button type="submit" class="btn btn-success btn-sm">Approve</button>
+                                                </form>
+                                                <form method="post" action="{% url 'attendance:deny_work_through_lunch' r.slug %}" class="m-0">
+                                                    {% csrf_token %}
+                                                    <button type="submit" class="btn btn-danger btn-sm">Deny</button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% empty %}
+                                    <tr>
+                                        <td colspan="5" class="text-muted text-center py-3">No pending work-through-lunch requests.</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="mb-3">Pending adjust punch</h5>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Submitted</th>
+                                    <th>Work date</th>
+                                    <th>Punch</th>
+                                    <th>Current / previous</th>
+                                    <th>Requested</th>
+                                    <th>Comments</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for r in pending_adjust_punch %}
+                                    <tr>
+                                        <td>{{ r.user.get_full_name|default:r.user.username }}</td>
+                                        <td>{{ r.created_at|date:"Y-m-d H:i" }}</td>
+                                        <td>{{ r.time_entry.date }}</td>
+                                        <td>{{ r.get_punch_field_display }}</td>
+                                        <td>{% if r.previous_at %}{{ r.previous_at }}{% else %}—{% endif %}</td>
+                                        <td>{{ r.requested_at }}</td>
+                                        <td>{{ r.comments|default:"—" }}</td>
+                                        <td class="text-md-end">
+                                            <div class="d-flex flex-column flex-md-row gap-2 justify-content-md-end align-items-start align-items-md-center">
+                                                <form method="post" action="{% url 'attendance:approve_adjust_punch' r.slug %}" class="m-0">
+                                                    {% csrf_token %}
+                                                    <button type="submit" class="btn btn-success btn-sm">Approve</button>
+                                                </form>
+                                                <form method="post" action="{% url 'attendance:deny_adjust_punch' r.slug %}" class="m-0">
+                                                    {% csrf_token %}
+                                                    <button type="submit" class="btn btn-danger btn-sm">Deny</button>
+                                                </form>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                {% empty %}
+                                    <tr>
+                                        <td colspan="8" class="text-muted text-center py-3">No pending adjust-punch requests.</td>
                                     </tr>
                                 {% endfor %}
                             </tbody>

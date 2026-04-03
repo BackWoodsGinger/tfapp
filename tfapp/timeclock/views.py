@@ -177,7 +177,9 @@ def edit_entry(request, slug):
         if form.is_valid():
             form.save()
             messages.success(request, "Time entry updated successfully.")
-            return redirect("attendance:payroll")
+            if request.user.role == RoleChoices.EXECUTIVE:
+                return redirect("attendance:payroll")
+            return redirect("attendance:dashboard")
     else:
         form = TimeEntryForm(instance=entry)
 

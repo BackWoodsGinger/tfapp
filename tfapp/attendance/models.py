@@ -1,5 +1,5 @@
 import math
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from django.db import models
 from django.db.models import JSONField, Q, UniqueConstraint
 from django.conf import settings
@@ -231,6 +231,21 @@ class OccurrenceType(models.TextChoices):
     PLANNED = "Planned", "Planned"
     UNPLANNED = "Unplanned", "Unplanned"
 
+QUARTER_HOUR = Decimal("0.25")
+
+
+def floor_hours_to_quarter_increment(hours: Decimal) -> Decimal:
+    """
+    Floor hours to payroll quarter-hour increments (0.25).
+    PTO balance may accrue in hundredths (e.g. 1.33 from 40/30 accrual), but only
+    whole quarter-hours may be applied toward an absence; the fractional balance remains.
+    """
+    if hours <= 0:
+        return Decimal("0")
+    quarters = (hours / QUARTER_HOUR).to_integral_value(rounding=ROUND_DOWN)
+    return quarters * QUARTER_HOUR
+
+
 class OccurrenceSubtype(models.TextChoices):
     TIME_OFF = "Time Off", "Time Off"
     TARDY_IN_GRACE = "Tardy In Grace", "Tardy In Grace"
@@ -303,7 +318,11 @@ class PTOBalanceHistory(models.Model):
 
 class Occurrence(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
-    occurrence_type = models.CharField(max_length=20, choices=OccurrenceType.choices)
+    occurrence_type = models.CharField(
+        "Type",
+        max_length=20,
+        choices=OccurrenceType.choices,
+    )
     subtype = models.CharField(max_length=50, choices=OccurrenceSubtype.choices)
     date = models.DateField()
     duration_hours = models.FloatField(default=0.0)
@@ -324,10 +343,12 @@ class Occurrence(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="occurrences_created",
-        help_text="Set when this occurrence was created at payroll finalize (variance or tardy); used to revert on unfinalize.",
+        help_text="Set when this absence was created at payroll finalize (variance or tardy); used to revert on unfinalize.",
     )
 
     class Meta:
+        verbose_name = "Absence"
+        verbose_name_plural = "Absences"
         indexes = [
             models.Index(fields=["user", "date"]),
         ]
@@ -360,8 +381,11 @@ class Occurrence(models.Model):
     def apply_pto(self, max_pto_to_apply=None):
         """
         Deduct from PTO (then personal) for this occurrence. Only if occurrence date has passed.
+        PTO is taken only in quarter-hour increments floored from the user's available balance
+        (e.g. balance 1.33 allows at most 1.25 toward this absence; remainder stays in PTO).
         If max_pto_to_apply is set (e.g. 40 - worked for the week), cap PTO deduction so
-        regular + PTO does not exceed the cap. Returns the number of PTO hours deducted.
+        regular + PTO does not exceed the cap (cap is also floored to quarter hours).
+        Returns the number of PTO hours deducted.
         Uses Decimal for calculations to avoid float drift; runs in a transaction with row lock.
         """
         from django.db import transaction
@@ -407,9 +431,11 @@ class Occurrence(models.Model):
             # convert any remaining hours into personal/unpaid time. Remaining
             # hours are treated as leave for tracking only.
             if self.subtype in [OccurrenceSubtype.FMLA, OccurrenceSubtype.LEAVE_OF_ABSENCE]:
-                pto_deducted = min(used, pto_bal)
+                pto_usable = floor_hours_to_quarter_increment(pto_bal)
+                pto_deducted = min(used, pto_usable)
                 if max_pto_to_apply is not None:
-                    pto_deducted = min(pto_deducted, Decimal(str(max_pto_to_apply)))
+                    cap = floor_hours_to_quarter_increment(Decimal(str(max_pto_to_apply)))
+                    pto_deducted = min(pto_deducted, cap)
                 new_pto = max(Decimal("0"), pto_bal - pto_deducted)
                 u.pto_balance = float(new_pto.quantize(Decimal("0.01")))
                 u.save()
@@ -426,10 +452,13 @@ class Occurrence(models.Model):
                 self.save()
                 return float(pto_deducted.quantize(Decimal("0.01")))
 
-            # Default behavior: PTO first, then remaining hours to personal time.
-            pto_deducted = min(used, pto_bal)
+            # Default behavior: PTO first (quarter-hour increments from balance only), then
+            # remaining hours to personal time.
+            pto_usable = floor_hours_to_quarter_increment(pto_bal)
+            pto_deducted = min(used, pto_usable)
             if max_pto_to_apply is not None:
-                pto_deducted = min(pto_deducted, Decimal(str(max_pto_to_apply)))
+                cap = floor_hours_to_quarter_increment(Decimal(str(max_pto_to_apply)))
+                pto_deducted = min(pto_deducted, cap)
             personal_deducted = used - pto_deducted
             new_pto = max(Decimal("0"), pto_bal - pto_deducted)
             new_personal = personal_bal + personal_deducted
@@ -455,6 +484,38 @@ class Occurrence(models.Model):
             self.pto_applied = True
             self.save()
         return float(pto_deducted.quantize(Decimal("0.01")))
+
+
+def revert_tardy_occurrences_for_adjust_punch(user, occ_date):
+    """
+    Before applying an approved punch adjustment, remove tardy occurrences for that calendar day,
+    refunding any PTO/personal that was applied for them (same idea as cancelling time off).
+    Call inside transaction.atomic(); ``user`` must be the locked CustomUser instance (select_for_update).
+    """
+    qs = Occurrence.objects.filter(
+        user=user,
+        date=occ_date,
+        subtype__in=[
+            OccurrenceSubtype.TARDY_IN_GRACE,
+            OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+        ],
+    )
+    if not qs.exists():
+        return
+    for occ in qs:
+        if occ.pto_applied:
+            user.pto_balance = round(user.pto_balance + occ.pto_hours_applied, 2)
+            user.personal_time_balance = round(
+                max(0.0, user.personal_time_balance - occ.personal_hours_applied), 2
+            )
+            PTOBalanceHistory.record(
+                user=user,
+                change=float(occ.pto_hours_applied),
+                reason=f"Adjust punch: revert {occ.get_subtype_display()} ({occ.date})",
+                balance_after=user.pto_balance,
+            )
+        occ.delete()
+    user.save()
 
 
 def apply_past_due_occurrences(user):
@@ -647,6 +708,140 @@ class TimeOffRequest(models.Model):
             u.save()
         self.status = TimeOffRequestStatus.CANCELLED
         self.save()
+
+
+class WorkThroughLunchRequest(models.Model):
+    """
+    Request to work through a scheduled lunch period (no lunch break taken).
+    When approved, automatic lunch deduction and scheduled lunch punches are skipped for that day.
+    """
+
+    slug = models.SlugField(max_length=48, unique=True, editable=False, db_index=True)
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="work_through_lunch_requests",
+    )
+    work_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    status = models.CharField(
+        max_length=20,
+        choices=TimeOffRequestStatus.choices,
+        default=TimeOffRequestStatus.PENDING,
+    )
+    approver = models.ForeignKey(
+        CustomUser,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_work_through_lunch_requests",
+    )
+    comments = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.username} work through lunch {self.work_date} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            ensure_unique_slug(self, "slug", max_length=48)
+        super().save(*args, **kwargs)
+
+    def approve(self, approver_user):
+        if self.status != TimeOffRequestStatus.PENDING:
+            return
+        self.approver = approver_user
+        self.status = TimeOffRequestStatus.APPROVED
+        self.save()
+
+    def deny(self, approver_user):
+        if self.status != TimeOffRequestStatus.PENDING:
+            return
+        self.approver = approver_user
+        self.status = TimeOffRequestStatus.DENIED
+        self.save()
+
+    def cancel(self):
+        if self.status == TimeOffRequestStatus.PENDING:
+            self.status = TimeOffRequestStatus.CANCELLED
+            self.save()
+        elif self.status == TimeOffRequestStatus.APPROVED:
+            self.status = TimeOffRequestStatus.CANCELLED
+            self.save()
+
+
+class AdjustPunchField(models.TextChoices):
+    CLOCK_IN = "clock_in", "Clock in"
+    LUNCH_OUT = "lunch_out", "Lunch out"
+    LUNCH_IN = "lunch_in", "Lunch in"
+    CLOCK_OUT = "clock_out", "Clock out"
+
+
+class AdjustPunchRequest(models.Model):
+    """
+    Request to correct a recorded punch time. On approval, tardy-related occurrences for that day
+    are reverted (PTO/personal refunded), the punch is updated, then tardy rules may re-run.
+    """
+
+    slug = models.SlugField(max_length=48, unique=True, editable=False, db_index=True)
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name="adjust_punch_requests",
+    )
+    time_entry = models.ForeignKey(
+        "timeclock.TimeEntry",
+        on_delete=models.CASCADE,
+        related_name="adjust_punch_requests",
+    )
+    punch_field = models.CharField(max_length=20, choices=AdjustPunchField.choices)
+    previous_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Punch value at time of request (for audit).",
+    )
+    requested_at = models.DateTimeField(help_text="Requested corrected date/time for this punch.")
+    comments = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    status = models.CharField(
+        max_length=20,
+        choices=TimeOffRequestStatus.choices,
+        default=TimeOffRequestStatus.PENDING,
+    )
+    approver = models.ForeignKey(
+        CustomUser,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="approved_adjust_punch_requests",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.username} adjust punch {self.punch_field} {self.time_entry.date} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            ensure_unique_slug(self, "slug", max_length=48)
+        super().save(*args, **kwargs)
+
+    def deny(self, approver_user):
+        if self.status != TimeOffRequestStatus.PENDING:
+            return
+        self.approver = approver_user
+        self.status = TimeOffRequestStatus.DENIED
+        self.save()
+
+    def cancel(self):
+        if self.status == TimeOffRequestStatus.PENDING:
+            self.status = TimeOffRequestStatus.CANCELLED
+            self.save()
 
 
 class PayrollPeriod(models.Model):
