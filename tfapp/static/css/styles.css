@@ -169,3 +169,16 @@ input[type="date"].form-control {
   min-width: 11rem;
   max-width: 100%;
 }
+
+/* Narrow phones: slightly smaller root size so layouts and tables read better */
+@media (max-width: 575.98px) {
+  html {
+    font-size: 0.9375rem; /* ~15px from 16px baseline */
+  }
+}
+
+@media (max-width: 399.98px) {
+  html {
+    font-size: 0.875rem; /* ~14px on very small screens */
+  }
+}
