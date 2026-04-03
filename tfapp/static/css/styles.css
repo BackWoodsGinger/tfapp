@@ -53,13 +53,35 @@ header #main-header {
 .card-body {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  align-items: center;
+  justify-content: flex-start;
+  /* stretch + min-width:0 so wide tables stay inside the card and scroll (mobile) */
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   background-color: #2c2b2b; /* Dark background for cards */
   color: #ffffff; /* White text for contrast */
   border-radius: 8px;
   box-shadow: 0 4px 8px rgba(0, 0, 0, 0.6); /* Subtle shadow for depth */
   padding: 1rem;
+}
+
+/* Flex/grid columns: allow shrinking so nested tables don’t force page width */
+.container .row > [class*="col-"] {
+  min-width: 0;
+}
+
+.card {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* Horizontal scroll for wide tables; smooth touch scrolling on iOS */
+.table-responsive {
+  max-width: 100%;
+  min-width: 0;
+  -webkit-overflow-scrolling: touch;
 }
 .card-body:hover {
   background-color: #272727; /* Slightly lighter on hover */

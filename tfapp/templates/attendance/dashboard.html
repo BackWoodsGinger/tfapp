@@ -3,6 +3,8 @@
 <style>
   /* Perfect Attendance: ~10 table-sm rows visible, rest scroll (sticky header). */
   .pa-table-scroll-wrap {
+    max-width: 100%;
+    min-width: 0;
     max-height: min(22rem, 55vh);
     overflow: auto;
     border: 1px solid var(--bs-border-color);
@@ -108,28 +110,30 @@
             </div>
           </form>
 
-          <table class="table table-sm table-bordered">
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Type</th>
-                <th>Subtype</th>
-                <th>Hours</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for occ in daily_occurrences %}
-              <tr>
-                <td>{{ occ.user.payroll_display_name }}</td>
-                <td>{{ occ.get_occurrence_type_display }}</td>
-                <td>{{ occ.get_subtype_display }}</td>
-                <td>{{ occ.duration_hours }}</td>
-              </tr>
-              {% empty %}
-              <tr><td colspan="4">No absences on this day.</td></tr>
-              {% endfor %}
-            </tbody>
-          </table>
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered mb-0">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Type</th>
+                  <th>Subtype</th>
+                  <th>Hours</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for occ in daily_occurrences %}
+                <tr>
+                  <td>{{ occ.user.payroll_display_name }}</td>
+                  <td>{{ occ.get_occurrence_type_display }}</td>
+                  <td>{{ occ.get_subtype_display }}</td>
+                  <td>{{ occ.duration_hours }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4">No absences on this day.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
           {% endif %}
         </div>
       </div>
@@ -276,23 +280,28 @@
 
           {% if report_occurrences %}
           <h5 class="mt-4">Absences for {{ report_selected_user.payroll_display_name }}</h5>
-          <table class="table table-bordered">
+          <div class="table-responsive">
+            <table class="table table-bordered table-sm mb-0">
               <thead>
-                  <tr>
-                      <th>Date</th><th>Type</th><th>Subtype</th><th>Hours</th>
-                  </tr>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Subtype</th>
+                  <th>Hours</th>
+                </tr>
               </thead>
               <tbody>
-                  {% for occ in report_occurrences %}
-                  <tr>
-                      <td>{{ occ.date }}</td>
-                      <td>{{ occ.get_occurrence_type_display }}</td>
-                      <td>{{ occ.get_subtype_display }}</td>
-                      <td>{{ occ.duration_hours }}</td>
-                  </tr>
-                  {% endfor %}
+                {% for occ in report_occurrences %}
+                <tr>
+                  <td>{{ occ.date }}</td>
+                  <td>{{ occ.get_occurrence_type_display }}</td>
+                  <td>{{ occ.get_subtype_display }}</td>
+                  <td>{{ occ.duration_hours }}</td>
+                </tr>
+                {% endfor %}
               </tbody>
-          </table>
+            </table>
+          </div>
           {% endif %}
         </div>
       </div>
@@ -333,32 +342,34 @@
         <div class="card-body">
           <h5>Past Absences (since last service date)</h5>
           <p class="text-muted small mb-2">PTO and personal columns reflect how each absence was applied to balances. Subtypes that do not use PTO/personal may show 0 for both while total duration is still listed.</p>
-          <table class="table table-bordered table-sm">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Type</th>
-                <th>Subtype</th>
-                <th class="text-end">Total hrs</th>
-                <th class="text-end">PTO hrs</th>
-                <th class="text-end">Personal hrs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for occ in past_occurrences %}
-              <tr>
-                <td>{{ occ.date }}</td>
-                <td>{{ occ.get_occurrence_type_display }}</td>
-                <td>{{ occ.get_subtype_display }}</td>
-                <td class="text-end">{{ occ.duration_hours|floatformat:2 }}</td>
-                <td class="text-end">{{ occ.pto_hours_applied|floatformat:2 }}</td>
-                <td class="text-end">{{ occ.personal_hours_applied|floatformat:2 }}</td>
-              </tr>
-              {% empty %}
-              <tr><td colspan="6" class="text-muted">No past absences.</td></tr>
-              {% endfor %}
-            </tbody>
-          </table>
+          <div class="table-responsive">
+            <table class="table table-bordered table-sm mb-0">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Subtype</th>
+                  <th class="text-end">Total hrs</th>
+                  <th class="text-end">PTO hrs</th>
+                  <th class="text-end">Personal hrs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for occ in past_occurrences %}
+                <tr>
+                  <td>{{ occ.date }}</td>
+                  <td>{{ occ.get_occurrence_type_display }}</td>
+                  <td>{{ occ.get_subtype_display }}</td>
+                  <td class="text-end">{{ occ.duration_hours|floatformat:2 }}</td>
+                  <td class="text-end">{{ occ.pto_hours_applied|floatformat:2 }}</td>
+                  <td class="text-end">{{ occ.personal_hours_applied|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-muted">No past absences.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -366,32 +377,34 @@
         <div class="card-body">
           <h5>Upcoming Absences</h5>
           <p class="text-muted small mb-2">PTO and personal amounts are usually 0 until the absence date; they update when balances are applied.</p>
-          <table class="table table-bordered table-sm">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Type</th>
-                <th>Subtype</th>
-                <th class="text-end">Total hrs</th>
-                <th class="text-end">PTO hrs</th>
-                <th class="text-end">Personal hrs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for occ in future_occurrences %}
-              <tr>
-                <td>{{ occ.date }}</td>
-                <td>{{ occ.get_occurrence_type_display }}</td>
-                <td>{{ occ.get_subtype_display }}</td>
-                <td class="text-end">{{ occ.duration_hours|floatformat:2 }}</td>
-                <td class="text-end">{{ occ.pto_hours_applied|floatformat:2 }}</td>
-                <td class="text-end">{{ occ.personal_hours_applied|floatformat:2 }}</td>
-              </tr>
-              {% empty %}
-              <tr><td colspan="6" class="text-muted">No upcoming absences.</td></tr>
-              {% endfor %}
-            </tbody>
-          </table>
+          <div class="table-responsive">
+            <table class="table table-bordered table-sm mb-0">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Subtype</th>
+                  <th class="text-end">Total hrs</th>
+                  <th class="text-end">PTO hrs</th>
+                  <th class="text-end">Personal hrs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for occ in future_occurrences %}
+                <tr>
+                  <td>{{ occ.date }}</td>
+                  <td>{{ occ.get_occurrence_type_display }}</td>
+                  <td>{{ occ.get_subtype_display }}</td>
+                  <td class="text-end">{{ occ.duration_hours|floatformat:2 }}</td>
+                  <td class="text-end">{{ occ.pto_hours_applied|floatformat:2 }}</td>
+                  <td class="text-end">{{ occ.personal_hours_applied|floatformat:2 }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="text-muted">No upcoming absences.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
