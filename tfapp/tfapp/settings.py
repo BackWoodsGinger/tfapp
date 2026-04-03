@@ -217,7 +217,9 @@ LOGIN_REDIRECT_URL = "/"
 #
 # Optional: set DJANGO_SITE_BASE_URL (or SITE_BASE_URL) to your public origin, e.g.
 #   https://tfapp.example.com
-# so approval-notification emails include a clickable link to the team requests page.
+# Approval notification emails are sent as HTML with a real link to the team requests page.
+# If unset, the app may infer https://<ALLOWED_HOSTS> when there is exactly one non-local host
+# and SECURE_SSL_REDIRECT is True (https); otherwise http. For localhost, set the URL explicitly.
 #
 if os.environ.get("EMAIL_HOST"):
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"

@@ -78,7 +78,12 @@ class ApprovalEmailSendTests(TestCase):
         msg = mail.outbox[0]
         self.assertEqual(msg.to, ["lead@example.com"])
         self.assertIn("Time off", msg.subject)
-        self.assertIn("app.example.com", msg.body)
+        self.assertIn("https://app.example.com", msg.body)
+        self.assertTrue(getattr(msg, "alternatives", None))
+        html = msg.alternatives[0][0]
+        self.assertEqual(msg.alternatives[0][1], "text/html")
+        self.assertIn("https://app.example.com/attendance/timeoff/team/", html)
+        self.assertIn('href="https://app.example.com/attendance/timeoff/team/"', html)
 
     def test_time_off_cancelled_email(self):
         tor = TimeOffRequest.objects.create(
