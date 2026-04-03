@@ -151,26 +151,11 @@ def _scheduled_but_not_clocked_in(visible_users, on_date: date):
     return out
 
 
-def _users_with_no_unplanned_absences(visible_users, first: date, period_end: date):
-    """All visible users with zero UNPLANNED absences in [first, period_end]."""
-    names = []
-    for u in visible_users:
-        has_unplanned = Occurrence.objects.filter(
-            user=u,
-            occurrence_type=OccurrenceType.UNPLANNED,
-            date__gte=first,
-            date__lte=period_end,
-        ).exists()
-        if not has_unplanned:
-            names.append(u)
-    names.sort(key=_payroll_sort_key)
-    return names
-
-
 def _perfect_attendance_with_hours(visible_users, first: date, period_end: date):
     """
-    Non-exempt users with no unplanned absences in range who have at least one completed time entry;
-    total is sum of reported_worked_hours (payroll-reported time entry hours, not PTO absence hours).
+    Non-exempt users only: zero UNPLANNED absences in [first, period_end].
+    total_hours is the sum of reported_worked_hours on completed time entries in that range
+    (0.00 if none); PTO / absence hours are not included.
     """
     rows = []
     for u in visible_users.filter(is_exempt=False):
@@ -182,10 +167,13 @@ def _perfect_attendance_with_hours(visible_users, first: date, period_end: date)
         ).exists()
         if has_unplanned:
             continue
-        entries = TimeEntry.objects.filter(user=u, date__gte=first, date__lte=period_end)
-        completed = entries.filter(clock_in__isnull=False, clock_out__isnull=False)
-        if not completed.exists():
-            continue
+        completed = TimeEntry.objects.filter(
+            user=u,
+            date__gte=first,
+            date__lte=period_end,
+            clock_in__isnull=False,
+            clock_out__isnull=False,
+        )
         total_hours = 0.0
         for e in completed:
             total_hours += e.reported_worked_hours()
@@ -384,7 +372,6 @@ def dashboard(request):
     if pa_first > today:
         pa_period_end = None
         pa_period_description = ""
-        no_unplanned_users = []
         perfect_attendance_rows = []
         pa_hours_total = 0.0
     else:
@@ -395,9 +382,6 @@ def dashboard(request):
             )
         else:
             pa_period_description = f"{pa_first:%B %Y}"
-        no_unplanned_users = _users_with_no_unplanned_absences(
-            visible_users, pa_first, pa_period_end
-        )
         perfect_attendance_rows = _perfect_attendance_with_hours(
             visible_users, pa_first, pa_period_end
         )
@@ -440,7 +424,6 @@ def dashboard(request):
         "pa_year_choices": pa_year_choices,
         "pa_period_description": pa_period_description,
         "pa_period_end": pa_period_end,
-        "no_unplanned_users": no_unplanned_users,
         "perfect_attendance_rows": perfect_attendance_rows,
         "pa_hours_total": pa_hours_total,
     }

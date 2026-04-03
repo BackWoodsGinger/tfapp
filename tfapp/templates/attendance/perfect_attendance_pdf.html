@@ -24,7 +24,7 @@
         <h3>Perfect Attendance</h3>
         <p><strong>Period:</strong> {{ period_description }}</p>
         <p><strong>Generated:</strong> {{ generated_at }}</p>
-        <p class="small">Reported hours are from completed time entries (payroll-reported work time). PTO and absence hours are excluded.</p>
+        <p class="small">Non-exempt employees with no unplanned absences in the period. Reported hours are from completed time entries only (PTO and absence hours excluded). 0.00 means no completed punches in range.</p>
     </div>
 
     <table>
@@ -42,7 +42,7 @@
             </tr>
             {% empty %}
             <tr>
-                <td colspan="2">No employees qualify for this period (no unplanned absences and at least one completed time entry).</td>
+                <td colspan="2">No non-exempt employees qualify for this period (no unplanned absences).</td>
             </tr>
             {% endfor %}
         </tbody>

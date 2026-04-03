@@ -157,20 +157,8 @@
           {% else %}
           <p class="text-muted small mb-2"><strong>Period:</strong> {{ pa_period_description }}</p>
 
-          <h5 class="mt-3">Employees with no unplanned absences</h5>
-          <p class="text-muted small">Anyone in your view with zero unplanned absences in this period (planned time off and holidays do not count).</p>
-          {% if no_unplanned_users %}
-          <ul class="mb-4">
-            {% for u in no_unplanned_users %}
-            <li>{{ u.payroll_display_name }}</li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="text-muted mb-4">None.</p>
-          {% endif %}
-
-          <h5>Completed time entries (reported hours)</h5>
-          <p class="text-muted small mb-2">Non-exempt employees with no unplanned absences in the period who have at least one completed time entry. Hours are payroll-reported time entry totals (PTO hours are not included).</p>
+          <h5 class="mt-3">Qualifying employees</h5>
+          <p class="text-muted small mb-2">Non-exempt employees in your view with no unplanned absences in this period (planned time off and holidays do not count). Hours are payroll-reported totals from completed time entries only (PTO is not included); 0.00 means no completed punches in range.</p>
           <div class="table-responsive">
             <table class="table table-sm table-bordered align-middle mb-0">
               <thead>
@@ -186,7 +174,7 @@
                   <td class="text-end">{{ row.total_hours|floatformat:2 }}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="2" class="text-muted">No employees qualify for this period.</td></tr>
+                <tr><td colspan="2" class="text-muted">No non-exempt employees qualify for this period.</td></tr>
                 {% endfor %}
               </tbody>
               {% if perfect_attendance_rows %}
