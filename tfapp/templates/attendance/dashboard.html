@@ -1,5 +1,24 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  /* Perfect Attendance: ~10 table-sm rows visible, rest scroll (sticky header). */
+  .pa-table-scroll-wrap {
+    max-height: min(22rem, 55vh);
+    overflow: auto;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.375rem;
+  }
+  .pa-table-scroll-wrap table {
+    margin-bottom: 0;
+  }
+  .pa-table-scroll-wrap thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background-color: var(--bs-body-bg, #fff);
+    box-shadow: inset 0 -1px 0 var(--bs-border-color);
+  }
+</style>
 <div class="container mt-4">
   <div class="row justify-content-center">
     <div class="col-lg-12 col-md-10 col-sm-12">
@@ -159,7 +178,8 @@
 
           <h5 class="mt-3">Qualifying employees</h5>
           <p class="text-muted small mb-2">Non-exempt employees in your view with no unplanned absences in this period (planned time off and holidays do not count). Hours are payroll-reported totals from completed time entries only (PTO is not included); 0.00 means no completed punches in range.</p>
-          <div class="table-responsive">
+          <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
+          <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Perfect attendance list" tabindex="0">
             <table class="table table-sm table-bordered align-middle mb-0">
               <thead>
                 <tr>
