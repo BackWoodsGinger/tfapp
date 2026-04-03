@@ -17,9 +17,17 @@ from .models import (
 
 
 class WorkScheduleInline(admin.TabularInline):
+    """
+    Per-weekday rows: start/end required; lunch_out and lunch_in are optional.
+    Leave lunch fields blank for half-day / no-lunch shifts (e.g. 6:30–11:00 Friday).
+    """
+
     model = WorkSchedule
     extra = 0
-    ordering = ['day']
+    ordering = ["day"]
+    fields = ("day", "start_time", "lunch_out", "lunch_in", "end_time", "crosses_midnight")
+    verbose_name = "work day"
+    verbose_name_plural = "Work schedules (per weekday)"
 
 @admin.action(description="Recalculate PTO Based on Service Anniversary")
 def recalculate_pto(modeladmin, request, queryset):
@@ -148,6 +156,20 @@ class CustomUserAdmin(BaseUserAdmin):
                 'pto_balance', 'personal_time_balance', 'final_pto_balance', 'hours_worked'
             )
         }),
+        (
+            "Scheduling",
+            {
+                "fields": ("weekly_schedule",),
+                "description": (
+                    "Optional JSON schedule (keys: monday … sunday). Each day needs "
+                    "<code>start</code> and <code>end</code> (HH:MM). "
+                    "<strong>Half-day / no lunch:</strong> omit <code>lunch_out</code> and "
+                    "<code>lunch_in</code> for that day (e.g. Friday 06:30–11:00). "
+                    "If both this JSON and the work-schedule table below are set, "
+                    "<strong>JSON wins</strong> for that weekday."
+                ),
+            },
+        ),
         ('Permissions', {
             'fields': (
                 'is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions'

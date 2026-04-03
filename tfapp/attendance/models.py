@@ -17,8 +17,16 @@ class WorkSchedule(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="schedules")
     day = models.IntegerField(choices=DAYS_OF_WEEK)
     start_time = models.TimeField()
-    lunch_out = models.TimeField()
-    lunch_in = models.TimeField()
+    lunch_out = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Leave blank for half-day or no-lunch shifts (e.g. Friday 6:30–11:00).",
+    )
+    lunch_in = models.TimeField(
+        null=True,
+        blank=True,
+        help_text="Leave blank when lunch out is blank.",
+    )
     end_time = models.TimeField()
     crosses_midnight = models.BooleanField(
         default=False,
@@ -58,7 +66,12 @@ class CustomUser(AbstractUser):
     timeclock_pin = models.CharField(max_length=4, blank=True, null=True)
     payroll_lastname = models.CharField(max_length=150, blank=True, default="")
     payroll_firstname = models.CharField(max_length=150, blank=True, default="")
-    weekly_schedule = JSONField(default=dict, blank=True, null=True)  # e.g. {"monday": {"start": "05:00", "lunch_out": "12:00", "lunch_in": "12:30", "end": "14:00"}, ...}
+    weekly_schedule = JSONField(
+        default=dict,
+        blank=True,
+        null=True,
+        help_text='Per weekday: "start", "end", optional "lunch_out"/"lunch_in" (omit both for no lunch). Optional "crosses_midnight": true.',
+    )
     supervisor = models.ForeignKey(
         'self', null=True, blank=True, on_delete=models.SET_NULL, related_name="supervisees"
     )
@@ -588,35 +601,22 @@ class TimeOffRequest(models.Model):
             ensure_unique_slug(self, "slug", max_length=48)
         super().save(*args, **kwargs)
 
-    def _iter_scheduled_days(self):
-        """
-        Yield (date, schedule) pairs for dates between start_date and end_date
-        where the user has a WorkSchedule.
-        """
-        current = self.start_date
-        while current <= self.end_date:
-            weekday = current.weekday()
-            schedule = self.user.schedules.filter(day=weekday).first()
-            if schedule:
-                yield current, schedule
-            current += timedelta(days=1)
-
     def compute_requested_hours(self):
         """
-        Compute total scheduled hours for this request window,
-        based on the user's WorkSchedule.
+        Compute total scheduled hours for this request window from weekly_schedule JSON
+        and/or WorkSchedule (including half-day rows with no lunch).
         """
+        from .schedule_utils import scheduled_duration_hours_for_day
+
         if self.partial_day:
             return max(float(self.partial_hours or 0), 0.0)
         total = 0.0
-        for _date, schedule in self._iter_scheduled_days():
-            start_dt = datetime.combine(_date, schedule.start_time)
-            end_dt = datetime.combine(_date, schedule.end_time)
-            lunch_out_dt = datetime.combine(_date, schedule.lunch_out)
-            lunch_in_dt = datetime.combine(_date, schedule.lunch_in)
-            daily_hours = (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
-            if daily_hours > 0:
-                total += daily_hours
+        current = self.start_date
+        while current <= self.end_date:
+            h = scheduled_duration_hours_for_day(self.user, current)
+            if h > 0:
+                total += h
+            current += timedelta(days=1)
         return total
 
     def mark_planned_or_unplanned(self):
@@ -643,30 +643,29 @@ class TimeOffRequest(models.Model):
             OccurrenceType.PLANNED if self.planned else OccurrenceType.UNPLANNED
         )
 
-        for _date, schedule in self._iter_scheduled_days():
+        from .schedule_utils import scheduled_duration_hours_for_day
+
+        current = self.start_date
+        while current <= self.end_date:
             if self.partial_day:
-                if _date != self.start_date:
+                if current != self.start_date:
+                    current += timedelta(days=1)
                     continue
                 daily_hours = max(float(self.partial_hours or 0), 0.0)
             else:
-                start_dt = datetime.combine(_date, schedule.start_time)
-                end_dt = datetime.combine(_date, schedule.end_time)
-                lunch_out_dt = datetime.combine(_date, schedule.lunch_out)
-                lunch_in_dt = datetime.combine(_date, schedule.lunch_in)
-                daily_hours = (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
+                daily_hours = scheduled_duration_hours_for_day(self.user, current)
 
-            if daily_hours <= 0:
-                continue
-
-            occ = Occurrence.objects.create(
-                user=self.user,
-                occurrence_type=occurrence_type,
-                subtype=getattr(self, "subtype", OccurrenceSubtype.TIME_OFF),
-                date=_date,
-                duration_hours=daily_hours,
-                time_off_request=self,
-            )
-            occ.apply_pto()
+            if daily_hours > 0:
+                occ = Occurrence.objects.create(
+                    user=self.user,
+                    occurrence_type=occurrence_type,
+                    subtype=getattr(self, "subtype", OccurrenceSubtype.TIME_OFF),
+                    date=current,
+                    duration_hours=daily_hours,
+                    time_off_request=self,
+                )
+                occ.apply_pto()
+            current += timedelta(days=1)
 
     def deny(self, approver_user):
         """
@@ -998,6 +997,8 @@ def ensure_holiday_occurrences_for_range(start_date: date, end_date: date):
     for y in years:
         holiday_dates.update(get_company_holidays(y))
 
+    from .schedule_utils import scheduled_duration_hours_for_day
+
     users = CustomUser.objects.filter(is_active=True, is_exempt=False, is_part_time=False)
 
     for user in users:
@@ -1007,9 +1008,8 @@ def ensure_holiday_occurrences_for_range(start_date: date, end_date: date):
                 current += timedelta(days=1)
                 continue
 
-            weekday = current.weekday()
-            schedule = user.schedules.filter(day=weekday).first()
-            if not schedule:
+            daily_hours = scheduled_duration_hours_for_day(user, current)
+            if daily_hours <= 0:
                 current += timedelta(days=1)
                 continue
 
@@ -1030,15 +1030,6 @@ def ensure_holiday_occurrences_for_range(start_date: date, end_date: date):
                 date=current,
                 subtype=OccurrenceSubtype.HOLIDAY_PAID,
             ).exists():
-                current += timedelta(days=1)
-                continue
-
-            start_dt = datetime.combine(current, schedule.start_time)
-            end_dt = datetime.combine(current, schedule.end_time)
-            lunch_out_dt = datetime.combine(current, schedule.lunch_out)
-            lunch_in_dt = datetime.combine(current, schedule.lunch_in)
-            daily_hours = (end_dt - start_dt - (lunch_in_dt - lunch_out_dt)).total_seconds() / 3600
-            if daily_hours <= 0:
                 current += timedelta(days=1)
                 continue
 

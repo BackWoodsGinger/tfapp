@@ -1,6 +1,18 @@
 {% extends "admin/change_form.html" %}
 {% load i18n %}
 
+{% block after_field_sets %}
+<div class="module" style="margin-bottom: 1rem;">
+  <p class="help" style="max-width: 56em;">
+    <strong>Work schedule table (below):</strong>
+    For each weekday, set <em>Start time</em> and <em>End time</em>.
+    For a <strong>half-day or no-lunch</strong> shift (for example Friday 6:30&nbsp;a.m.–11:00&nbsp;a.m.),
+    leave <em>Lunch out</em> and <em>Lunch in</em> <strong>blank</strong>.
+    Lunch fields are optional; the app treats a row with no lunch times as a single continuous shift.
+  </p>
+</div>
+{% endblock %}
+
 {% block object-tools %}
 {{ block.super }}
 {% if show_refresh_pto %}

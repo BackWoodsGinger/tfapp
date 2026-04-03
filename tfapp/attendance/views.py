@@ -284,7 +284,6 @@ def dashboard(request):
         total_actual = 0
         total_reported = 0
         total_scheduled = 0
-        schedule = u.weekly_schedule or {}
 
         entries = TimeEntry.objects.filter(user=u, date__range=[start_of_week, end_of_week])
         for entry in entries:
@@ -292,19 +291,7 @@ def dashboard(request):
                 total_actual += entry.actual_worked_hours()
                 total_reported += entry.reported_worked_hours()
 
-            weekday = entry.date.strftime("%A").lower()  # "monday", etc.
-            if weekday in schedule:
-                try:
-                    fmt = "%H:%M"
-                    sched = schedule[weekday]
-                    start = datetime.strptime(sched["start"], fmt)
-                    end = datetime.strptime(sched["end"], fmt)
-                    lunch_out = datetime.strptime(sched["lunch_out"], fmt)
-                    lunch_in = datetime.strptime(sched["lunch_in"], fmt)
-                    sched_hours = (end - start - (lunch_in - lunch_out)).total_seconds() / 3600
-                    total_scheduled += sched_hours
-                except (KeyError, ValueError):
-                    continue
+            total_scheduled += scheduled_duration_hours_for_day(u, entry.date)
 
         delta = round(total_reported - total_scheduled, 2)
         weekly_totals.append((

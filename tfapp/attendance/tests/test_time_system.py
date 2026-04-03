@@ -440,6 +440,53 @@ class TestScheduledLunchAutoFill(TestCase):
         self.assertFalse(entry.is_incomplete())
 
 
+class TestScheduleHalfDay(TestCase):
+    """Half-day and no-lunch schedules (omit lunch_out/lunch_in in JSON or leave blank on WorkSchedule)."""
+
+    def test_weekly_json_friday_no_lunch_hours(self):
+        from attendance.schedule_utils import scheduled_duration_hours_for_day
+
+        user = CustomUser.objects.create_user(username="halfuser_json", password="x")
+        user.weekly_schedule = {
+            "monday": {
+                "start": "06:30",
+                "end": "16:00",
+                "lunch_out": "12:00",
+                "lunch_in": "12:30",
+            },
+            "friday": {"start": "06:30", "end": "11:00"},
+        }
+        user.save()
+        fri = date(2025, 3, 7)
+        self.assertAlmostEqual(scheduled_duration_hours_for_day(user, fri), 4.5, places=2)
+
+    def test_workschedule_null_lunch_hours(self):
+        from attendance.schedule_utils import scheduled_duration_hours_for_day
+
+        user = CustomUser.objects.create_user(username="halfuser_ws", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=4,
+            start_time=time(6, 30),
+            lunch_out=None,
+            lunch_in=None,
+            end_time=time(11, 0),
+        )
+        fri = date(2025, 3, 7)
+        self.assertAlmostEqual(scheduled_duration_hours_for_day(user, fri), 4.5, places=2)
+
+    def test_clock_in_out_only_complete_when_no_scheduled_lunch(self):
+        tz = timezone.get_current_timezone()
+        user = CustomUser.objects.create_user(username="halfuser_ci", password="x")
+        user.weekly_schedule = {"friday": {"start": "06:30", "end": "11:00"}}
+        user.save()
+        fri = date(2025, 3, 7)
+        ci = timezone.make_aware(datetime(2025, 3, 7, 6, 30, 0), tz)
+        co = timezone.make_aware(datetime(2025, 3, 7, 11, 0, 0), tz)
+        entry = TimeEntry.objects.create(user=user, date=fri, clock_in=ci, clock_out=co)
+        self.assertFalse(entry.is_incomplete())
+
+
 class TestReportsIncompleteAlerts(TestCase):
     """Reports should only show missing-punch alerts after day completion."""
 

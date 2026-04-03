@@ -7,6 +7,7 @@ from datetime import timedelta, datetime
 from attendance.slug_utils import ensure_unique_slug
 from attendance.schedule_utils import (
     get_scheduled_lunch_in_for_day,
+    get_scheduled_lunch_out_for_day,
     get_scheduled_start_for_day,
     scheduled_lunch_datetimes_for_entry,
     work_through_lunch_approved_for_day,
@@ -60,6 +61,17 @@ class TimeEntry(models.Model):
             and work_through_lunch_approved_for_day(self.user, self.date)
         ):
             return False
+        if (
+            self.clock_in
+            and self.clock_out
+            and self.lunch_out is None
+            and self.lunch_in is None
+            and not (
+                get_scheduled_lunch_out_for_day(self.user, self.date)
+                and get_scheduled_lunch_in_for_day(self.user, self.date)
+            )
+        ):
+            return False
         return True
 
     def total_worked_time(self):
@@ -81,6 +93,11 @@ class TimeEntry(models.Model):
                 lunch = timedelta(minutes=30)
             return lunch
         if work_through_lunch_approved_for_day(self.user, self.date):
+            return timedelta(0)
+        if not (
+            get_scheduled_lunch_out_for_day(self.user, self.date)
+            and get_scheduled_lunch_in_for_day(self.user, self.date)
+        ):
             return timedelta(0)
         return timedelta(minutes=30)
 

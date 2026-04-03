@@ -11,35 +11,56 @@ from django.utils import timezone
 TIME_FMT = "%H:%M"
 
 
+def schedule_row_has_lunch(row: dict | None) -> bool:
+    """True if JSON weekly_schedule row includes both lunch times (half-day / no-lunch rows omit them)."""
+    if not isinstance(row, dict):
+        return False
+    lo = row.get("lunch_out")
+    li = row.get("lunch_in")
+    if lo in (None, "") or li in (None, ""):
+        return False
+    return True
+
+
 def _combine_local(d: date, t) -> datetime:
     naive = datetime.combine(d, t)
     return timezone.make_aware(naive, timezone.get_current_timezone())
 
 
 def get_scheduled_lunch_out_for_day(user, d: date):
-    """Scheduled lunch-out time for date d, or None if not in schedule."""
+    """Scheduled lunch-out time for date d, or None if not in schedule or day has no lunch period."""
     schedule = user.weekly_schedule or {}
     weekday_str = d.strftime("%A").lower()
     if schedule and weekday_str in schedule:
+        row = schedule[weekday_str]
+        if not schedule_row_has_lunch(row):
+            return None
         try:
-            return datetime.strptime(schedule[weekday_str]["lunch_out"], TIME_FMT).time()
+            return datetime.strptime(row["lunch_out"], TIME_FMT).time()
         except (KeyError, ValueError, TypeError):
-            pass
+            return None
     sched = user.schedules.filter(day=d.weekday()).first()
-    return sched.lunch_out if sched else None
+    if sched and sched.lunch_out is not None and sched.lunch_in is not None:
+        return sched.lunch_out
+    return None
 
 
 def get_scheduled_lunch_in_for_day(user, d: date):
-    """Scheduled lunch return time for date d, or None if not in schedule."""
+    """Scheduled lunch return time for date d, or None if not in schedule or day has no lunch period."""
     schedule = user.weekly_schedule or {}
     weekday_str = d.strftime("%A").lower()
     if schedule and weekday_str in schedule:
+        row = schedule[weekday_str]
+        if not schedule_row_has_lunch(row):
+            return None
         try:
-            return datetime.strptime(schedule[weekday_str]["lunch_in"], TIME_FMT).time()
+            return datetime.strptime(row["lunch_in"], TIME_FMT).time()
         except (KeyError, ValueError, TypeError):
-            pass
+            return None
     sched = user.schedules.filter(day=d.weekday()).first()
-    return sched.lunch_in if sched else None
+    if sched and sched.lunch_out is not None and sched.lunch_in is not None:
+        return sched.lunch_in
+    return None
 
 
 def scheduled_lunch_datetimes_for_entry(entry) -> tuple[datetime, datetime] | None:
@@ -128,9 +149,11 @@ def scheduled_duration_hours_for_day(user, d: date) -> float:
             sched = schedule[weekday_str]
             start = datetime.strptime(sched["start"], TIME_FMT)
             end = datetime.strptime(sched["end"], TIME_FMT)
-            lunch_out = datetime.strptime(sched["lunch_out"], TIME_FMT)
-            lunch_in = datetime.strptime(sched["lunch_in"], TIME_FMT)
             cm = crosses_midnight_for_day(user, d)
+            lunch_out = lunch_in = None
+            if schedule_row_has_lunch(sched):
+                lunch_out = datetime.strptime(sched["lunch_out"], TIME_FMT)
+                lunch_in = datetime.strptime(sched["lunch_in"], TIME_FMT)
             return _duration_hours_from_parts(start, end, lunch_out, lunch_in, cm)
         except (KeyError, ValueError, TypeError):
             pass
@@ -140,16 +163,27 @@ def scheduled_duration_hours_for_day(user, d: date) -> float:
     d0 = date(2000, 1, 3)
     start = datetime.combine(d0, sched.start_time)
     end = datetime.combine(d0, sched.end_time)
-    lunch_out_dt = datetime.combine(d0, sched.lunch_out)
-    lunch_in_dt = datetime.combine(d0, sched.lunch_in)
     cm = crosses_midnight_for_day(user, d)
-    return _duration_hours_from_parts(start, end, lunch_out_dt, lunch_in_dt, cm)
+    if sched.lunch_out is not None and sched.lunch_in is not None:
+        lunch_out_dt = datetime.combine(d0, sched.lunch_out)
+        lunch_in_dt = datetime.combine(d0, sched.lunch_in)
+        return _duration_hours_from_parts(start, end, lunch_out_dt, lunch_in_dt, cm)
+    return _duration_hours_from_parts(start, end, None, None, cm)
 
 
-def _duration_hours_from_parts(start: datetime, end: datetime, lunch_out: datetime, lunch_in: datetime, crosses_midnight: bool) -> float:
+def _duration_hours_from_parts(
+    start: datetime,
+    end: datetime,
+    lunch_out: datetime | None,
+    lunch_in: datetime | None,
+    crosses_midnight: bool,
+) -> float:
     if crosses_midnight:
         end = end + timedelta(days=1)
-    return (end - start - (lunch_in - lunch_out)).total_seconds() / 3600
+    span = (end - start).total_seconds()
+    if lunch_out is not None and lunch_in is not None:
+        span -= (lunch_in - lunch_out).total_seconds()
+    return max(span, 0) / 3600
 
 
 def scheduled_hours_for_range(user, week_start: date, week_ending: date) -> float:
