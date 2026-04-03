@@ -100,10 +100,13 @@
     box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.35);
     backdrop-filter: blur(6px);
   }
-  .home-landing__tagline h2 {
+  .home-landing__title {
     color: #fff;
-    font-weight: 600;
-    letter-spacing: 0.02em;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    font-size: clamp(2.5rem, 10vw, 4.25rem);
+    line-height: 1.08;
+    text-shadow: 0 2px 24px rgba(0, 0, 0, 0.45);
   }
   .home-landing__tagline p {
     color: rgba(255, 255, 255, 0.95);
@@ -146,15 +149,15 @@
     display: flex;
     align-items: center;
     flex-shrink: 0;
-    padding: 0.85rem 0;
+    padding: 1.15rem 0;
     color: #fff !important;
-    font-size: 1rem;
+    font-size: clamp(1.35rem, 3.5vw, 1.65rem);
     font-weight: 500;
     letter-spacing: 0.02em;
     white-space: nowrap;
   }
   .home-ticker__sep {
-    padding: 0 1.25rem;
+    padding: 0 1.5rem;
     color: rgba(255, 255, 255, 0.45);
     user-select: none;
   }
@@ -213,7 +216,7 @@
     {% endif %}
 
     <div class="home-landing__tagline text-center mb-4">
-      <h2 class="h3 mb-3">TF-R App</h2>
+      <h2 class="home-landing__title mb-3">TF-R App</h2>
       <p class="fst-italic px-md-4">Innovation: Passionate about developing better methods for tomorrow.</p>
     </div>
 
