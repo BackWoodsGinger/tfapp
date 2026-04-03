@@ -197,7 +197,6 @@ class OccurrenceAdmin(admin.ModelAdmin):
             OccurrenceSubtype.EXCHANGE,
             OccurrenceSubtype.FMLA,
             OccurrenceSubtype.LEAVE_OF_ABSENCE,
-            OccurrenceSubtype.TRANSPORTATION,
             OccurrenceSubtype.WEATHER_PAID,
             OccurrenceSubtype.JURY_DUTY_PAID,
         ]:

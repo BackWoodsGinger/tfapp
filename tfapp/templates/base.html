@@ -17,8 +17,9 @@
     <title>TF-R App {% block title %}{% endblock %}</title>
 </head>
 <body class="d-flex flex-column min-vh-100">
-<!-- Navbar -->
+{% block site_navbar %}
 {% include 'partials/_navbar.html' %}
+{% endblock %}
 
 <main class="flex-fill">
     <!-- Main Content -->

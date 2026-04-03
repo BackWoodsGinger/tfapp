@@ -48,7 +48,9 @@ import json
 from io import BytesIO
 
 def home(request):
-    return render(request, "pages/index.html")
+    from pages.views import index
+
+    return index(request)
 
 class DateFilterForm(forms.Form):
     date = forms.DateField(
@@ -271,10 +273,19 @@ def dashboard(request):
     # Balance after accounting for future approved time off.
     balance_after_pending = selected_user.pto_balance - pending_pto_hours
 
-    daily_occurrences = Occurrence.objects.filter(
-        user__in=visible_users,
-        date=selected_date
-    ).order_by("user__username", "date")
+    is_lead_role_or_above = user.role in [
+        RoleChoices.GROUP_LEAD,
+        RoleChoices.SUPERVISOR,
+        RoleChoices.MANAGER,
+        RoleChoices.EXECUTIVE,
+    ]
+    if is_lead_role_or_above:
+        daily_occurrences = Occurrence.objects.filter(
+            user__in=visible_users,
+            date=selected_date,
+        ).order_by("user__username", "date")
+    else:
+        daily_occurrences = []
 
     start_of_week = today - timedelta(days=(today.weekday() + 1) % 7)
     end_of_week = start_of_week + timedelta(days=6)
@@ -332,15 +343,18 @@ def dashboard(request):
     }
 
     override_cutoff = today - timedelta(days=90)
-    clock_in_overrides = (
-        TimeEntry.objects.filter(
-            clock_in_authorized_by__isnull=False,
-            user__in=visible_users,
-            date__gte=override_cutoff,
+    if is_lead_role_or_above:
+        clock_in_overrides = (
+            TimeEntry.objects.filter(
+                clock_in_authorized_by__isnull=False,
+                user__in=visible_users,
+                date__gte=override_cutoff,
+            )
+            .select_related("user", "clock_in_authorized_by")
+            .order_by("-date", "-clock_in")[:75]
         )
-        .select_related("user", "clock_in_authorized_by")
-        .order_by("-date", "-clock_in")[:75]
-    )
+    else:
+        clock_in_overrides = []
 
     # Perfect Attendance month (default: previous month on the 1st; else current month)
     pa_year_str = request.GET.get("pa_year")
@@ -416,6 +430,7 @@ def dashboard(request):
         "user_service_dates_json": json.dumps(user_service_dates),
         "today_iso": report_today.isoformat(),
         "clock_in_overrides": clock_in_overrides,
+        "is_lead_role_or_above": is_lead_role_or_above,
         "scheduled_not_clocked": scheduled_not_clocked,
         "pa_year": pa_year,
         "pa_month": pa_month,

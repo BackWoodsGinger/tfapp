@@ -1,25 +1,212 @@
 {% extends 'base.html' %}
 {% load static %}
+
+{% block site_navbar %}{% endblock %}
+
 {% block content %}
-<header style="position: relative;">
-    <div id="video-overlay">
-        <div id="overlay-text">
-            <h2>TF-R App</h2>
-            <p>"Innovation: Passionate about developing better methods for tomorrow."</p>
-        </div>
-    </div>
-    <video width="320" height="240" autoplay muted loop>
-        <source src="{% static 'img/clips.mp4' %}" type="video/mp4">
-        Your browser does not support the video tag.
+<style>
+  .home-landing {
+    position: relative;
+    min-height: calc(100vh - 2rem);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .home-landing__video-wrap {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+  }
+  .home-landing__video-wrap video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+  }
+  .home-overlay-plugins {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+  }
+  .home-overlay-plugins__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem;
+    color: rgba(255, 255, 255, 0.95);
+    line-height: 1.2;
+  }
+  .home-overlay-plugins__label {
+    color: rgba(255, 255, 255, 0.65);
+    font-weight: 500;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .home-landing__overlay {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem;
+    background: rgba(15, 23, 42, 0.42);
+    border-radius: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(6px);
+  }
+  .home-landing__tagline h2 {
+    color: #fff;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .home-landing__tagline p {
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 1.1rem;
+    line-height: 1.5;
+    margin-bottom: 0;
+  }
+  .home-app-card {
+    background: rgba(15, 23, 42, 0.72);
+    border-radius: 0.75rem;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    box-shadow: 0 0.5rem 1.25rem rgba(0, 0, 0, 0.25);
+    height: 100%;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .home-app-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0.75rem 1.5rem rgba(0, 0, 0, 0.35);
+  }
+  .home-app-card .card-title {
+    font-weight: 600;
+    color: #fff !important;
+  }
+  .home-ticker-wrap {
+    overflow: hidden;
+    border-radius: 0.5rem;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    margin-bottom: 1.5rem;
+  }
+  .home-ticker {
+    display: flex;
+    width: max-content;
+    animation: home-ticker-scroll 55s linear infinite;
+  }
+  .home-ticker:hover {
+    animation-play-state: paused;
+  }
+  .home-ticker__segment {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 0.85rem 0;
+    color: #fff !important;
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .home-ticker__sep {
+    padding: 0 1.25rem;
+    color: rgba(255, 255, 255, 0.45);
+    user-select: none;
+  }
+  @keyframes home-ticker-scroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+</style>
+
+<div class="home-landing container-fluid px-0">
+  <div class="home-landing__video-wrap" aria-hidden="true">
+    <video autoplay muted loop playsinline>
+      <source src="{% static 'img/clips.mp4' %}" type="video/mp4">
     </video>
-</header>
-<div class="card text-center">
-    <div class="card-body">
-        <h1>Welcome To TF-R App</h1>
-        <p>This Tube Fab's custom app.</p>
-        {% if user.is_authenticated %}
-        <a class="btn btn-dark" href="{% url 'attendance:attendance_list' %}">View Attendance Tracking</a>
+  </div>
+
+  <div class="home-landing__overlay">
+    {% if overlay_plugins.weather or overlay_plugins.stocks %}
+    <div class="home-overlay-plugins" aria-label="At a glance">
+      {% if overlay_plugins.weather %}
+      <div class="home-overlay-plugins__pill">
+        <span class="home-overlay-plugins__label">{{ overlay_plugins.weather.label }}</span>
+        {% if overlay_plugins.weather.error %}
+        <span>{{ overlay_plugins.weather.error }}</span>
+        {% else %}
+        <span>
+          {{ overlay_plugins.weather.temp_f|floatformat:0 }}°F now
+          {% if overlay_plugins.weather.high_f is not None and overlay_plugins.weather.low_f is not None %}
+          · Hi {{ overlay_plugins.weather.high_f|floatformat:0 }}° · Lo {{ overlay_plugins.weather.low_f|floatformat:0 }}°
+          {% endif %}
+        </span>
         {% endif %}
+      </div>
+      {% endif %}
+      {% for s in overlay_plugins.stocks %}
+      <div class="home-overlay-plugins__pill">
+        <span class="home-overlay-plugins__label">{{ s.label }}</span>
+        {% if s.error %}
+        <span>{{ s.error }}</span>
+        {% else %}
+        <span>{% if s.prefix_dollar %}${% endif %}{{ s.price }}</span>
+        {% endif %}
+      </div>
+      {% endfor %}
     </div>
+    {% endif %}
+
+    <div class="home-landing__tagline text-center mb-4">
+      <h2 class="h3 mb-3">TF-R App</h2>
+      <p class="fst-italic px-md-4">Innovation: Passionate about developing better methods for tomorrow.</p>
+    </div>
+
+    <div class="home-ticker-wrap" role="region" aria-label="Announcements ticker">
+      <div class="home-ticker" aria-live="polite">
+        {% for pass in "12" %}
+        <div class="home-ticker__segment"{% if pass == "2" %} aria-hidden="true"{% endif %}>
+          {% for seg in ticker_segments %}
+          <span>{{ seg }}</span><span class="home-ticker__sep">•</span>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <p class="text-center text-white-50 small mb-4 mb-md-5">Choose an app</p>
+
+    <div class="row g-4 justify-content-center">
+      <div class="col-10 col-sm-8 col-md-5 col-lg-4">
+        <div class="card home-app-card h-100">
+          <div class="card-body text-center d-flex flex-column">
+            <h3 class="card-title h5 mb-3">Time Clock</h3>
+            <a class="btn btn-primary mt-auto" href="{% url 'timeclock:timeclock_home' %}">Open</a>
+          </div>
+        </div>
+      </div>
+      <div class="col-10 col-sm-8 col-md-5 col-lg-4">
+        <div class="card home-app-card h-100">
+          <div class="card-body text-center d-flex flex-column">
+            <h3 class="card-title h5 mb-3">Attendance</h3>
+            {% if user.is_authenticated %}
+            <a class="btn btn-primary mt-auto" href="{% url 'attendance:dashboard' %}">Open</a>
+            {% else %}
+            <a class="btn btn-primary mt-auto" href="{% url 'login' %}">Sign in</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}

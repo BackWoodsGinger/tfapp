@@ -267,7 +267,6 @@ class OccurrenceSubtype(models.TextChoices):
     LAYOFF = "Lay-Off", "Lay-Off"
     FMLA = "FMLA", "Family Medical Leave"
     LEAVE_OF_ABSENCE = "LOA", "Leave of Absence"
-    TRANSPORTATION = "Transportation", "Transportation"
     WEATHER_UNPAID = "Weather Unpaid", "Inclement Weather - Unpaid"
     WEATHER_PAID = "Weather Paid", "Inclement Weather - Paid"
     BEREAVEMENT_PAID = "Bereavement Paid", "Bereavement - Paid"
@@ -287,7 +286,6 @@ OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL = [
     OccurrenceSubtype.EXCHANGE,
     OccurrenceSubtype.FMLA,
     OccurrenceSubtype.LEAVE_OF_ABSENCE,
-    OccurrenceSubtype.TRANSPORTATION,
     OccurrenceSubtype.WEATHER_PAID,
     OccurrenceSubtype.BEREAVEMENT_PAID,
     OccurrenceSubtype.JURY_DUTY_PAID,
@@ -427,7 +425,6 @@ class Occurrence(models.Model):
             OccurrenceSubtype.EXCHANGE,
             OccurrenceSubtype.FMLA,
             OccurrenceSubtype.LEAVE_OF_ABSENCE,
-            OccurrenceSubtype.TRANSPORTATION,
             OccurrenceSubtype.WEATHER_PAID,
             OccurrenceSubtype.BEREAVEMENT_PAID,
             OccurrenceSubtype.JURY_DUTY_PAID,

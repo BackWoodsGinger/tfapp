@@ -84,6 +84,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'accounts.apps.AccountsConfig',
+    'pages.apps.PagesConfig',
     'attendance',
     'timeclock',
     'crispy_forms',
@@ -231,3 +232,70 @@ if EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
     EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
     EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
     EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "30"))
+
+# Home page overlay plugins (Open-Meteo weather; Stooq US symbols). Not admin ticker rows.
+# Env fallbacks TICKER_* kept for existing deployments.
+def _overlay_float(env_primary: str, env_legacy: str, default: str) -> float:
+    raw = os.environ.get(env_primary) or os.environ.get(env_legacy) or default
+    return float(raw)
+
+
+def _overlay_str(env_primary: str, env_legacy: str, default: str) -> str:
+    return os.environ.get(env_primary) or os.environ.get(env_legacy) or default
+
+
+def _overlay_int(env_primary: str, env_legacy: str, default: str) -> int:
+    raw = os.environ.get(env_primary) or os.environ.get(env_legacy) or default
+    return int(raw)
+
+
+OVERLAY_WEATHER_ENABLED = _env_bool("OVERLAY_WEATHER_ENABLED", True)
+# Default: Afton, MI (Open-Meteo grid). Override with OVERLAY_WEATHER_* or legacy TICKER_WEATHER_*.
+OVERLAY_WEATHER_LATITUDE = _overlay_float(
+    "OVERLAY_WEATHER_LATITUDE", "TICKER_WEATHER_LATITUDE", "45.06"
+)
+OVERLAY_WEATHER_LONGITUDE = _overlay_float(
+    "OVERLAY_WEATHER_LONGITUDE", "TICKER_WEATHER_LONGITUDE", "-84.49"
+)
+OVERLAY_WEATHER_LABEL = _overlay_str(
+    "OVERLAY_WEATHER_LABEL", "TICKER_WEATHER_LABEL", "Afton, MI"
+)
+OVERLAY_HTTP_TIMEOUT_SEC = _overlay_int(
+    "OVERLAY_HTTP_TIMEOUT_SEC", "TICKER_HTTP_TIMEOUT_SEC", "10"
+)
+
+
+def _parse_overlay_stock_quotes() -> list[tuple[str, str]]:
+    """
+    (api_symbol, pill_label) for Stooq. Indices use ^ prefix (no .us suffix).
+
+    Env OVERLAY_STOCK_SYMBOLS (optional):
+      unset — built-in Dow, Nasdaq-100 proxy, S&P 500 (^IXIC/^GSPC are N/D on Stooq).
+      "" — disable stock pills.
+      "^DJI:Dow,QQQ:Invesco QQQ" — optional "SYM:Label" per segment; bare SYM uses SYM as label.
+    """
+    raw = os.environ.get("OVERLAY_STOCK_SYMBOLS")
+    if raw is None:
+        return [
+            ("^DJI", "Dow"),
+            ("^NDX", "Nasdaq"),
+            ("^SPX", "S&P 500"),
+        ]
+    out: list[tuple[str, str]] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            sym, lbl = part.split(":", 1)
+            sym = sym.strip().upper()
+            lbl = (lbl.strip() or sym)
+            if sym:
+                out.append((sym, lbl))
+        else:
+            u = part.upper()
+            out.append((u, u))
+    return out
+
+
+OVERLAY_STOCK_QUOTES = _parse_overlay_stock_quotes()

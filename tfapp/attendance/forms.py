@@ -6,6 +6,7 @@ from .models import (
     AdjustPunchField,
     AdjustPunchRequest,
     Occurrence,
+    OccurrenceSubtype,
     CustomUser,
     PayrollPeriod,
     TimeOffRequest,
@@ -13,6 +14,20 @@ from .models import (
     WorkThroughLunchRequest,
 )
 from timeclock.models import TimeEntry
+
+# Absence subtypes not offered on the employee time-off request form (admin/system only).
+TIME_OFF_REQUEST_SUBTYPE_EXCLUDE = frozenset(
+    {
+        OccurrenceSubtype.LAYOFF,
+        OccurrenceSubtype.TARDY_IN_GRACE,
+        OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+        OccurrenceSubtype.WEATHER_UNPAID,
+        OccurrenceSubtype.WEATHER_PAID,
+        OccurrenceSubtype.DISCIPLINE,
+        OccurrenceSubtype.WORK_COMP,
+        OccurrenceSubtype.HOLIDAY_PAID,
+    }
+)
 
 
 class OccurrenceForm(forms.ModelForm):
@@ -75,6 +90,10 @@ class TimeOffRequestForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         self.request_user = kwargs.pop("request_user", None)
         super().__init__(*args, **kwargs)
+        excl = {s.value for s in TIME_OFF_REQUEST_SUBTYPE_EXCLUDE}
+        self.fields["subtype"].choices = [
+            (v, lbl) for v, lbl in OccurrenceSubtype.choices if v not in excl
+        ]
         self.helper = FormHelper()
         self.helper.form_tag = False
         self.helper.form_method = "post"
@@ -100,6 +119,13 @@ class TimeOffRequestForm(forms.ModelForm):
         end_date = cleaned_data.get("end_date")
         partial_day = cleaned_data.get("partial_day")
         partial_hours = cleaned_data.get("partial_hours")
+        subtype = cleaned_data.get("subtype")
+
+        if subtype and str(subtype) in {s.value for s in TIME_OFF_REQUEST_SUBTYPE_EXCLUDE}:
+            self.add_error(
+                "subtype",
+                "That absence type is not available for employee time off requests.",
+            )
 
         if not start_date or not end_date:
             return cleaned_data
