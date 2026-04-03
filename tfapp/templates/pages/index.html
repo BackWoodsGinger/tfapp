@@ -17,12 +17,19 @@
     position: absolute;
     inset: 0;
     z-index: 0;
+    background: #0f172a;
   }
   .home-landing__video-wrap video {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
     object-position: center;
+  }
+  /* Desktop (Bootstrap lg+): full-bleed cover — matches ~16:9 clips well on typical monitors */
+  @media (min-width: 992px) {
+    .home-landing__video-wrap video {
+      object-fit: cover;
+    }
   }
   .home-overlay-plugins {
     display: flex;
