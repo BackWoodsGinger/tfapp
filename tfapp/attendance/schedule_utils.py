@@ -140,6 +140,35 @@ def crosses_midnight_for_day(user, d: date) -> bool:
     return False
 
 
+def get_scheduled_end_time_for_day(user, d: date):
+    """Scheduled end time for the shift on weekday d, or None if not in schedule / unparsable."""
+    schedule = user.weekly_schedule or {}
+    weekday_str = d.strftime("%A").lower()
+    if schedule and weekday_str in schedule:
+        try:
+            return datetime.strptime(schedule[weekday_str]["end"], TIME_FMT).time()
+        except (KeyError, ValueError, TypeError):
+            pass
+    sched = user.schedules.filter(day=d.weekday()).first()
+    return sched.end_time if sched else None
+
+
+def get_scheduled_shift_end_datetime(user, d: date) -> datetime | None:
+    """
+    Timezone-aware local datetime when the shift that *starts* on calendar day d ends.
+    Overnight shifts (crosses_midnight) end on d+1 at end_time.
+    None if not scheduled, or end time cannot be determined.
+    """
+    if get_scheduled_start_for_day(user, d) is None:
+        return None
+    end_t = get_scheduled_end_time_for_day(user, d)
+    if end_t is None:
+        return None
+    cm = crosses_midnight_for_day(user, d)
+    end_date = d + timedelta(days=1) if cm else d
+    return _combine_local(end_date, end_t)
+
+
 def scheduled_duration_hours_for_day(user, d: date) -> float:
     """Scheduled paid hours for one calendar day (shift anchored on d), or 0 if none."""
     schedule = user.weekly_schedule or {}

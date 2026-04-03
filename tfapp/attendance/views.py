@@ -35,6 +35,8 @@ from .models import (
 from . import approval_emails
 from .forms import ReportFilterForm, TimeOffRequestForm, WorkThroughLunchRequestForm, AdjustPunchRequestForm
 from .schedule_utils import (
+    earliest_clock_in_allowed,
+    get_scheduled_shift_end_datetime,
     get_scheduled_start_for_day,
     scheduled_duration_hours_for_day,
     scheduled_hours_for_range,
@@ -139,15 +141,29 @@ def _last_day_of_month(year: int, month: int) -> date:
     return date(year, month, monthrange(year, month)[1])
 
 
-def _scheduled_but_not_clocked_in(visible_users, on_date: date):
-    """Users with a schedule on ``on_date`` who have not clocked in (no entry or no clock_in)."""
+def _scheduled_but_not_clocked_in(visible_users, on_date: date, *, at_time=None):
+    """
+    Users scheduled on ``on_date`` who have not clocked in, only during their shift window:
+    from first allowed clock-in (15 minutes before scheduled start) through scheduled end.
+    After shift end they are omitted even if they never punched in.
+    """
+    if at_time is None:
+        at_time = django_tz.now()
+    now_local = django_tz.localtime(at_time)
     out = []
     for u in visible_users:
         if get_scheduled_start_for_day(u, on_date) is None:
             continue
         entry = TimeEntry.objects.filter(user=u, date=on_date).first()
-        if entry is None or entry.clock_in is None:
-            out.append(u)
+        if entry is not None and entry.clock_in is not None:
+            continue
+        earliest = earliest_clock_in_allowed(u, on_date)
+        if earliest is not None and now_local < earliest:
+            continue
+        shift_end = get_scheduled_shift_end_datetime(u, on_date)
+        if shift_end is not None and now_local >= shift_end:
+            continue
+        out.append(u)
     out.sort(key=_payroll_sort_key)
     return out
 
