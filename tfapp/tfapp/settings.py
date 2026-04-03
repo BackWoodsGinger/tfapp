@@ -215,6 +215,10 @@ LOGIN_REDIRECT_URL = "/"
 #   Use the same address for DEFAULT_FROM_EMAIL as EMAIL_HOST_USER unless you have
 #   "Send mail as" configured in Gmail.
 #
+# Optional: set DJANGO_SITE_BASE_URL (or SITE_BASE_URL) to your public origin, e.g.
+#   https://tfapp.example.com
+# so approval-notification emails include a clickable link to the team requests page.
+#
 if os.environ.get("EMAIL_HOST"):
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 elif "EMAIL_BACKEND" in os.environ:
@@ -224,6 +228,10 @@ else:
 
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "webmaster@localhost")
 SERVER_EMAIL = os.environ.get("SERVER_EMAIL", DEFAULT_FROM_EMAIL)
+
+# Absolute site URL for links in emails (no trailing slash), e.g. https://tfapp.example.com
+SITE_BASE_URL = os.environ.get("DJANGO_SITE_BASE_URL", os.environ.get("SITE_BASE_URL", "")).strip().rstrip("/")
+BASE_URL = SITE_BASE_URL  # alias for management commands / legacy
 
 if EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend":
     EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")

@@ -32,6 +32,7 @@ from .models import (
     ensure_holiday_occurrences_for_range,
     OccurrenceSubtype,
 )
+from . import approval_emails
 from .forms import ReportFilterForm, TimeOffRequestForm, WorkThroughLunchRequestForm, AdjustPunchRequestForm
 from .schedule_utils import (
     get_scheduled_start_for_day,
@@ -1326,6 +1327,7 @@ def request_time_off(request):
             tor = form.save(commit=False)
             tor.user = user
             tor.save()
+            approval_emails.notify_time_off_submitted(tor)
             messages.success(request, "Time off request submitted.")
             return redirect("attendance:my_time_off_requests")
     else:
@@ -1455,6 +1457,7 @@ def cancel_time_off(request, slug):
         return redirect("attendance:my_time_off_requests")
     was_approved = tor.status == TimeOffRequestStatus.APPROVED
     tor.cancel()
+    approval_emails.notify_time_off_cancelled(tor, was_approved=was_approved)
     messages.success(
         request,
         "Time off request cancelled." + (" PTO has been credited back." if was_approved else ""),
@@ -1476,6 +1479,7 @@ def request_work_through_lunch(request):
             wtl = form.save(commit=False)
             wtl.user = user
             wtl.save()
+            approval_emails.notify_work_through_lunch_submitted(wtl)
             messages.success(request, "Work-through-lunch request submitted.")
             return redirect("attendance:request_work_through_lunch")
     else:
@@ -1541,6 +1545,7 @@ def cancel_work_through_lunch(request, slug):
         return redirect("attendance:request_work_through_lunch")
     was_approved = wtl.status == TimeOffRequestStatus.APPROVED
     wtl.cancel()
+    approval_emails.notify_work_through_lunch_cancelled(wtl, was_approved=was_approved)
     if was_approved:
         entry = TimeEntry.objects.filter(user=wtl.user, date=wtl.work_date).first()
         if entry:
@@ -1586,6 +1591,7 @@ def request_adjust_punch(request):
                 comments=form.cleaned_data.get("comments") or "",
             )
             apr.save()
+            approval_emails.notify_adjust_punch_submitted(apr)
             messages.success(request, "Adjust punch request submitted.")
             return redirect("attendance:request_adjust_punch")
     else:
@@ -1734,6 +1740,7 @@ def cancel_adjust_punch(request, slug):
         messages.error(request, "Only pending requests can be cancelled.")
         return redirect("attendance:request_adjust_punch")
     apr.cancel()
+    approval_emails.notify_adjust_punch_cancelled(apr)
     messages.success(request, "Adjust punch request cancelled.")
     next_url = request.POST.get("next") or request.GET.get("next") or request.META.get("HTTP_REFERER")
     if next_url and next_url.startswith("/"):
