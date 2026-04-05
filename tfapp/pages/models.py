@@ -5,7 +5,6 @@ from django.db import models
 class HomeTickerItem(models.Model):
     """
     One line of text in the home page scrolling ticker (admin-managed announcements only).
-    Weather and stock appear separately in the overlay plugin bar (see site settings).
     """
 
     message = models.CharField(max_length=500)

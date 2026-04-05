@@ -24,68 +24,27 @@
     object-fit: cover;
     object-position: center;
   }
-  .home-overlay-plugins {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: center;
-    gap: 0.5rem 0.75rem;
-    font-size: 0.9rem;
+  .home-widgets {
+    margin-bottom: 1.25rem;
+  }
+  .home-widget-weather {
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.2);
     margin-bottom: 1rem;
   }
-  .home-overlay-plugins__pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.55rem;
-    background: rgba(0, 0, 0, 0.45);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 999px;
-    padding: 0.4rem 0.95rem 0.4rem 0.45rem;
-    color: rgba(255, 255, 255, 0.95);
-    line-height: 1.25;
+  .home-widget-weather .weatherwidget-io {
+    display: block;
   }
-  .home-overlay-plugins__icon-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.1rem;
-    height: 2.1rem;
-    border-radius: 50%;
-    flex-shrink: 0;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+  .home-widget-tradingview {
+    border-radius: 0.5rem;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.25);
   }
-  .home-overlay-plugins__pill--weather .home-overlay-plugins__icon-wrap {
-    background: linear-gradient(145deg, rgba(56, 189, 248, 0.4), rgba(14, 165, 233, 0.15));
-    color: #e0f2fe;
-    border-color: rgba(125, 211, 252, 0.35);
-  }
-  .home-overlay-plugins__pill--stock .home-overlay-plugins__icon-wrap {
-    background: linear-gradient(145deg, rgba(74, 222, 128, 0.35), rgba(34, 197, 94, 0.12));
-    color: #dcfce7;
-    border-color: rgba(134, 239, 172, 0.35);
-  }
-  .home-overlay-plugins__icon-wrap i {
-    font-size: 0.95rem;
-  }
-  .home-overlay-plugins__body {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.08rem;
-    min-width: 0;
-  }
-  .home-overlay-plugins__label {
-    color: rgba(255, 255, 255, 0.6);
-    font-weight: 600;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .home-overlay-plugins__value {
-    font-weight: 600;
-    font-size: 0.95rem;
-    color: #fff;
+  .home-widget-tradingview tv-ticker-tape {
+    display: block;
+    width: 100%;
   }
   .home-landing__overlay {
     position: relative;
@@ -175,45 +134,34 @@
   </div>
 
   <div class="home-landing__overlay">
-    {% if overlay_plugins.weather or overlay_plugins.stocks %}
-    <div class="home-overlay-plugins" aria-label="At a glance">
-      {% if overlay_plugins.weather %}
-      <div class="home-overlay-plugins__pill home-overlay-plugins__pill--weather">
-        <span class="home-overlay-plugins__icon-wrap" aria-hidden="true">
-          <i class="fas {{ overlay_plugins.weather.fa_icon }}"></i>
-        </span>
-        <span class="home-overlay-plugins__body">
-          <span class="home-overlay-plugins__label">{{ overlay_plugins.weather.label }}</span>
-          {% if overlay_plugins.weather.error %}
-          <span class="home-overlay-plugins__value">{{ overlay_plugins.weather.error }}</span>
-          {% else %}
-          <span class="home-overlay-plugins__value">
-            {{ overlay_plugins.weather.temp_f|floatformat:0 }}°F now
-            {% if overlay_plugins.weather.high_f is not None and overlay_plugins.weather.low_f is not None %}
-            · Hi {{ overlay_plugins.weather.high_f|floatformat:0 }}° · Lo {{ overlay_plugins.weather.low_f|floatformat:0 }}°
-            {% endif %}
-          </span>
-          {% endif %}
-        </span>
+    <div class="home-widgets" aria-label="Weather and markets">
+      <div class="home-widget-weather">
+        <a
+          class="weatherwidget-io"
+          href="https://forecast7.com/en/45d37n84d50/afton/"
+          data-label_1="AFTON"
+          data-label_2="WEATHER"
+          data-font="Roboto"
+          data-icons="Climacons Animated"
+          data-theme="mountains"
+        >AFTON WEATHER</a>
+        <script>
+          !function (d, s, id) {
+            var js, fjs = d.getElementsByTagName(s)[0];
+            if (!d.getElementById(id)) {
+              js = d.createElement(s);
+              js.id = id;
+              js.src = 'https://weatherwidget.io/js/widget.min.js';
+              fjs.parentNode.insertBefore(js, fjs);
+            }
+          }(document, 'script', 'weatherwidget-io-js');
+        </script>
       </div>
-      {% endif %}
-      {% for s in overlay_plugins.stocks %}
-      <div class="home-overlay-plugins__pill home-overlay-plugins__pill--stock">
-        <span class="home-overlay-plugins__icon-wrap" aria-hidden="true">
-          <i class="fas {{ s.fa_icon }}"></i>
-        </span>
-        <span class="home-overlay-plugins__body">
-          <span class="home-overlay-plugins__label">{{ s.label }}</span>
-          {% if s.error %}
-          <span class="home-overlay-plugins__value">{{ s.error }}</span>
-          {% else %}
-          <span class="home-overlay-plugins__value">{% if s.prefix_dollar %}${% endif %}{{ s.price }}</span>
-          {% endif %}
-        </span>
+      <div class="home-widget-tradingview">
+        <script type="module" src="https://widgets.tradingview-widget.com/w/en/tv-ticker-tape.js"></script>
+        <tv-ticker-tape symbols="FOREXCOM:SPXUSD,FOREXCOM:NSXUSD,FOREXCOM:DJI,CMCMARKETS:GOLD,NYSE:F,NYSE:GM,TSE:7283,TSE:7259,XETR:CON,NYSE:BWA,NYSE:HOG,NASDAQ:JUEMX,NASDAQ:MDIZX,NASDAQ:VWNEX,NASDAQ:VWNAX,NASDAQ:JLGMX,NASDAQ:HRSIX,NASDAQ:WFMIX,NASDAQ:HRAUX"></tv-ticker-tape>
       </div>
-      {% endfor %}
     </div>
-    {% endif %}
 
     <div class="home-landing__tagline text-center mb-4">
       <h2 class="home-landing__title mb-3">TF-R App</h2>

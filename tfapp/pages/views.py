@@ -1,7 +1,6 @@
 from django.shortcuts import render
 
 from .models import HomeTickerItem
-from .overlay_plugins import get_home_overlay_context
 
 
 def index(request):
@@ -17,6 +16,5 @@ def index(request):
         "pages/index.html",
         {
             "ticker_segments": segments,
-            "overlay_plugins": get_home_overlay_context(),
         },
     )
