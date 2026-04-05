@@ -123,6 +123,48 @@ main {
   flex: 1 0 auto;
 }
 
+/*
+ * Tablet-friendly content width: page-level `.container` wrappers stay centered
+ * and slimmer than Bootstrap’s default (up to 1140px / 1320px at lg/xl).
+ * Tables still scroll inside `.table-responsive`. Skips `container-fluid` (e.g. home, timeclock).
+ * `main > section > .container` covers login / password-reset layouts.
+ */
+main > .container,
+main > section > .container {
+  margin-left: auto;
+  margin-right: auto;
+}
+@media (min-width: 576px) {
+  main > .container,
+  main > section > .container {
+    max-width: min(100%, 38rem);
+  }
+}
+@media (min-width: 768px) {
+  main > .container,
+  main > section > .container {
+    max-width: min(100%, 44rem);
+  }
+}
+@media (min-width: 992px) {
+  main > .container,
+  main > section > .container {
+    max-width: min(100%, 48rem);
+  }
+}
+@media (min-width: 1200px) {
+  main > .container,
+  main > section > .container {
+    max-width: min(100%, 52rem);
+  }
+}
+@media (min-width: 1400px) {
+  main > .container,
+  main > section > .container {
+    max-width: min(100%, 56rem);
+  }
+}
+
 /* Buttons */
 button, .btn {
   background-color: #3c3aaf; /* Dark button background */
