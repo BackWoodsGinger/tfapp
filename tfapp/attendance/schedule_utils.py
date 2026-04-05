@@ -261,3 +261,19 @@ def clock_in_requires_approver(user, now, d: date) -> tuple[bool, str | None]:
     if earliest and now < earliest:
         return True, "early"
     return False, None
+
+
+def suggested_punch_times_for_day(user, d: date) -> dict:
+    """
+    Expected local clock times for payroll CSV export when no TimeEntry exists yet.
+    Keys: clock_in, lunch_out, lunch_in, clock_out (time objects or None).
+    """
+    start = get_scheduled_start_for_day(user, d)
+    if start is None:
+        return {"clock_in": None, "lunch_out": None, "lunch_in": None, "clock_out": None}
+    return {
+        "clock_in": start,
+        "lunch_out": get_scheduled_lunch_out_for_day(user, d),
+        "lunch_in": get_scheduled_lunch_in_for_day(user, d),
+        "clock_out": get_scheduled_end_time_for_day(user, d),
+    }

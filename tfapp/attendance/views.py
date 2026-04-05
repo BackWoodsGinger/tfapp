@@ -1,4 +1,7 @@
+import io
+
 from django.shortcuts import render, get_object_or_404, redirect
+from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django import forms
@@ -6,10 +9,14 @@ from django.utils import timezone as django_tz
 from django.utils.timezone import now, localdate
 from timeclock.models import TimeEntry
 from timeclock.forms import TimeEntryForm
+from timeclock.tardy_sync import sync_tardy_occurrences_for_time_entry
 from django.db import transaction
 from django.db.models import Sum, Q
+import csv
+import re
 from calendar import month_name, monthrange
 from datetime import time, timedelta, date, datetime, timezone
+from typing import Optional
 from django.http import HttpResponse
 from django.http import JsonResponse
 from django.template.loader import get_template
@@ -39,18 +46,19 @@ from .payroll_utils import (
     is_payroll_week_finalized as _is_payroll_week_finalized,
 )
 from .schedule_utils import (
+    crosses_midnight_for_day,
     earliest_clock_in_allowed,
     get_scheduled_shift_end_datetime,
     get_scheduled_start_for_day,
     scheduled_duration_hours_for_day,
     scheduled_hours_for_range,
     scheduled_lunch_datetimes_for_entry,
+    suggested_punch_times_for_day,
 )
 from django.views.decorators.http import require_POST
 from django.conf import settings
 from pathlib import Path
 import base64
-import csv
 import json
 from io import BytesIO
 
@@ -697,6 +705,343 @@ def payroll_user_breakdown(request):
             "days": days,
         }
     )
+
+
+def _fmt_csv_time(dt):
+    if not dt:
+        return ""
+    return django_tz.localtime(dt).strftime("%H:%M")
+
+
+def _fmt_time_only(t):
+    if not t:
+        return ""
+    return t.strftime("%H:%M")
+
+
+def _normalize_payroll_csv_row(row, n=8):
+    """Pad with empty strings or trim so spreadsheets that drop trailing empty columns still parse."""
+    out = []
+    for c in row:
+        if c is None:
+            cell = ""
+        else:
+            cell = str(c).strip().strip("\ufeff").strip()
+        out.append(cell)
+    if len(out) < n:
+        out.extend([""] * (n - len(out)))
+    elif len(out) > n:
+        out = out[:n]
+    return out
+
+
+def _parse_payroll_csv_date(value: str) -> Optional[date]:
+    """
+    Accept ISO YYYY-MM-DD (from our download) or US M/D/YYYY and M/D/YY (typical Excel CSV).
+    Strips Excel datetime suffix (e.g. '4/11/2026 12:00:00').
+    """
+    s = (value or "").strip().strip("\ufeff")
+    if not s:
+        return None
+    if " " in s:
+        s = s.split()[0]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        pass
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m:
+        month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return date(year, month, day)
+        except ValueError:
+            return None
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2})$", s)
+    if m:
+        month, day, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        year = 2000 + y2 if y2 < 50 else 1900 + y2
+        try:
+            return date(year, month, day)
+        except ValueError:
+            return None
+    return None
+
+
+def _payroll_redirect_after_csv_upload(request, week_ending_date=None):
+    """Keep the week the user was viewing when upload fails; on success pass the imported week."""
+    base = reverse("attendance:payroll")
+    if week_ending_date is not None:
+        if isinstance(week_ending_date, date):
+            return redirect(f"{base}?week_ending={week_ending_date.isoformat()}")
+        return redirect(f"{base}?week_ending={week_ending_date}")
+    ret = (request.POST.get("return_week_ending") or "").strip()
+    if ret:
+        try:
+            date.fromisoformat(ret)
+            return redirect(f"{base}?week_ending={ret}")
+        except ValueError:
+            pass
+    return redirect(base)
+
+
+def _parse_csv_time_cell(value: str):
+    if value is None or not str(value).strip():
+        return None
+    s = str(value).strip()
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p"):
+        try:
+            return datetime.strptime(s, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _make_aware_on_date(d: date, t: time) -> datetime:
+    naive = datetime.combine(d, t)
+    return django_tz.make_aware(naive, django_tz.get_current_timezone())
+
+
+def _clock_out_calendar_date(user, work_date: date, clock_in_t: Optional[time], clock_out_t: Optional[time]) -> date:
+    if clock_out_t is None or clock_in_t is None:
+        return work_date
+    if crosses_midnight_for_day(user, work_date) and clock_out_t <= clock_in_t:
+        return work_date + timedelta(days=1)
+    return work_date
+
+
+def _delete_time_entry_payroll_import(user, work_date):
+    with transaction.atomic():
+        u = CustomUser.objects.select_for_update().get(pk=user.pk)
+        revert_tardy_occurrences_for_adjust_punch(u, work_date)
+    TimeEntry.objects.filter(user=user, date=work_date).delete()
+
+
+@login_required
+def payroll_schedule_csv_download(request):
+    """
+    CSV: one row per employee per day — week_ending, payroll names, work_date,
+    clock_in, lunch_out, lunch_in, clock_out (local HH:MM). Filled from existing
+    TimeEntry or from default schedule when no entry exists.
+    """
+    if not request.user.is_staff:
+        return redirect("attendance:dashboard")
+    week_ending_param = request.GET.get("week_ending")
+    if week_ending_param:
+        try:
+            week_ending = date.fromisoformat(week_ending_param)
+        except ValueError:
+            messages.error(request, "Invalid week for payroll.")
+            return redirect("attendance:payroll")
+    else:
+        payroll_weeks_list = get_recent_saturdays(12)
+        week_ending = payroll_weeks_list[0] if payroll_weeks_list else _week_ending_for_date(localdate())
+
+    week_start = week_ending - timedelta(days=6)
+    dates = [week_start + timedelta(days=i) for i in range(7)]
+
+    response = HttpResponse(content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = (
+        f'attachment; filename="payroll_time_entries_{week_ending.isoformat()}.csv"'
+    )
+    writer = csv.writer(response)
+    writer.writerow(
+        [
+            "week_ending",
+            "payroll_lastname",
+            "payroll_firstname",
+            "work_date",
+            "clock_in",
+            "lunch_out",
+            "lunch_in",
+            "clock_out",
+        ]
+    )
+    users = sorted(
+        CustomUser.objects.filter(is_active=True, is_exempt=False),
+        key=_payroll_sort_key,
+    )
+    for u in users:
+        for d in dates:
+            row = [week_ending.isoformat(), u.payroll_lastname, u.payroll_firstname, d.isoformat()]
+            e = TimeEntry.objects.filter(user=u, date=d).first()
+            if e:
+                row += [
+                    _fmt_csv_time(e.clock_in),
+                    _fmt_csv_time(e.lunch_out),
+                    _fmt_csv_time(e.lunch_in),
+                    _fmt_csv_time(e.clock_out),
+                ]
+            else:
+                sug = suggested_punch_times_for_day(u, d)
+                row += [
+                    _fmt_time_only(sug["clock_in"]),
+                    _fmt_time_only(sug["lunch_out"]),
+                    _fmt_time_only(sug["lunch_in"]),
+                    _fmt_time_only(sug["clock_out"]),
+                ]
+            writer.writerow(row)
+    return response
+
+
+@require_POST
+@login_required
+def payroll_schedule_csv_upload(request):
+    """
+    Upload edited CSV: updates TimeEntry rows; empty punch times clears that day’s entry.
+    """
+    if not request.user.is_staff:
+        return redirect("attendance:dashboard")
+    f = request.FILES.get("time_entries_csv") or request.FILES.get("schedule_csv")
+    if not f:
+        messages.error(request, "Choose a CSV file to upload.")
+        return _payroll_redirect_after_csv_upload(request)
+
+    try:
+        raw = f.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        messages.error(request, "File must be UTF-8.")
+        return _payroll_redirect_after_csv_upload(request)
+
+    reader = csv.reader(io.StringIO(raw))
+    rows = [r for r in reader if any((c or "").strip() for c in r)]
+    if len(rows) < 2:
+        messages.error(request, "CSV must include a header row and at least one data row.")
+        return _payroll_redirect_after_csv_upload(request)
+
+    header = [c.strip().lower().strip("\ufeff") for c in _normalize_payroll_csv_row(rows[0], 8)]
+    expected = [
+        "week_ending",
+        "payroll_lastname",
+        "payroll_firstname",
+        "work_date",
+        "clock_in",
+        "lunch_out",
+        "lunch_in",
+        "clock_out",
+    ]
+    if header != expected:
+        messages.error(
+            request,
+            "Header must be: week_ending, payroll_lastname, payroll_firstname, work_date, "
+            "clock_in, lunch_out, lunch_in, clock_out",
+        )
+        return _payroll_redirect_after_csv_upload(request)
+
+    week_peek = None
+    for row in rows[1:]:
+        if len(row) >= 1:
+            parsed = _parse_payroll_csv_date(row[0])
+            if parsed is not None:
+                week_peek = parsed
+                break
+    if week_peek and _is_payroll_week_finalized(week_peek):
+        messages.error(
+            request,
+            "That payroll week is finalized. Unfinalize before importing time entries.",
+        )
+        return _payroll_redirect_after_csv_upload(request, week_peek)
+
+    users_list = list(CustomUser.objects.filter(is_active=True, is_exempt=False))
+
+    def _match_user(ln: str, fn: str):
+        ln_k = (ln or "").strip().casefold()
+        fn_k = (fn or "").strip().casefold()
+        matches = []
+        for u in users_list:
+            u_ln = (u.payroll_lastname or u.last_name or "").strip().casefold()
+            u_fn = (u.payroll_firstname or u.first_name or "").strip().casefold()
+            if u_ln == ln_k and u_fn == fn_k:
+                matches.append(u)
+        return matches
+
+    week_ending_ref = None
+    applied = 0
+    deleted = 0
+
+    with transaction.atomic():
+        for row in rows[1:]:
+            row = _normalize_payroll_csv_row(row, 8)
+            we = _parse_payroll_csv_date(row[0])
+            wd = _parse_payroll_csv_date(row[3])
+            if we is None or wd is None:
+                messages.error(
+                    request,
+                    "Invalid date in row; use YYYY-MM-DD or M/D/YYYY as exported from Excel. "
+                    f"Got week_ending={row[0]!r}, work_date={row[3]!r}",
+                )
+                transaction.set_rollback(True)
+                return _payroll_redirect_after_csv_upload(request)
+
+            if week_ending_ref is None:
+                week_ending_ref = we
+            elif we != week_ending_ref:
+                messages.error(request, "All rows must use the same week_ending.")
+                transaction.set_rollback(True)
+                return _payroll_redirect_after_csv_upload(request)
+
+            if wd < week_ending_ref - timedelta(days=6) or wd > week_ending_ref:
+                messages.error(
+                    request,
+                    f"work_date {wd} is outside the week ending {week_ending_ref}.",
+                )
+                transaction.set_rollback(True)
+                return _payroll_redirect_after_csv_upload(request)
+
+            matches = _match_user(row[1], row[2])
+            if len(matches) != 1:
+                messages.error(
+                    request,
+                    f"No unique active employee for payroll name {row[1]!r}, {row[2]!r}.",
+                )
+                transaction.set_rollback(True)
+                return _payroll_redirect_after_csv_upload(request)
+            u = matches[0]
+
+            ci = _parse_csv_time_cell(row[4])
+            lo = _parse_csv_time_cell(row[5])
+            li = _parse_csv_time_cell(row[6])
+            co = _parse_csv_time_cell(row[7])
+
+            if not any([ci, lo, li, co]):
+                if TimeEntry.objects.filter(user=u, date=wd).exists():
+                    _delete_time_entry_payroll_import(u, wd)
+                    deleted += 1
+                continue
+
+            if not ci or not co:
+                messages.error(
+                    request,
+                    f"clock_in and clock_out are required when entering any punches on {wd} "
+                    f"for {u.payroll_display_name()}.",
+                )
+                transaction.set_rollback(True)
+                return _payroll_redirect_after_csv_upload(request)
+
+            cin = _make_aware_on_date(wd, ci)
+            lo_a = _make_aware_on_date(wd, lo) if lo else None
+            li_a = _make_aware_on_date(wd, li) if li else None
+            co_date = _clock_out_calendar_date(u, wd, ci, co)
+            cout = _make_aware_on_date(co_date, co)
+
+            entry, _ = TimeEntry.objects.get_or_create(user=u, date=wd, defaults={})
+            entry.clock_in = cin
+            entry.lunch_out = lo_a
+            entry.lunch_in = li_a
+            entry.clock_out = cout
+            entry.save()
+            sync_tardy_occurrences_for_time_entry(entry)
+            applied += 1
+
+    if week_ending_ref is None:
+        messages.error(request, "No data rows.")
+        return _payroll_redirect_after_csv_upload(request)
+
+    messages.success(
+        request,
+        f"Imported time entries for week ending {week_ending_ref}: {applied} row(s) saved, "
+        f"{deleted} day(s) cleared.",
+    )
+    return _payroll_redirect_after_csv_upload(request, week_ending_ref)
 
 
 def _scheduled_hours_for_range(user, week_start, week_ending):

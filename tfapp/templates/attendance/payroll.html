@@ -34,6 +34,24 @@
             </div>
           </form>
           <p class="mb-2"><strong>Week Ending: {{ end_of_week|date:"m/d/Y" }}</strong></p>
+
+          {% if user.is_staff %}
+          <div class="card mb-4 border-secondary">
+            <div class="card-body py-3">
+              <h5 class="h6 card-title mb-2">Weekly import / export</h5>
+              <div class="d-flex flex-wrap align-items-center gap-2">
+                <a class="btn btn-outline-secondary btn-sm" href="{% url 'attendance:payroll_schedule_csv_download' %}?week_ending={{ end_of_week|date:'Y-m-d' }}">Download template</a>
+                <form method="post" action="{% url 'attendance:payroll_schedule_csv_upload' %}" enctype="multipart/form-data" class="d-flex flex-wrap align-items-center gap-2">
+                  {% csrf_token %}
+                  <input type="hidden" name="return_week_ending" value="{{ end_of_week|date:'Y-m-d' }}">
+                  <input type="file" name="time_entries_csv" accept=".csv,text/csv" class="form-control form-control-sm" style="max-width: 18rem;">
+                  <button type="submit" class="btn btn-outline-primary btn-sm">Upload edited CSV</button>
+                </form>
+              </div>
+            </div>
+          </div>
+          {% endif %}
+
           <table class="table table-sm table-bordered">
               <thead>
                 <tr>
