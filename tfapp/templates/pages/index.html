@@ -99,12 +99,34 @@
     font-weight: 600;
     color: #fff !important;
   }
+  .home-app-card__icon {
+    color: rgba(255, 255, 255, 0.92);
+    line-height: 1;
+    margin-bottom: 0.75rem;
+  }
+  .home-app-card__icon i {
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+  }
+  .home-ticker-link {
+    display: block;
+    margin-bottom: 0.75rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    text-decoration: none !important;
+    color: inherit;
+    outline-offset: 3px;
+  }
+  .home-ticker-link:hover .home-ticker-wrap,
+  .home-ticker-link:focus-visible .home-ticker-wrap {
+    border-color: rgba(255, 255, 255, 0.25);
+    background: rgba(0, 0, 0, 0.52);
+  }
   .home-ticker-wrap {
     overflow: hidden;
     border-radius: 0.5rem;
     background: rgba(0, 0, 0, 0.45);
     border: 1px solid rgba(255, 255, 255, 0.12);
-    margin-bottom: 1.5rem;
+    transition: border-color 0.15s ease, background 0.15s ease;
   }
   .home-ticker {
     display: flex;
@@ -178,24 +200,34 @@
       <p class="fst-italic px-md-4">Innovation: Passionate about developing better methods for tomorrow.</p>
     </div>
 
-    <div class="home-ticker-wrap" role="region" aria-label="Announcements ticker">
-      <div class="home-ticker" aria-live="polite">
-        {% for pass in "12" %}
-        <div class="home-ticker__segment"{% if pass == "2" %} aria-hidden="true"{% endif %}>
-          {% for seg in ticker_segments %}
-          <span>{{ seg }}</span><span class="home-ticker__sep">•</span>
+    <a href="{% if user.is_authenticated %}{% url 'ticker_submit' %}{% else %}{% url 'login' %}?next={% url 'ticker_submit' %}{% endif %}" class="home-ticker-link" aria-label="Announcements ticker — sign in to submit a message for review">
+      <div class="home-ticker-wrap" role="presentation">
+        <div class="home-ticker">
+          {% for pass in "12" %}
+          <div class="home-ticker__segment"{% if pass == "2" %} aria-hidden="true"{% endif %}>
+            {% for seg in ticker_segments %}
+            <span>{{ seg }}</span><span class="home-ticker__sep">•</span>
+            {% endfor %}
+          </div>
           {% endfor %}
         </div>
-        {% endfor %}
       </div>
-    </div>
+    </a>
 
+    <p class="text-center text-white-50 small mb-2 px-2">
+      {% if user.is_authenticated %}
+      Submit a message for review by clicking the ticker above. Messages are subject for review by the executive team. Not all messages will be approved.
+      {% else %}
+      Sign in to submit a message for review by clicking the ticker above. You must be logged in to submit a message.
+      {% endif %}
+    </p>
     <p class="text-center text-white-50 small mb-4 mb-md-5">Choose an app</p>
 
     <div class="row g-4 justify-content-center">
       <div class="col-10 col-sm-8 col-md-5 col-lg-4">
         <div class="card home-app-card h-100">
           <div class="card-body text-center d-flex flex-column">
+            <div class="home-app-card__icon" aria-hidden="true"><i class="fas fa-clock fa-2x"></i></div>
             <h3 class="card-title h5 mb-3">Time Clock</h3>
             <a class="btn btn-primary mt-auto" href="{% url 'timeclock:timeclock_home' %}">Open</a>
           </div>
@@ -204,6 +236,7 @@
       <div class="col-10 col-sm-8 col-md-5 col-lg-4">
         <div class="card home-app-card h-100">
           <div class="card-body text-center d-flex flex-column">
+            <div class="home-app-card__icon" aria-hidden="true"><i class="fas fa-calendar-alt fa-2x"></i></div>
             <h3 class="card-title h5 mb-3">Attendance</h3>
             {% if user.is_authenticated %}
             <a class="btn btn-primary mt-auto" href="{% url 'attendance:dashboard' %}">Open</a>

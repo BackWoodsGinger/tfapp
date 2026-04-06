@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% load crispy_forms_tags %}
+
+{% block title %} | Ticker message {% endblock %}
+
+{% block content %}
+<section class="bg-dark py-5">
+  <div class="container">
+    <div class="row">
+      <div class="col-md-8 col-lg-6 mx-auto">
+        <div class="card">
+          <div class="card-header bg-primary text-white">
+            <h4 class="mb-0">Submit a home page ticker message</h4>
+          </div>
+          <div class="card-body">
+            {% include "partials/_alerts.html" %}
+            <p class="text-muted small">
+              Your message will be reviewed by an executive. If approved, it will scroll on the home page ticker.
+            </p>
+            <form method="post" action="{% url 'ticker_submit' %}">
+              {% csrf_token %}
+              {{ form|crispy }}
+              <button type="submit" class="btn btn-primary">Submit for review</button>
+              <a href="{% url 'index' %}" class="btn btn-outline-secondary ms-2">Cancel</a>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

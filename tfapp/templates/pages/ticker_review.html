@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %} | Ticker review {% endblock %}
+
+{% block content %}
+<section class="bg-dark py-5">
+  <div class="container">
+    <div class="row">
+      <div class="col-12 col-lg-10 mx-auto">
+        <h2 class="text-white h4 mb-4">Ticker submissions</h2>
+        {% include "partials/_alerts.html" %}
+
+        <div class="card mb-4">
+          <div class="card-header">Pending approval</div>
+          <div class="card-body p-0">
+            {% if pending_submissions %}
+            <div class="table-responsive">
+              <table class="table table-striped mb-0">
+                <thead>
+                  <tr>
+                    <th>Message</th>
+                    <th>From</th>
+                    <th>Submitted</th>
+                    <th style="width: 12rem;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for s in pending_submissions %}
+                  <tr>
+                    <td>{{ s.message }}</td>
+                    <td class="small">
+                      {{ s.submitted_by.get_full_name|default:s.submitted_by.username }}
+                    </td>
+                    <td class="small text-nowrap">{{ s.created_at|date:"M j, Y g:i a" }}</td>
+                    <td>
+                      <form method="post" action="{% url 'ticker_review' %}" class="d-inline">
+                        {% csrf_token %}
+                        <input type="hidden" name="submission_id" value="{{ s.pk }}">
+                        <button type="submit" name="action" value="approve" class="btn btn-success btn-sm">Approve</button>
+                      </form>
+                      <form method="post" action="{% url 'ticker_review' %}" class="d-inline ms-1">
+                        {% csrf_token %}
+                        <input type="hidden" name="submission_id" value="{{ s.pk }}">
+                        <button type="submit" name="action" value="reject" class="btn btn-outline-danger btn-sm">Reject</button>
+                      </form>
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+            <p class="text-muted mb-0 p-3">No pending submissions.</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">Recently reviewed</div>
+          <div class="card-body p-0">
+            {% if recent_submissions %}
+            <div class="table-responsive">
+              <table class="table table-sm mb-0">
+                <thead>
+                  <tr>
+                    <th>Message</th>
+                    <th>Status</th>
+                    <th>Reviewed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for s in recent_submissions %}
+                  <tr>
+                    <td class="small">{{ s.message|truncatechars:80 }}</td>
+                    <td class="small"><span class="badge bg-{% if s.status == 'approved' %}success{% elif s.status == 'rejected' %}danger{% else %}secondary{% endif %}">{{ s.get_status_display }}</span></td>
+                    <td class="small text-nowrap">
+                      {% if s.reviewed_at %}{{ s.reviewed_at|date:"M j, Y g:i a" }}{% if s.reviewed_by %} — {{ s.reviewed_by.username }}{% endif %}{% else %}—{% endif %}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% else %}
+            <p class="text-muted mb-0 p-3">No reviewed submissions yet.</p>
+            {% endif %}
+          </div>
+        </div>
+
+        <p class="mt-3 mb-0">
+          <a href="{% url 'index' %}" class="text-white-50">← Home</a>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
