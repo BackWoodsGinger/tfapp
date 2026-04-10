@@ -1,4 +1,5 @@
 import io
+import logging
 
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
@@ -17,6 +18,8 @@ import re
 from calendar import month_name, monthrange
 from datetime import time, timedelta, date, datetime, timezone
 from typing import Optional
+from django.conf import settings as django_settings
+from django.core.cache import cache
 from django.http import HttpResponse
 from django.http import JsonResponse
 from django.template.loader import get_template
@@ -410,10 +413,31 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
     }
 
 
+logger = logging.getLogger(__name__)
+
+
 @login_required
 def absenteeism_chart_api(request):
     """Heavy chart series for the dashboard; loaded via fetch so the dashboard page returns quickly."""
-    return JsonResponse(unplanned_absenteeism_chart_data())
+    cache_key = f"absenteeism_chart:{date.today().isoformat()}"
+    try:
+        data = cache.get(cache_key)
+        if data is None:
+            raw = unplanned_absenteeism_chart_data()
+            data = {
+                "labels": list(raw["labels"]),
+                "values": [float(x) for x in raw["values"]],
+                "trend": [float(x) for x in raw["trend"]],
+                "target_pct": float(raw["target_pct"]),
+            }
+            cache.set(cache_key, data, 300)
+        return JsonResponse(data)
+    except Exception as e:
+        logger.exception("absenteeism_chart_api failed")
+        payload = {"error": "chart_failed", "labels": [], "values": [], "trend": [], "target_pct": 2.0}
+        if django_settings.DEBUG:
+            payload["detail"] = str(e)
+        return JsonResponse(payload, status=500)
 
 
 @login_required

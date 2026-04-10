@@ -71,9 +71,18 @@ if os.environ.get("DJANGO_SECURE_PROXY_SSL_HEADER", "").lower() in ("1", "true",
 # --- Sessions: 1.5 hours of inactivity (sliding expiry on each request) ---
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", str(90 * 60)))
-SESSION_SAVE_EVERY_REQUEST = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
+# Set DJANGO_SESSION_SAVE_EVERY_REQUEST=false to reduce DB session write contention (e.g. if JSON/API requests fail with session errors).
+SESSION_SAVE_EVERY_REQUEST = _env_bool("DJANGO_SESSION_SAVE_EVERY_REQUEST", True)
+
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "tfapp",
+    }
+}
+
 # Application definition
 
 INSTALLED_APPS = [

@@ -418,8 +418,29 @@
   }
   fetch('{% url "attendance:absenteeism_chart_api" %}', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
     .then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
+      return r.text().then(function (body) {
+        var ct = (r.headers.get('Content-Type') || '').toLowerCase();
+        if (ct.indexOf('application/json') === -1) {
+          if (r.url && r.url.indexOf('login') !== -1) {
+            throw new Error('Your session may have expired. Sign in again, then reload this page.');
+          }
+          throw new Error('Server did not return JSON (HTTP ' + r.status + '). Check that this site URL matches your login cookie (same host / https).');
+        }
+        var data;
+        try {
+          data = JSON.parse(body);
+        } catch (e) {
+          throw new Error('Invalid JSON from server.');
+        }
+        if (!r.ok) {
+          var msg = (data && (data.detail || data.error)) ? String(data.detail || data.error) : ('HTTP ' + r.status);
+          throw new Error(msg);
+        }
+        if (data.error && (!data.labels || !data.labels.length)) {
+          throw new Error(data.detail || data.error || 'Chart could not be computed.');
+        }
+        return data;
+      });
     })
     .then(function (data) {
       if (!data.labels || !data.labels.length) {
@@ -497,8 +518,8 @@
         }
       });
     })
-    .catch(function () {
-      setStatus('Could not load chart. Try refreshing the page.', true);
+    .catch(function (err) {
+      setStatus((err && err.message) ? err.message : 'Could not load chart.', true);
     });
 })();
 </script>
