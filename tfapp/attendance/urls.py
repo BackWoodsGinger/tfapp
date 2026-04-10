@@ -8,6 +8,11 @@ app_name = "attendance"
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path(
+        "dashboard/absenteeism-chart.json",
+        views.absenteeism_chart_api,
+        name="absenteeism_chart_api",
+    ),
+    path(
         "occurrences/<str:filter_by>/",
         views.attendance_list,
         name="attendance_list_filtered",

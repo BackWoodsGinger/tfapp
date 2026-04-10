@@ -411,6 +411,12 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
 
 
 @login_required
+def absenteeism_chart_api(request):
+    """Heavy chart series for the dashboard; loaded via fetch so the dashboard page returns quickly."""
+    return JsonResponse(unplanned_absenteeism_chart_data())
+
+
+@login_required
 def dashboard(request):
     user = request.user
     today = date.today()
@@ -655,7 +661,6 @@ def dashboard(request):
         "perfect_attendance_rows": perfect_attendance_rows,
         "pa_hours_total": pa_hours_total,
         "show_perfect_attendance_hours": user.role == RoleChoices.EXECUTIVE,
-        "absenteeism_chart": unplanned_absenteeism_chart_data(today),
     }
     return render(request, "attendance/dashboard.html", context)
 
