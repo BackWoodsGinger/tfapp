@@ -250,15 +250,39 @@ def _last_day_of_quarter(year: int, quarter: int) -> date:
     return [date(year, 3, 31), date(year, 6, 30), date(year, 9, 30), date(year, 12, 31)][quarter - 1]
 
 
-def _scheduled_hours_company(users: list, start: date, end: date) -> float:
-    """Sum scheduled paid hours for all users for each calendar day in [start, end]."""
-    total = 0.0
-    d = start
-    while d <= end:
-        for u in users:
-            total += scheduled_duration_hours_for_day(u, d)
+def _company_scheduled_prefix_by_day(
+    users: list, span_start: date, span_end: date
+) -> tuple[list[float], dict[date, int]]:
+    """
+    One pass over [span_start, span_end]: for each day, sum scheduled hours across users.
+    Returns (prefix_sums, date_to_index) where prefix_sums[0]==0 and
+    sum(scheduled for [ds, de] inclusive) == prefix_sums[j+1] - prefix_sums[i]
+    for indices i,j of ds,de.
+    """
+    prefix: list[float] = [0.0]
+    date_to_i: dict[date, int] = {}
+    idx = 0
+    d = span_start
+    while d <= span_end:
+        day_total = sum(scheduled_duration_hours_for_day(u, d) for u in users)
+        prefix.append(prefix[-1] + day_total)
+        date_to_i[d] = idx
+        idx += 1
         d += timedelta(days=1)
-    return total
+    return prefix, date_to_i
+
+
+def _scheduled_hours_company_from_prefix(
+    prefix: list[float], date_to_i: dict[date, int], start: date, end: date
+) -> float:
+    """Range sum using prefix from _company_scheduled_prefix_by_day (same span must cover start/end)."""
+    if start > end:
+        return 0.0
+    i = date_to_i.get(start)
+    j = date_to_i.get(end)
+    if i is None or j is None:
+        return 0.0
+    return prefix[j + 1] - prefix[i]
 
 
 def _unplanned_absence_hours_range(start: date, end: date) -> float:
@@ -322,14 +346,22 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
         )
     )
 
-    # Three completed calendar years (oldest first): Jan 1 – Dec 31 each
     last_completed_year = today.year - 1
+    # Single pass over the full span (all chart periods are inside this range).
+    span_start = date(last_completed_year - 2, 1, 1)
+    span_end = today
+    sched_prefix, sched_idx = _company_scheduled_prefix_by_day(users, span_start, span_end)
+
+    def sched_between(ds: date, de: date) -> float:
+        return _scheduled_hours_company_from_prefix(sched_prefix, sched_idx, ds, de)
+
+    # Three completed calendar years (oldest first): Jan 1 – Dec 31 each
     for i in range(3):
         y = last_completed_year - 2 + i
         ys = date(y, 1, 1)
         ye = date(y, 12, 31)
         unpl = _unplanned_absence_hours_range(ys, ye)
-        sched = _scheduled_hours_company(users, ys, ye)
+        sched = sched_between(ys, ye)
         labels.append(str(y))
         pcts.append(_absenteeism_pct(unpl, sched))
 
@@ -349,7 +381,7 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
 
     for qs, qe, label in quarter_windows:
         unpl = _unplanned_absence_hours_range(qs, qe)
-        sched = _scheduled_hours_company(users, qs, qe)
+        sched = sched_between(qs, qe)
         labels.append(label)
         pcts.append(_absenteeism_pct(unpl, sched))
 
@@ -365,7 +397,7 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
         if ms > today:
             break
         unpl = _unplanned_absence_hours_range(ms, period_end)
-        sched = _scheduled_hours_company(users, ms, period_end)
+        sched = sched_between(ms, period_end)
         labels.append(f"{month_name[month][:3]} {str(cy)[2:]}")
         pcts.append(_absenteeism_pct(unpl, sched))
 
