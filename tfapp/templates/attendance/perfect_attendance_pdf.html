@@ -24,29 +24,29 @@
         <h3>Perfect Attendance</h3>
         <p><strong>Period:</strong> {{ period_description }}</p>
         <p><strong>Generated:</strong> {{ generated_at }}</p>
-        <p class="small">Non-exempt employees with no unplanned absences in the period. Reported hours are from completed time entries only (PTO and absence hours excluded). 0.00 means no completed punches in range.</p>
+        <p class="small">Non-exempt active employees (company-wide) with no unplanned absences and none of: LOA, bereavement, weather, FMLA, layoff, work comp, disability, or grace time in the period. New hires: eligible from the first full calendar month after hire.{% if show_perfect_attendance_hours %} Reported hours are from completed time entries only. 0.00 means no completed punches in range.{% else %} Total reported hours are omitted except for executive exports.{% endif %}</p>
     </div>
 
     <table>
         <thead>
             <tr>
                 <th>Employee</th>
-                <th>Total reported hours</th>
+                {% if show_perfect_attendance_hours %}<th>Total reported hours</th>{% endif %}
             </tr>
         </thead>
         <tbody>
             {% for row in rows %}
             <tr>
                 <td>{{ row.user.payroll_display_name }}</td>
-                <td class="num">{{ row.total_hours|floatformat:2 }}</td>
+                {% if show_perfect_attendance_hours %}<td class="num">{{ row.total_hours|floatformat:2 }}</td>{% endif %}
             </tr>
             {% empty %}
             <tr>
-                <td colspan="2">No non-exempt employees qualify for this period (no unplanned absences).</td>
+                <td colspan="{% if show_perfect_attendance_hours %}2{% else %}1{% endif %}">No non-exempt employees qualify for this period.</td>
             </tr>
             {% endfor %}
         </tbody>
-        {% if rows %}
+        {% if rows and show_perfect_attendance_hours %}
         <tfoot>
             <tr>
                 <td>Total</td>

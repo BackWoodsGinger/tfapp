@@ -239,7 +239,7 @@
             {% if user.is_authenticated %}
             <a class="btn btn-primary mt-auto" href="{% url 'attendance:dashboard' %}">Open</a>
             {% else %}
-            <a class="btn btn-primary mt-auto" href="{% url 'login' %}">Sign in</a>
+            <a class="btn btn-primary mt-auto" href="{% url 'login' %}?next={% url 'attendance:dashboard' %}">Sign in</a>
             {% endif %}
           </div>
         </div>

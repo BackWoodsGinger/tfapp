@@ -1,7 +1,7 @@
 import math
 from decimal import Decimal, ROUND_DOWN
 from django.db import models
-from django.db.models import JSONField, Q, UniqueConstraint
+from django.db.models import JSONField, Q, Sum, UniqueConstraint
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from datetime import date, timedelta, datetime
@@ -123,6 +123,17 @@ class CustomUser(AbstractUser):
             return 0
         days = (date.today() - self.service_date).days
         return max(0, 3 - days // 30) if days <= 90 else 0
+
+    def employment_anchor_date(self):
+        """Date of hire for policy windows; prefers hire_date, then service_date."""
+        return self.hire_date or self.service_date
+
+    def is_date_in_probation_period(self, d: date) -> bool:
+        """True if ``d`` falls in the first 90 calendar days from employment anchor (hire/service)."""
+        anchor = self.employment_anchor_date()
+        if not anchor or d < anchor:
+            return False
+        return (d - anchor).days < 90
 
     def reset_pto_at_service_anniversary(self):
         """
@@ -277,6 +288,7 @@ class OccurrenceSubtype(models.TextChoices):
     WORK_COMP = "Work Comp", "Work Comp"
     DISABILITY = "Disability", "Disability"
     HOLIDAY_PAID = "Holiday Paid", "Holiday - Paid"
+    GRACE_TIME = "Grace Time", "Grace Time"
 
 
 # Subtypes that deduct from PTO (and personal time when PTO is exhausted). Used for balance math.
@@ -289,7 +301,93 @@ OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL = [
     OccurrenceSubtype.WEATHER_PAID,
     OccurrenceSubtype.BEREAVEMENT_PAID,
     OccurrenceSubtype.JURY_DUTY_PAID,
+    OccurrenceSubtype.GRACE_TIME,
 ]
+
+# First 90 days: up to 30 total hours may be charged to probation grace (no PTO); excess to personal.
+PROBATION_GRACE_HOURS_CAP = Decimal("30")
+
+PROBATION_GRACE_ELIGIBLE_SUBTYPES = frozenset(
+    {
+        OccurrenceSubtype.TIME_OFF,
+        OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+        OccurrenceSubtype.EXCHANGE,
+        OccurrenceSubtype.WEATHER_PAID,
+        OccurrenceSubtype.BEREAVEMENT_PAID,
+        OccurrenceSubtype.JURY_DUTY_PAID,
+    }
+)
+
+# Perfect Attendance: any occurrence of these subtypes in the reporting period disqualifies.
+PERFECT_ATTENDANCE_DISQUALIFYING_SUBTYPES = frozenset(
+    {
+        OccurrenceSubtype.LEAVE_OF_ABSENCE,
+        OccurrenceSubtype.BEREAVEMENT_PAID,
+        OccurrenceSubtype.BEREAVEMENT_UNPAID,
+        OccurrenceSubtype.WEATHER_PAID,
+        OccurrenceSubtype.WEATHER_UNPAID,
+        OccurrenceSubtype.FMLA,
+        OccurrenceSubtype.LAYOFF,
+        OccurrenceSubtype.WORK_COMP,
+        OccurrenceSubtype.DISABILITY,
+        OccurrenceSubtype.GRACE_TIME,
+    }
+)
+
+# Absence report PDF: FMLA in its own table; these subtypes never add to personal time (separate table).
+ABSENCE_REPORT_FMLA_SUBTYPE = OccurrenceSubtype.FMLA
+ABSENCE_REPORT_LEAVE_AND_NO_PERSONAL_SUBTYPES = frozenset(
+    {
+        OccurrenceSubtype.LEAVE_OF_ABSENCE,
+        OccurrenceSubtype.LAYOFF,
+        OccurrenceSubtype.DISCIPLINE,
+        OccurrenceSubtype.WORK_COMP,
+        OccurrenceSubtype.DISABILITY,
+        OccurrenceSubtype.TARDY_IN_GRACE,
+        OccurrenceSubtype.BEREAVEMENT_UNPAID,
+        OccurrenceSubtype.JURY_DUTY_UNPAID,
+        OccurrenceSubtype.WEATHER_UNPAID,
+        OccurrenceSubtype.HOLIDAY_PAID,
+    }
+)
+
+
+def first_full_month_start_after_hire(anchor: date) -> date:
+    """
+    First day of the first full calendar month strictly after the month containing the hire date.
+    Example: hire June 12 -> July 1 (same year); hire December 5 -> January 1 (next year).
+    """
+    if anchor.month == 12:
+        return date(anchor.year + 1, 1, 1)
+    return date(anchor.year, anchor.month + 1, 1)
+
+
+def user_eligible_for_perfect_attendance_new_hire_month(anchor: date | None, period_first: date) -> bool:
+    """
+    Employees with a hire/service anchor: eligible only for calendar months on or after their
+    first full month after hire (months before that are excluded). No anchor: rule does not apply.
+    """
+    if not anchor:
+        return True
+    fms = first_full_month_start_after_hire(anchor)
+    period_key = (period_first.year, period_first.month)
+    first_full_key = (fms.year, fms.month)
+    return period_key >= first_full_key
+
+
+def _probation_grace_hours_used_before(occ: "Occurrence", anchor: date, probation_end: date) -> Decimal:
+    """Probation grace bank hours already allocated to earlier applied occurrences (same user, same window)."""
+    total = (
+        Occurrence.objects.filter(
+            user_id=occ.user_id,
+            date__gte=anchor,
+            date__lt=probation_end,
+            pto_applied=True,
+        )
+        .filter(Q(date__lt=occ.date) | Q(date=occ.date, pk__lt=occ.pk))
+        .aggregate(s=Sum("probation_grace_hours_applied"))
+    )["s"]
+    return Decimal(str(total or 0)).quantize(Decimal("0.01"))
 
 
 class PTOBalanceHistory(models.Model):
@@ -340,6 +438,10 @@ class Occurrence(models.Model):
     pto_applied = models.BooleanField(default=False)
     pto_hours_applied = models.FloatField(default=0.0)  # hours deducted from PTO for this occurrence
     personal_hours_applied = models.FloatField(default=0.0)  # hours that went to personal for this occurrence
+    probation_grace_hours_applied = models.FloatField(
+        default=0.0,
+        help_text="Hours absorbed by the 30h probation grace bank (first 90 days); no PTO impact.",
+    )
     is_variance_to_schedule = models.BooleanField(default=False)
     time_off_request = models.ForeignKey(
         "TimeOffRequest",
@@ -396,6 +498,12 @@ class Occurrence(models.Model):
         (e.g. balance 1.33 allows at most 1.25 toward this absence; remainder stays in PTO).
         If max_pto_to_apply is set (e.g. 40 - worked for the week), cap PTO deduction so
         regular + PTO does not exceed the cap (cap is also floored to quarter hours).
+
+        Probation (first 90 days from hire_date or service_date): eligible absence types do not
+        use PTO; up to 30 hours total across the period may be recorded as Grace Time (no balance
+        impact); additional hours add to personal time. After 90 days, normal PTO-then-personal
+        applies.
+
         Returns the number of PTO hours deducted.
         Uses Decimal for calculations to avoid float drift; runs in a transaction with row lock.
         """
@@ -433,6 +541,7 @@ class Occurrence(models.Model):
             OccurrenceSubtype.WEATHER_PAID,
             OccurrenceSubtype.BEREAVEMENT_PAID,
             OccurrenceSubtype.JURY_DUTY_PAID,
+            OccurrenceSubtype.GRACE_TIME,
         ]:
             return 0.0
 
@@ -466,6 +575,47 @@ class Occurrence(models.Model):
                 self.pto_applied = True
                 self.save()
                 return float(pto_deducted.quantize(Decimal("0.01")))
+
+            anchor = u.employment_anchor_date()
+            probation_end = anchor + timedelta(days=90) if anchor else None
+            uses_probation_grace = (
+                anchor
+                and probation_end
+                and u.is_date_in_probation_period(self.date)
+                and (
+                    self.subtype in PROBATION_GRACE_ELIGIBLE_SUBTYPES
+                    or self.subtype == OccurrenceSubtype.GRACE_TIME
+                )
+            )
+            if uses_probation_grace:
+                grace_used_prior = _probation_grace_hours_used_before(self, anchor, probation_end)
+                grace_remaining = max(Decimal("0"), PROBATION_GRACE_HOURS_CAP - grace_used_prior)
+                grace_portion = min(used, grace_remaining)
+                personal_portion = used - grace_portion
+                new_personal = personal_bal + personal_portion
+                u.personal_time_balance = float(new_personal.quantize(Decimal("0.01")))
+                u.save()
+                if personal_portion > 0:
+                    PTOBalanceHistory.record(
+                        user=u,
+                        change=float(personal_portion.quantize(Decimal("0.01"))),
+                        reason=f"Personal time (probation): {self.get_subtype_display()} ({self.date})",
+                        balance_after=u.personal_time_balance,
+                        balance_type=PTOBalanceHistory.BALANCE_TYPE_PERSONAL,
+                    )
+                self.pto_hours_applied = 0.0
+                self.personal_hours_applied = float(personal_portion.quantize(Decimal("0.01")))
+                self.probation_grace_hours_applied = float(grace_portion.quantize(Decimal("0.01")))
+                self.pto_applied = True
+                if (
+                    grace_portion == used
+                    and used > 0
+                    and personal_portion == 0
+                    and self.subtype != OccurrenceSubtype.GRACE_TIME
+                ):
+                    self.subtype = OccurrenceSubtype.GRACE_TIME
+                self.save()
+                return 0.0
 
             # Default behavior: PTO first (quarter-hour increments from balance only), then
             # remaining hours to personal time.

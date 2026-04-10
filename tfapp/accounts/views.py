@@ -1,10 +1,27 @@
+from urllib.parse import urlencode
+
+from django.conf import settings
 from django.shortcuts import render, redirect
 from django.contrib.auth.views import PasswordChangeView, PasswordChangeDoneView
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.contrib import messages, auth
 from django.contrib.auth.decorators import login_required
 
 from .session_utils import register_user_session
+
+
+def _safe_next_redirect_url(request):
+    next_url = (request.POST.get("next") or request.GET.get("next") or "").strip()
+    if not next_url:
+        return settings.LOGIN_REDIRECT_URL
+    if url_has_allowed_host_and_scheme(
+        next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return next_url
+    return settings.LOGIN_REDIRECT_URL
 
 
 def login(request):
@@ -18,9 +35,13 @@ def login(request):
             auth.login(request, user)
             register_user_session(user, request.session.session_key)
             messages.success(request, 'You are now logged in')
-            return redirect('index')
+            return redirect(_safe_next_redirect_url(request))
         else:
             messages.error(request, 'Invalid credentials')
+            next_q = request.POST.get("next") or request.GET.get("next")
+            if next_q:
+                q = urlencode({"next": next_q})
+                return redirect(f"{reverse('login')}?{q}")
             return redirect('login')
     else:
         return render(request, 'accounts/login.html')

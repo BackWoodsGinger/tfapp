@@ -1,26 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
-<style>
-  /* Perfect Attendance: ~10 table-sm rows visible, rest scroll (sticky header). */
-  .pa-table-scroll-wrap {
-    max-width: 100%;
-    min-width: 0;
-    max-height: min(22rem, 55vh);
-    overflow: auto;
-    border: 1px solid var(--bs-border-color);
-    border-radius: 0.375rem;
-  }
-  .pa-table-scroll-wrap table {
-    margin-bottom: 0;
-  }
-  .pa-table-scroll-wrap thead th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background-color: var(--bs-body-bg, #fff);
-    box-shadow: inset 0 -1px 0 var(--bs-border-color);
-  }
-</style>
 <div class="container mt-4">
   <div class="row justify-content-center">
     <div class="col-lg-12 col-md-10 col-sm-12">
@@ -181,27 +160,27 @@
           <p class="text-muted small mb-2"><strong>Period:</strong> {{ pa_period_description }}</p>
 
           <h5 class="mt-3">Qualifying employees</h5>
-          <p class="text-muted small mb-2">Non-exempt employees in your view with no unplanned absences in this period (planned time off and holidays do not count). Hours are payroll-reported totals from completed time entries only (PTO is not included); 0.00 means no completed punches in range.</p>
+          <p class="text-muted small mb-2">Non-exempt active employees (company-wide) with no unplanned absences in this period and none of the following absence types: leave of absence, bereavement (paid or unpaid), weather (paid or unpaid), FMLA, layoff, work comp, disability, or grace time. New hires (hire date) are eligible starting with their first full calendar month after hire.{% if show_perfect_attendance_hours %} Hours are payroll-reported totals from completed time entries only (PTO is not included); 0.00 means no completed punches in range.{% else %} Total reported hours are shown to executives only.{% endif %}</p>
           <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
           <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Perfect attendance list" tabindex="0">
             <table class="table table-sm table-bordered align-middle mb-0">
               <thead>
                 <tr>
                   <th>Employee</th>
-                  <th class="text-end">Total reported hours</th>
+                  {% if show_perfect_attendance_hours %}<th class="text-end">Total reported hours</th>{% endif %}
                 </tr>
               </thead>
               <tbody>
                 {% for row in perfect_attendance_rows %}
                 <tr>
                   <td>{{ row.user.payroll_display_name }}</td>
-                  <td class="text-end">{{ row.total_hours|floatformat:2 }}</td>
+                  {% if show_perfect_attendance_hours %}<td class="text-end">{{ row.total_hours|floatformat:2 }}</td>{% endif %}
                 </tr>
                 {% empty %}
-                <tr><td colspan="2" class="text-muted">No non-exempt employees qualify for this period.</td></tr>
+                <tr><td colspan="{% if show_perfect_attendance_hours %}2{% else %}1{% endif %}" class="text-muted">No non-exempt employees qualify for this period.</td></tr>
                 {% endfor %}
               </tbody>
-              {% if perfect_attendance_rows %}
+              {% if perfect_attendance_rows and show_perfect_attendance_hours %}
               <tfoot>
                 <tr>
                   <th>Total</th>
@@ -212,6 +191,21 @@
             </table>
           </div>
           {% endif %}
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-body">
+          <h4 class="card-title">Unplanned Absenteeism</h4>
+          <p class="text-muted small mb-2">
+            Percent of company scheduled hours (active non-exempt employees) lost to unplanned absences.
+            Bars show the last three completed calendar years (full year), then the last three completed calendar quarters, then each month of the current quarter to date.
+            Green line = 2% target; red line = linear trend across the points shown.
+          </p>
+          {{ absenteeism_chart|json_script:"absenteeism-chart-data" }}
+          <div class="position-relative" style="height: 320px; max-width: 100%;">
+            <canvas id="absenteeismChart" aria-label="Unplanned absenteeism chart"></canvas>
+          </div>
         </div>
       </div>
 
@@ -411,4 +405,88 @@
     </div>
   </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+<script>
+(function () {
+  var dataEl = document.getElementById('absenteeism-chart-data');
+  var canvas = document.getElementById('absenteeismChart');
+  if (!dataEl || !canvas || typeof Chart === 'undefined') return;
+  var data;
+  try {
+    data = JSON.parse(dataEl.textContent);
+  } catch (e) {
+    return;
+  }
+  if (!data.labels || !data.labels.length) return;
+  var tgt = typeof data.target_pct === 'number' ? data.target_pct : 2;
+  new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: data.labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Unplanned absenteeism %',
+          data: data.values,
+          backgroundColor: 'rgba(13, 110, 253, 0.45)',
+          borderColor: 'rgba(13, 110, 253, 1)',
+          borderWidth: 1,
+          order: 3
+        },
+        {
+          type: 'line',
+          label: 'Trend',
+          data: data.trend,
+          borderColor: 'rgb(220, 53, 69)',
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          tension: 0,
+          pointRadius: 3,
+          pointBackgroundColor: 'rgb(220, 53, 69)',
+          order: 2
+        },
+        {
+          type: 'line',
+          label: 'Target (' + tgt + '%)',
+          data: data.labels.map(function () { return tgt; }),
+          borderColor: 'rgb(25, 135, 84)',
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          borderDash: [8, 4],
+          pointRadius: 0,
+          order: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              var v = ctx.parsed.y;
+              if (v == null) return '';
+              return ctx.dataset.label + ': ' + v + '%';
+            }
+          }
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: 'Percent of scheduled hours' },
+          ticks: {
+            callback: function (v) {
+              return v + '%';
+            }
+          }
+        }
+      }
+    }
+  });
+})();
+</script>
 {% endblock %}

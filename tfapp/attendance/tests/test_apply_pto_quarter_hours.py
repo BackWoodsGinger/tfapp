@@ -59,3 +59,104 @@ class TestApplyPtoQuarterHours(TestCase):
         self.assertAlmostEqual(self.user.pto_balance, 0.08, places=2)
         self.assertAlmostEqual(occ.pto_hours_applied, 1.25, places=2)
         self.assertEqual(occ.personal_hours_applied, 0.0)
+
+
+class TestProbationGracePolicy(TestCase):
+    """First 90 days: up to 30h grace bank (no PTO); excess to personal. Then PTO/personal as usual."""
+
+    def setUp(self):
+        self.past_date = date.today() - timedelta(days=1)
+        self.hire = date.today() - timedelta(days=30)
+
+    def test_probation_full_grace_no_balance_hit_relabels_grace_time(self):
+        user = CustomUser.objects.create_user(
+            username="newhire",
+            password="x",
+            hire_date=self.hire,
+            pto_balance=40.0,
+            personal_time_balance=0.0,
+        )
+        occ = Occurrence.objects.create(
+            user=user,
+            occurrence_type=OccurrenceType.PLANNED,
+            subtype=OccurrenceSubtype.TIME_OFF,
+            date=self.past_date,
+            duration_hours=8.0,
+        )
+        user.refresh_from_db()
+        occ.refresh_from_db()
+        self.assertEqual(occ.subtype, OccurrenceSubtype.GRACE_TIME)
+        self.assertAlmostEqual(user.pto_balance, 40.0, places=2)
+        self.assertAlmostEqual(user.personal_time_balance, 0.0, places=2)
+        self.assertAlmostEqual(occ.probation_grace_hours_applied, 8.0, places=2)
+        self.assertEqual(occ.pto_hours_applied, 0.0)
+        self.assertEqual(occ.personal_hours_applied, 0.0)
+
+    def test_probation_after_30h_bank_excess_goes_personal_only(self):
+        user = CustomUser.objects.create_user(
+            username="newhire2",
+            password="x",
+            hire_date=self.hire,
+            pto_balance=40.0,
+            personal_time_balance=0.0,
+        )
+        Occurrence.objects.create(
+            user=user,
+            occurrence_type=OccurrenceType.PLANNED,
+            subtype=OccurrenceSubtype.TIME_OFF,
+            date=self.past_date - timedelta(days=5),
+            duration_hours=25.0,
+        )
+        occ2 = Occurrence.objects.create(
+            user=user,
+            occurrence_type=OccurrenceType.PLANNED,
+            subtype=OccurrenceSubtype.TIME_OFF,
+            date=self.past_date,
+            duration_hours=8.0,
+        )
+        user.refresh_from_db()
+        occ2.refresh_from_db()
+        self.assertAlmostEqual(occ2.probation_grace_hours_applied, 5.0, places=2)
+        self.assertAlmostEqual(occ2.personal_hours_applied, 3.0, places=2)
+        self.assertAlmostEqual(user.personal_time_balance, 3.0, places=2)
+        self.assertAlmostEqual(user.pto_balance, 40.0, places=2)
+
+    def test_after_probation_standard_pto_then_personal(self):
+        hire = date.today() - timedelta(days=120)
+        user = CustomUser.objects.create_user(
+            username="tenured",
+            password="x",
+            hire_date=hire,
+            pto_balance=1.33,
+            personal_time_balance=0.0,
+        )
+        occ = Occurrence.objects.create(
+            user=user,
+            occurrence_type=OccurrenceType.PLANNED,
+            subtype=OccurrenceSubtype.TIME_OFF,
+            date=self.past_date,
+            duration_hours=10.0,
+        )
+        user.refresh_from_db()
+        self.assertAlmostEqual(user.pto_balance, 0.08, places=2)
+        self.assertAlmostEqual(user.personal_time_balance, 8.75, places=2)
+        self.assertEqual(occ.probation_grace_hours_applied, 0.0)
+
+    def test_fmla_during_probation_uses_pto_branch_not_grace_bank(self):
+        user = CustomUser.objects.create_user(
+            username="fmlau",
+            password="x",
+            hire_date=self.hire,
+            pto_balance=10.0,
+            personal_time_balance=0.0,
+        )
+        Occurrence.objects.create(
+            user=user,
+            occurrence_type=OccurrenceType.PLANNED,
+            subtype=OccurrenceSubtype.FMLA,
+            date=self.past_date,
+            duration_hours=8.0,
+        )
+        user.refresh_from_db()
+        self.assertAlmostEqual(user.pto_balance, 2.0, places=2)
+        self.assertAlmostEqual(user.personal_time_balance, 0.0, places=2)

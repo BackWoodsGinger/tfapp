@@ -92,6 +92,34 @@ class Command(BaseCommand):
         elif dry_run and filled:
             self.stdout.write(f"Would fill scheduled lunch on {len(filled)} entr{'y' if len(filled) == 1 else 'ies'}.")
 
+        # Clear stale missing_punch flags (e.g. work-through lunch approved after a prior night's flag)
+        stale_flagged = TimeEntry.objects.filter(
+            date__lt=today, missing_punch_flagged=True
+        ).select_related("user")
+        cleared_stale = 0
+        for entry in stale_flagged:
+            if entry.is_incomplete():
+                continue
+            if dry_run:
+                self.stdout.write(
+                    f"  Would clear stale missing-punch flag: "
+                    f"{entry.user.get_full_name() or entry.user.username} on {entry.date}"
+                )
+                cleared_stale += 1
+                continue
+            entry.missing_punch_flagged = False
+            entry.missing_punch_flagged_at = None
+            entry.save(update_fields=["missing_punch_flagged", "missing_punch_flagged_at"])
+            cleared_stale += 1
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"  Cleared stale missing-punch flag: "
+                    f"{entry.user.get_full_name() or entry.user.username} on {entry.date}"
+                )
+            )
+        if cleared_stale and not dry_run:
+            self.stdout.write(self.style.SUCCESS(f"Cleared {cleared_stale} stale missing-punch flag(s)."))
+
         # Entries that have at least one punch but not all (incomplete)
         incomplete = TimeEntry.objects.filter(date__lt=today).exclude(
             clock_in=None,

@@ -186,7 +186,7 @@ class OccurrenceAdmin(admin.ModelAdmin):
     list_display = ('user', 'date', 'occurrence_type', 'subtype', 'duration_hours', 'pto_applied')
     list_filter = ('occurrence_type', 'subtype', 'date')
     search_fields = ('user__username', 'subtype', 'occurrence_type')
-    readonly_fields = ('pto_applied',)
+    readonly_fields = ("pto_applied", "probation_grace_hours_applied")
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
@@ -198,7 +198,9 @@ class OccurrenceAdmin(admin.ModelAdmin):
             OccurrenceSubtype.FMLA,
             OccurrenceSubtype.LEAVE_OF_ABSENCE,
             OccurrenceSubtype.WEATHER_PAID,
+            OccurrenceSubtype.BEREAVEMENT_PAID,
             OccurrenceSubtype.JURY_DUTY_PAID,
+            OccurrenceSubtype.GRACE_TIME,
         ]:
             obj.apply_pto()
 

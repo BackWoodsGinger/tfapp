@@ -26,6 +26,7 @@ from .models import (
     Occurrence,
     OccurrenceType,
     OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL,
+    PERFECT_ATTENDANCE_DISQUALIFYING_SUBTYPES,
     PayrollPeriod,
     PayrollPeriodUserSnapshot,
     RoleChoices,
@@ -38,6 +39,9 @@ from .models import (
     apply_past_due_occurrences,
     ensure_holiday_occurrences_for_range,
     OccurrenceSubtype,
+    user_eligible_for_perfect_attendance_new_hire_month,
+    ABSENCE_REPORT_FMLA_SUBTYPE,
+    ABSENCE_REPORT_LEAVE_AND_NO_PERSONAL_SUBTYPES,
 )
 from . import approval_emails
 from .forms import ReportFilterForm, TimeOffRequestForm, WorkThroughLunchRequestForm, AdjustPunchRequestForm
@@ -182,12 +186,18 @@ def _scheduled_but_not_clocked_in(visible_users, on_date: date, *, at_time=None)
 
 def _perfect_attendance_with_hours(visible_users, first: date, period_end: date):
     """
-    Non-exempt users only: zero UNPLANNED absences in [first, period_end].
+    Non-exempt users only: zero UNPLANNED absences in [first, period_end]; no disqualifying
+    occurrence subtypes in that range; new hires (hire or service date) only from their first
+    full calendar month after hire onward.
+
     total_hours is the sum of reported_worked_hours on completed time entries in that range
     (0.00 if none); PTO / absence hours are not included.
     """
     rows = []
     for u in visible_users.filter(is_exempt=False):
+        anchor = u.hire_date or u.service_date
+        if not user_eligible_for_perfect_attendance_new_hire_month(anchor, first):
+            continue
         has_unplanned = Occurrence.objects.filter(
             user=u,
             occurrence_type=OccurrenceType.UNPLANNED,
@@ -195,6 +205,13 @@ def _perfect_attendance_with_hours(visible_users, first: date, period_end: date)
             date__lte=period_end,
         ).exists()
         if has_unplanned:
+            continue
+        if Occurrence.objects.filter(
+            user=u,
+            subtype__in=PERFECT_ATTENDANCE_DISQUALIFYING_SUBTYPES,
+            date__gte=first,
+            date__lte=period_end,
+        ).exists():
             continue
         completed = TimeEntry.objects.filter(
             user=u,
@@ -209,6 +226,157 @@ def _perfect_attendance_with_hours(visible_users, first: date, period_end: date)
         rows.append({"user": u, "total_hours": round(total_hours, 2)})
     rows.sort(key=lambda r: _payroll_sort_key(r["user"]))
     return rows
+
+
+def _perfect_attendance_candidate_users():
+    """
+    Active employees considered for Perfect Attendance lists. Same queryset for every role so
+    all users see the full qualifying list; only reported hours are restricted to executives.
+    """
+    return CustomUser.objects.filter(is_active=True).order_by(
+        "payroll_lastname",
+        "payroll_firstname",
+        "last_name",
+        "first_name",
+        "username",
+    )
+
+
+def _first_day_of_quarter(year: int, quarter: int) -> date:
+    return date(year, [1, 4, 7, 10][quarter - 1], 1)
+
+
+def _last_day_of_quarter(year: int, quarter: int) -> date:
+    return [date(year, 3, 31), date(year, 6, 30), date(year, 9, 30), date(year, 12, 31)][quarter - 1]
+
+
+def _scheduled_hours_company(users: list, start: date, end: date) -> float:
+    """Sum scheduled paid hours for all users for each calendar day in [start, end]."""
+    total = 0.0
+    d = start
+    while d <= end:
+        for u in users:
+            total += scheduled_duration_hours_for_day(u, d)
+        d += timedelta(days=1)
+    return total
+
+
+def _unplanned_absence_hours_range(start: date, end: date) -> float:
+    return float(
+        Occurrence.objects.filter(
+            occurrence_type=OccurrenceType.UNPLANNED,
+            date__gte=start,
+            date__lte=end,
+        ).aggregate(s=Sum("duration_hours"))["s"]
+        or 0.0
+    )
+
+
+def _absenteeism_pct(unplanned_h: float, scheduled_h: float) -> float:
+    if scheduled_h <= 0:
+        return 0.0
+    return round(100.0 * unplanned_h / scheduled_h, 2)
+
+
+def _linear_trend_line(values: list[float]) -> list[float]:
+    """Least-squares line through points (i, values[i]); same length as values."""
+    n = len(values)
+    if n == 0:
+        return []
+    if n == 1:
+        return [round(values[0], 2)]
+    xs = list(range(n))
+    mx = (n - 1) / 2.0
+    my = sum(values) / n
+    var_x = sum((x - mx) ** 2 for x in xs)
+    if var_x <= 0:
+        return [round(my, 2)] * n
+    cov_xy = sum((xs[i] - mx) * (values[i] - my) for i in range(n))
+    beta = cov_xy / var_x
+    alpha = my - beta * mx
+    return [round(alpha + beta * xs[i], 2) for i in range(n)]
+
+
+def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
+    """
+    Bar chart: last 3 completed calendar years (annual %), then last 3 completed calendar
+    quarters, then each month of the current quarter to date.
+    Trend line = linear regression over those points. Target = 2%.
+    """
+    today = reference or date.today()
+    cq = (today.month - 1) // 3 + 1
+    cy = today.year
+    cur_q_start = _first_day_of_quarter(cy, cq)
+
+    # Previous quarter (last fully ended before current quarter)
+    day_before = cur_q_start - timedelta(days=1)
+    y_end, m_end = day_before.year, day_before.month
+    pq = (m_end - 1) // 3 + 1
+
+    labels: list[str] = []
+    pcts: list[float] = []
+
+    users = list(
+        CustomUser.objects.filter(is_active=True, is_exempt=False).prefetch_related(
+            "schedules"
+        )
+    )
+
+    # Three completed calendar years (oldest first): Jan 1 – Dec 31 each
+    last_completed_year = today.year - 1
+    for i in range(3):
+        y = last_completed_year - 2 + i
+        ys = date(y, 1, 1)
+        ye = date(y, 12, 31)
+        unpl = _unplanned_absence_hours_range(ys, ye)
+        sched = _scheduled_hours_company(users, ys, ye)
+        labels.append(str(y))
+        pcts.append(_absenteeism_pct(unpl, sched))
+
+    # Three completed quarters (oldest first)
+    qy, qq = y_end, pq
+    quarter_windows: list[tuple[date, date, str]] = []
+    for _ in range(3):
+        qs = _first_day_of_quarter(qy, qq)
+        qe = _last_day_of_quarter(qy, qq)
+        label = f"Q{qq} {str(qy)[2:]}"
+        quarter_windows.append((qs, qe, label))
+        qq -= 1
+        if qq == 0:
+            qq = 4
+            qy -= 1
+    quarter_windows.reverse()
+
+    for qs, qe, label in quarter_windows:
+        unpl = _unplanned_absence_hours_range(qs, qe)
+        sched = _scheduled_hours_company(users, qs, qe)
+        labels.append(label)
+        pcts.append(_absenteeism_pct(unpl, sched))
+
+    # Current quarter: one bar per month from quarter start through today
+    q_month_starts = {1: 1, 2: 4, 3: 7, 4: 10}[cq]
+    for k in range(3):
+        month = q_month_starts + k
+        if month > 12:
+            break
+        ms = date(cy, month, 1)
+        me = _last_day_of_month(cy, month)
+        period_end = min(today, me)
+        if ms > today:
+            break
+        unpl = _unplanned_absence_hours_range(ms, period_end)
+        sched = _scheduled_hours_company(users, ms, period_end)
+        labels.append(f"{month_name[month][:3]} {str(cy)[2:]}")
+        pcts.append(_absenteeism_pct(unpl, sched))
+
+    trend = _linear_trend_line(pcts)
+    return {
+        "labels": labels,
+        "values": pcts,
+        "trend": trend,
+        "target_pct": 2.0,
+    }
+
 
 @login_required
 def dashboard(request):
@@ -334,9 +502,8 @@ def dashboard(request):
     if user.is_staff:
         problem_entries = TimeEntry.objects.filter(date__range=[start_of_week, end_of_week])
         for e in problem_entries:
-            fields = [e.clock_in, e.lunch_out, e.lunch_in, e.clock_out]
-            # Only alert for completed days so active same-day shifts are not flagged.
-            if e.date < today and any(fields) and not all(fields):
+            # Match TimeEntry.is_incomplete() (work-through lunch, no scheduled lunch, etc.)
+            if e.date < today and e.is_incomplete():
                 alerts.append(e)
 
     # Occurrence report (moved here from Payroll page)
@@ -412,7 +579,7 @@ def dashboard(request):
         else:
             pa_period_description = f"{pa_first:%B %Y}"
         perfect_attendance_rows = _perfect_attendance_with_hours(
-            visible_users, pa_first, pa_period_end
+            _perfect_attendance_candidate_users(), pa_first, pa_period_end
         )
         pa_hours_total = sum(r["total_hours"] for r in perfect_attendance_rows)
 
@@ -455,6 +622,8 @@ def dashboard(request):
         "pa_period_end": pa_period_end,
         "perfect_attendance_rows": perfect_attendance_rows,
         "pa_hours_total": pa_hours_total,
+        "show_perfect_attendance_hours": user.role == RoleChoices.EXECUTIVE,
+        "absenteeism_chart": unplanned_absenteeism_chart_data(today),
     }
     return render(request, "attendance/dashboard.html", context)
 
@@ -599,9 +768,7 @@ def payroll_view(request):
     ] or user.is_staff:
         problem_entries = TimeEntry.objects.filter(date__range=[start_of_week, end_of_week])
         for e in problem_entries:
-            fields = [e.clock_in, e.lunch_out, e.lunch_in, e.clock_out]
-            # Only alert for completed days so active same-day shifts are not flagged.
-            if e.date < today and any(fields) and not all(fields):
+            if e.date < today and e.is_incomplete():
                 alerts.append(e)
 
     if form.is_valid():
@@ -1496,21 +1663,53 @@ def generate_report_pdf(request):
         apply_past_due_occurrences(user)
         user.refresh_from_db()
 
-        # PTO/Personal used in this report period (from tracked split per occurrence)
-        pto_using = Occurrence.objects.filter(
+        fmla_st = ABSENCE_REPORT_FMLA_SUBTYPE
+        leave_no_personal = ABSENCE_REPORT_LEAVE_AND_NO_PERSONAL_SUBTYPES
+
+        occurrences_fmla = occurrences.filter(subtype=fmla_st)
+        occurrences_leave_group = occurrences.filter(subtype__in=leave_no_personal)
+        occurrences_main = occurrences.exclude(subtype=fmla_st).exclude(subtype__in=leave_no_personal)
+
+        # PTO/Personal used (headline): main bucket only — excludes FMLA and leave/no-personal subtypes
+        pto_using_main = Occurrence.objects.filter(
             user=user,
             date__range=(start_date, end_date),
             pto_applied=True,
-        ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
-        pto_used = sum(o.pto_hours_applied for o in pto_using)
-        personal_used = sum(o.personal_hours_applied for o in pto_using)
-        # Legacy: occurrences applied before we tracked the split (both 0)
+        ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID).exclude(subtype=fmla_st).exclude(
+            subtype__in=leave_no_personal
+        )
+        pto_used = sum(o.pto_hours_applied for o in pto_using_main)
+        personal_used = sum(o.personal_hours_applied for o in pto_using_main)
         legacy_hours = sum(
-            o.duration_hours for o in pto_using
+            o.duration_hours
+            for o in pto_using_main
             if o.pto_hours_applied == 0 and o.personal_hours_applied == 0 and o.duration_hours
         )
         if legacy_hours and pto_used == 0 and personal_used == 0:
             pto_used = legacy_hours
+
+        grace_pg = occurrences_main.aggregate(t=Sum("probation_grace_hours_applied"))["t"] or 0
+        if grace_pg:
+            grace_time_used = float(grace_pg)
+        else:
+            grace_time_used = float(
+                occurrences_main.filter(subtype=OccurrenceSubtype.GRACE_TIME).aggregate(
+                    t=Sum("duration_hours")
+                )["t"]
+                or 0
+            )
+
+        fmla_hours_agg = occurrences_fmla.aggregate(t=Sum("duration_hours"))
+        fmla_used_hours = float(fmla_hours_agg["t"] or 0)
+        fmla_pto_agg = occurrences_fmla.filter(pto_applied=True).aggregate(t=Sum("pto_hours_applied"))
+        fmla_pto_applied_total = float(fmla_pto_agg["t"] or 0)
+
+        leave_group_hours_agg = occurrences_leave_group.aggregate(t=Sum("duration_hours"))
+        leave_group_total_hours = float(leave_group_hours_agg["t"] or 0)
+        leave_group_pto_agg = occurrences_leave_group.filter(pto_applied=True).aggregate(
+            t=Sum("pto_hours_applied")
+        )
+        leave_group_pto_applied_total = float(leave_group_pto_agg["t"] or 0)
 
         static_dirs = getattr(settings, "STATICFILES_DIRS", []) or []
         static_root = Path(static_dirs[0]) if static_dirs else Path(settings.BASE_DIR) / "static"
@@ -1543,13 +1742,22 @@ def generate_report_pdf(request):
         template = get_template("attendance/report_pdf_template.html")
         html = template.render({
             "user": user,
-            "occurrences": occurrences,
+            "occurrences_main": occurrences_main,
+            "occurrences_fmla": occurrences_fmla,
+            "occurrences_leave_group": occurrences_leave_group,
             "start": start_date,
             "end": end_date,
             "logo_uri": logo_uri,
             "pto_used": pto_used,
             "personal_used": personal_used,
             "pto_remaining": user.pto_balance,
+            "fmla_used_hours": fmla_used_hours,
+            "fmla_pto_applied_total": fmla_pto_applied_total,
+            "grace_time_used": grace_time_used,
+            "leave_group_total_hours": leave_group_total_hours,
+            "leave_group_pto_applied_total": leave_group_pto_applied_total,
+            "has_fmla_rows": occurrences_fmla.exists(),
+            "has_leave_group_rows": occurrences_leave_group.exists(),
         })
         response = HttpResponse(content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{user.username}_report.pdf"'
@@ -1560,30 +1768,9 @@ def generate_report_pdf(request):
 
 @login_required
 def perfect_attendance_pdf(request):
-    """PDF of Perfect Attendance (reported time-entry hours; same visibility as dashboard)."""
+    """PDF of Perfect Attendance (same company-wide qualifying list as dashboard; hours per executive policy)."""
     request_user = request.user
     today = date.today()
-
-    if request_user.role == RoleChoices.EXECUTIVE:
-        visible_users = CustomUser.objects.all()
-    elif request_user.role == RoleChoices.MANAGER:
-        visible_users = CustomUser.objects.filter(department=request_user.department)
-    elif request_user.role == RoleChoices.SUPERVISOR:
-        visible_users = CustomUser.objects.filter(Q(supervisor=request_user) | Q(id=request_user.id))
-    elif request_user.role == RoleChoices.GROUP_LEAD:
-        visible_users = CustomUser.objects.filter(Q(group_lead=request_user) | Q(id=request_user.id))
-    elif request_user.role == RoleChoices.TEAM_LEAD:
-        visible_users = CustomUser.objects.filter(Q(team_lead=request_user) | Q(id=request_user.id))
-    else:
-        visible_users = CustomUser.objects.filter(id=request_user.id)
-
-    visible_users = visible_users.order_by(
-        "payroll_lastname",
-        "payroll_firstname",
-        "last_name",
-        "first_name",
-        "username",
-    )
 
     pa_year_str = request.GET.get("pa_year")
     pa_month_str = request.GET.get("pa_month")
@@ -1620,7 +1807,7 @@ def perfect_attendance_pdf(request):
         pa_period_description = f"{pa_first:%B %Y}"
 
     perfect_attendance_rows = _perfect_attendance_with_hours(
-        visible_users, pa_first, pa_period_end
+        _perfect_attendance_candidate_users(), pa_first, pa_period_end
     )
     pa_hours_total = sum(r["total_hours"] for r in perfect_attendance_rows)
 
@@ -1653,6 +1840,7 @@ def perfect_attendance_pdf(request):
         break
 
     template = get_template("attendance/perfect_attendance_pdf.html")
+    show_pa_hours = request_user.role == RoleChoices.EXECUTIVE
     html = template.render(
         {
             "logo_uri": logo_uri,
@@ -1660,6 +1848,7 @@ def perfect_attendance_pdf(request):
             "rows": perfect_attendance_rows,
             "pa_hours_total": pa_hours_total,
             "generated_at": today,
+            "show_perfect_attendance_hours": show_pa_hours,
         }
     )
     response = HttpResponse(content_type="application/pdf")
@@ -1868,7 +2057,8 @@ def approve_work_through_lunch(request, slug):
             if entry.lunch_out == lo and entry.lunch_in == li:
                 entry.lunch_out = None
                 entry.lunch_in = None
-                entry.save(update_fields=["lunch_out", "lunch_in"])
+        # Persist so missing_punch_flagged clears when the day is complete (e.g. work-through lunch).
+        entry.save()
     messages.success(request, "Work-through-lunch request approved.")
     return redirect("attendance:team_time_off_requests")
 

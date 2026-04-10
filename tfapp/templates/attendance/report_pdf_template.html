@@ -5,11 +5,14 @@
         body { font-family: sans-serif; font-size: 12px; padding: 70px 8px 8px 8px; margin: 0; }
         .logo-header { position: fixed; top: 0; left: 0; padding: 8px; z-index: 1; }
         .logo-header img { height: 72px; width: auto; }
-        .report-header { margin: 0; padding: 0; line-height: 1.3; }
-        .report-header h3 { margin: 0 0 2px 0; font-size: 14px; text-align: left; }
-        .report-header p { margin: 0; padding: 0; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .report-header { margin: 0; padding: 0; line-height: 1.35; }
+        .report-header h3 { margin: 0 0 4px 0; font-size: 14px; text-align: left; }
+        .report-header p { margin: 0 0 4px 0; padding: 0; }
+        .section-title { font-size: 12px; font-weight: bold; margin: 14px 0 6px 0; }
+        table { width: 100%; border-collapse: collapse; margin-top: 6px; margin-bottom: 4px; }
         th, td { border: 1px solid #333; padding: 4px 6px; text-align: left; }
+        td.num, th.num { text-align: right; }
+        tfoot td { font-weight: bold; }
     </style>
 </head>
 <body>
@@ -19,28 +22,117 @@
     </div>
     {% endif %}
     <div class="report-header">
-    <h3>Attendance</h3>
-    <p><strong>Employee:</strong> {{ user.payroll_display_name }}</p>
-    <p><strong>Period:</strong> {{ start }} to {{ end }}</p>
-    <p><strong>PTO used:</strong> {{ pto_used|floatformat:1 }} hours &nbsp; <strong>Personal used:</strong> {{ personal_used|floatformat:1 }} hours &nbsp; <strong>PTO remaining:</strong> {{ pto_remaining|floatformat:1 }} hours</p>
+        <h3>Attendance</h3>
+        <p><strong>Employee:</strong> {{ user.payroll_display_name }}</p>
+        <p><strong>Period:</strong> {{ start }} to {{ end }}</p>
+        <p>
+            <strong>PTO used:</strong> {{ pto_used|floatformat:1 }} hours
+            &nbsp; <strong>Personal used:</strong> {{ personal_used|floatformat:1 }} hours
+            &nbsp; <strong>PTO remaining:</strong> {{ pto_remaining|floatformat:1 }} hours
+        </p>
+        <p>
+            <strong>FMLA used:</strong> {{ fmla_used_hours|floatformat:1 }} hours
+            &nbsp; <strong>FMLA — PTO applied:</strong> {{ fmla_pto_applied_total|floatformat:1 }} hours
+            &nbsp; <strong>Grace time used:</strong> {{ grace_time_used|floatformat:1 }} hours
+        </p>
     </div>
 
+    <p class="section-title">Absences (PTO, personal &amp; grace time)</p>
     <table>
         <thead>
             <tr>
-                <th>Date</th><th>Type</th><th>Subtype</th><th>Hours</th>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Subtype</th>
+                <th class="num">Duration (hrs)</th>
+                <th class="num">PTO applied</th>
+                <th class="num">Personal applied</th>
             </tr>
         </thead>
         <tbody>
-            {% for occ in occurrences %}
+            {% for occ in occurrences_main %}
             <tr>
                 <td>{{ occ.date }}</td>
                 <td>{{ occ.get_occurrence_type_display }}</td>
                 <td>{{ occ.get_subtype_display }}</td>
-                <td>{{ occ.duration_hours }}</td>
+                <td class="num">{{ occ.duration_hours|floatformat:2 }}</td>
+                <td class="num">{{ occ.pto_hours_applied|floatformat:2 }}</td>
+                <td class="num">{{ occ.personal_hours_applied|floatformat:2 }}</td>
             </tr>
+            {% empty %}
+            <tr><td colspan="6">No records in this category for the period.</td></tr>
             {% endfor %}
         </tbody>
+    </table>
+
+    <p class="section-title">FMLA</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Subtype</th>
+                <th class="num">Duration (hrs)</th>
+                <th class="num">PTO applied</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for occ in occurrences_fmla %}
+            <tr>
+                <td>{{ occ.date }}</td>
+                <td>{{ occ.get_occurrence_type_display }}</td>
+                <td>{{ occ.get_subtype_display }}</td>
+                <td class="num">{{ occ.duration_hours|floatformat:2 }}</td>
+                <td class="num">{{ occ.pto_hours_applied|floatformat:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5">No FMLA absences in this period.</td></tr>
+            {% endfor %}
+        </tbody>
+        {% if has_fmla_rows %}
+        <tfoot>
+            <tr>
+                <td colspan="3">Total</td>
+                <td class="num">{{ fmla_used_hours|floatformat:2 }}</td>
+                <td class="num">{{ fmla_pto_applied_total|floatformat:2 }}</td>
+            </tr>
+        </tfoot>
+        {% endif %}
+    </table>
+
+    <p class="section-title">Leave of Absence &amp; Other</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Subtype</th>
+                <th class="num">Duration (hrs)</th>
+                <th class="num">PTO applied</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for occ in occurrences_leave_group %}
+            <tr>
+                <td>{{ occ.date }}</td>
+                <td>{{ occ.get_occurrence_type_display }}</td>
+                <td>{{ occ.get_subtype_display }}</td>
+                <td class="num">{{ occ.duration_hours|floatformat:2 }}</td>
+                <td class="num">{{ occ.pto_hours_applied|floatformat:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5">No records in this category for the period.</td></tr>
+            {% endfor %}
+        </tbody>
+        {% if has_leave_group_rows %}
+        <tfoot>
+            <tr>
+                <td colspan="3">Total</td>
+                <td class="num">{{ leave_group_total_hours|floatformat:2 }}</td>
+                <td class="num">{{ leave_group_pto_applied_total|floatformat:2 }}</td>
+            </tr>
+        </tfoot>
+        {% endif %}
     </table>
 </body>
 </html>
