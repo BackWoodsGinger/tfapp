@@ -73,8 +73,8 @@ SESSION_ENGINE = "django.contrib.sessions.backends.db"
 SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", str(90 * 60)))
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-# Set DJANGO_SESSION_SAVE_EVERY_REQUEST=false to reduce DB session write contention (e.g. if JSON/API requests fail with session errors).
-SESSION_SAVE_EVERY_REQUEST = _env_bool("DJANGO_SESSION_SAVE_EVERY_REQUEST", True)
+# False = fewer session DB writes (better under SQLite + concurrent requests). True = sliding expiry on every request.
+SESSION_SAVE_EVERY_REQUEST = _env_bool("DJANGO_SESSION_SAVE_EVERY_REQUEST", False)
 
 CACHES = {
     "default": {
@@ -88,6 +88,11 @@ CACHES = {
 # (see Django docs) so all workers share one cache, or raise this TTL.
 ABSENTEEISM_CHART_CACHE_SECONDS = int(
     os.environ.get("DJANGO_ABSENTEEISM_CHART_CACHE_SECONDS", str(60 * 60))
+)
+
+# Perfect Attendance table on dashboard (expensive); cache serialized rows per month/period.
+PERFECT_ATTENDANCE_CACHE_SECONDS = int(
+    os.environ.get("DJANGO_PERFECT_ATTENDANCE_CACHE_SECONDS", str(10 * 60))
 )
 
 # Application definition
@@ -146,9 +151,13 @@ WSGI_APPLICATION = 'tfapp.wsgi.application'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
+        "OPTIONS": {
+            # Longer busy timeout reduces "database is locked" under concurrent reads/writes (e.g. chart + dashboard).
+            "timeout": int(os.environ.get("DJANGO_SQLITE_TIMEOUT", "30")),
+        },
     }
 }
 

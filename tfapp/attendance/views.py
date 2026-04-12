@@ -1,5 +1,6 @@
 import io
 import logging
+from collections import defaultdict
 
 from django.shortcuts import render, get_object_or_404, redirect
 from django.urls import reverse
@@ -544,21 +545,24 @@ def dashboard(request):
 
     start_of_week = today - timedelta(days=(today.weekday() + 1) % 7)
     end_of_week = start_of_week + timedelta(days=6)
-    weekly_totals = []
+    ne_users = list(visible_users.filter(is_exempt=False).prefetch_related("schedules"))
+    ne_ids = [u.id for u in ne_users]
+    entries_by_user = defaultdict(list)
+    if ne_ids:
+        for e in TimeEntry.objects.filter(
+            user_id__in=ne_ids, date__range=[start_of_week, end_of_week]
+        ):
+            entries_by_user[e.user_id].append(e)
 
-    for u in visible_users.filter(is_exempt=False):
+    weekly_totals = []
+    for u in ne_users:
         total_actual = 0
         total_reported = 0
-        total_scheduled = 0
-
-        entries = TimeEntry.objects.filter(user=u, date__range=[start_of_week, end_of_week])
-        for entry in entries:
+        for entry in entries_by_user[u.id]:
             if entry.clock_in and entry.clock_out:
                 total_actual += entry.actual_worked_hours()
                 total_reported += entry.reported_worked_hours()
-
-            total_scheduled += scheduled_duration_hours_for_day(u, entry.date)
-
+        total_scheduled = _scheduled_hours_for_range(u, start_of_week, end_of_week)
         delta = round(total_reported - total_scheduled, 2)
         weekly_totals.append((
             u,
@@ -648,10 +652,35 @@ def dashboard(request):
             )
         else:
             pa_period_description = f"{pa_first:%B %Y}"
-        perfect_attendance_rows = _perfect_attendance_with_hours(
-            _perfect_attendance_candidate_users(), pa_first, pa_period_end
+        pa_cache_key = f"pa_rows_v1:{pa_year}:{pa_month}:{pa_period_end.isoformat()}"
+        pa_cache_ttl = getattr(
+            django_settings, "PERFECT_ATTENDANCE_CACHE_SECONDS", 10 * 60
         )
-        pa_hours_total = sum(r["total_hours"] for r in perfect_attendance_rows)
+        pa_cached = cache.get(pa_cache_key)
+        if pa_cached is not None:
+            pa_user_ids = [r["user_id"] for r in pa_cached]
+            users_by_id = CustomUser.objects.in_bulk(pa_user_ids)
+            perfect_attendance_rows = []
+            for r in pa_cached:
+                u = users_by_id.get(r["user_id"])
+                if u is not None:
+                    perfect_attendance_rows.append(
+                        {"user": u, "total_hours": r["total_hours"]}
+                    )
+            pa_hours_total = sum(x["total_hours"] for x in perfect_attendance_rows)
+        else:
+            perfect_attendance_rows = _perfect_attendance_with_hours(
+                _perfect_attendance_candidate_users(), pa_first, pa_period_end
+            )
+            pa_hours_total = sum(r["total_hours"] for r in perfect_attendance_rows)
+            cache.set(
+                pa_cache_key,
+                [
+                    {"user_id": r["user"].id, "total_hours": r["total_hours"]}
+                    for r in perfect_attendance_rows
+                ],
+                pa_cache_ttl,
+            )
 
     scheduled_not_clocked = _scheduled_but_not_clocked_in(visible_users, today)
 
@@ -799,26 +828,49 @@ def payroll_view(request):
         end_of_week = current_week_saturday
         start_of_week = end_of_week - timedelta(days=6)
 
-    weekly_totals = []
+    ne_payroll_users = sorted(
+        visible_users.filter(is_exempt=False).prefetch_related("schedules"),
+        key=_payroll_sort_key,
+    )
+    ne_payroll_ids = [u.id for u in ne_payroll_users]
+    entries_by_uid = defaultdict(list)
+    if ne_payroll_ids:
+        for e in TimeEntry.objects.filter(
+            user_id__in=ne_payroll_ids,
+            date__range=[start_of_week, end_of_week],
+        ):
+            entries_by_uid[e.user_id].append(e)
 
-    for u in sorted(visible_users.filter(is_exempt=False), key=_payroll_sort_key):
+    pto_by_uid = {}
+    if ne_payroll_ids:
+        for row in (
+            Occurrence.objects.filter(
+                user_id__in=ne_payroll_ids,
+                date__range=[start_of_week, end_of_week],
+                pto_applied=True,
+            )
+            .exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
+            .values("user_id")
+            .annotate(
+                pto_sum=Sum("pto_hours_applied"),
+                per_sum=Sum("personal_hours_applied"),
+            )
+        ):
+            pto_by_uid[row["user_id"]] = (
+                float(row["pto_sum"] or 0),
+                float(row["per_sum"] or 0),
+            )
+
+    weekly_totals = []
+    for u in ne_payroll_users:
         total_actual = 0
         total_reported = 0
-
-        entries = TimeEntry.objects.filter(user=u, date__range=[start_of_week, end_of_week])
-        for entry in entries:
+        for entry in entries_by_uid[u.id]:
             if entry.clock_in and entry.clock_out:
                 total_actual += entry.actual_worked_hours()
                 total_reported += entry.reported_worked_hours()
-
         total_scheduled = _scheduled_hours_for_range(u, start_of_week, end_of_week)
-        week_pto_personal = Occurrence.objects.filter(
-            user=u,
-            date__range=[start_of_week, end_of_week],
-            pto_applied=True,
-        ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
-        pto_applied = sum(o.pto_hours_applied for o in week_pto_personal)
-        personal_applied = sum(o.personal_hours_applied for o in week_pto_personal)
+        pto_applied, personal_applied = pto_by_uid.get(u.id, (0.0, 0.0))
         weekly_totals.append((
             u,
             round(total_actual, 2),
