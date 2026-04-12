@@ -253,32 +253,10 @@ def _last_day_of_quarter(year: int, quarter: int) -> date:
     return [date(year, 3, 31), date(year, 6, 30), date(year, 9, 30), date(year, 12, 31)][quarter - 1]
 
 
-def _company_scheduled_prefix_by_day(
-    users: list, span_start: date, span_end: date
-) -> tuple[list[float], dict[date, int]]:
-    """
-    One pass over [span_start, span_end]: for each day, sum scheduled hours across users.
-    Returns (prefix_sums, date_to_index) where prefix_sums[0]==0 and
-    sum(scheduled for [ds, de] inclusive) == prefix_sums[j+1] - prefix_sums[i]
-    for indices i,j of ds,de.
-    """
-    prefix: list[float] = [0.0]
-    date_to_i: dict[date, int] = {}
-    idx = 0
-    d = span_start
-    while d <= span_end:
-        day_total = sum(scheduled_duration_hours_for_day(u, d) for u in users)
-        prefix.append(prefix[-1] + day_total)
-        date_to_i[d] = idx
-        idx += 1
-        d += timedelta(days=1)
-    return prefix, date_to_i
-
-
-def _scheduled_hours_company_from_prefix(
+def _range_from_prefix(
     prefix: list[float], date_to_i: dict[date, int], start: date, end: date
 ) -> float:
-    """Range sum using prefix from _company_scheduled_prefix_by_day (same span must cover start/end)."""
+    """Inclusive range sum; prefix from _scheduled_and_unplanned_prefixes."""
     if start > end:
         return 0.0
     i = date_to_i.get(start)
@@ -288,15 +266,39 @@ def _scheduled_hours_company_from_prefix(
     return prefix[j + 1] - prefix[i]
 
 
-def _unplanned_absence_hours_range(start: date, end: date) -> float:
-    return float(
-        Occurrence.objects.filter(
+def _scheduled_and_unplanned_prefixes(
+    users: list, span_start: date, span_end: date
+) -> tuple[list[float], list[float], dict[date, int]]:
+    """
+    One pass over [span_start, span_end]:
+    - Scheduled: sum hours across users per day (Python; unavoidable without storing per-day rosters).
+    - Unplanned: one DB query for daily totals, then prefix sums for fast range lookups.
+    """
+    daily_unplanned = {
+        row["date"]: float(row["total"] or 0.0)
+        for row in Occurrence.objects.filter(
             occurrence_type=OccurrenceType.UNPLANNED,
-            date__gte=start,
-            date__lte=end,
-        ).aggregate(s=Sum("duration_hours"))["s"]
-        or 0.0
-    )
+            date__gte=span_start,
+            date__lte=span_end,
+        )
+        .values("date")
+        .annotate(total=Sum("duration_hours"))
+    }
+
+    sched_prefix: list[float] = [0.0]
+    unplan_prefix: list[float] = [0.0]
+    date_to_i: dict[date, int] = {}
+    idx = 0
+    d = span_start
+    while d <= span_end:
+        day_sched = sum(scheduled_duration_hours_for_day(u, d) for u in users)
+        day_unpl = daily_unplanned.get(d, 0.0)
+        sched_prefix.append(sched_prefix[-1] + day_sched)
+        unplan_prefix.append(unplan_prefix[-1] + day_unpl)
+        date_to_i[d] = idx
+        idx += 1
+        d += timedelta(days=1)
+    return sched_prefix, unplan_prefix, date_to_i
 
 
 def _absenteeism_pct(unplanned_h: float, scheduled_h: float) -> float:
@@ -353,17 +355,22 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
     # Single pass over the full span (all chart periods are inside this range).
     span_start = date(last_completed_year - 2, 1, 1)
     span_end = today
-    sched_prefix, sched_idx = _company_scheduled_prefix_by_day(users, span_start, span_end)
+    sched_prefix, unplan_prefix, sched_idx = _scheduled_and_unplanned_prefixes(
+        users, span_start, span_end
+    )
 
     def sched_between(ds: date, de: date) -> float:
-        return _scheduled_hours_company_from_prefix(sched_prefix, sched_idx, ds, de)
+        return _range_from_prefix(sched_prefix, sched_idx, ds, de)
+
+    def unpl_between(ds: date, de: date) -> float:
+        return _range_from_prefix(unplan_prefix, sched_idx, ds, de)
 
     # Three completed calendar years (oldest first): Jan 1 – Dec 31 each
     for i in range(3):
         y = last_completed_year - 2 + i
         ys = date(y, 1, 1)
         ye = date(y, 12, 31)
-        unpl = _unplanned_absence_hours_range(ys, ye)
+        unpl = unpl_between(ys, ye)
         sched = sched_between(ys, ye)
         labels.append(str(y))
         pcts.append(_absenteeism_pct(unpl, sched))
@@ -383,7 +390,7 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
     quarter_windows.reverse()
 
     for qs, qe, label in quarter_windows:
-        unpl = _unplanned_absence_hours_range(qs, qe)
+        unpl = unpl_between(qs, qe)
         sched = sched_between(qs, qe)
         labels.append(label)
         pcts.append(_absenteeism_pct(unpl, sched))
@@ -399,7 +406,7 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
         period_end = min(today, me)
         if ms > today:
             break
-        unpl = _unplanned_absence_hours_range(ms, period_end)
+        unpl = unpl_between(ms, period_end)
         sched = sched_between(ms, period_end)
         labels.append(f"{month_name[month][:3]} {str(cy)[2:]}")
         pcts.append(_absenteeism_pct(unpl, sched))
@@ -430,7 +437,8 @@ def absenteeism_chart_api(request):
                 "trend": [float(x) for x in raw["trend"]],
                 "target_pct": float(raw["target_pct"]),
             }
-            cache.set(cache_key, data, 300)
+            ttl = getattr(django_settings, "ABSENTEEISM_CHART_CACHE_SECONDS", 3600)
+            cache.set(cache_key, data, ttl)
         return JsonResponse(data)
     except Exception as e:
         logger.exception("absenteeism_chart_api failed")

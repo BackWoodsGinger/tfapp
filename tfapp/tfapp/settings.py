@@ -83,6 +83,13 @@ CACHES = {
     }
 }
 
+# Dashboard absenteeism chart JSON is cached to avoid recomputing ~3 years of schedule math.
+# Default 1 hour. For multiple Gunicorn workers, LocMem is per-process—set CACHES to Redis
+# (see Django docs) so all workers share one cache, or raise this TTL.
+ABSENTEEISM_CHART_CACHE_SECONDS = int(
+    os.environ.get("DJANGO_ABSENTEEISM_CHART_CACHE_SECONDS", str(60 * 60))
+)
+
 # Application definition
 
 INSTALLED_APPS = [
