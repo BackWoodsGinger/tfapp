@@ -95,6 +95,12 @@ PERFECT_ATTENDANCE_CACHE_SECONDS = int(
     os.environ.get("DJANGO_PERFECT_ATTENDANCE_CACHE_SECONDS", str(10 * 60))
 )
 
+# Dashboard + payroll weekly summary row (same computation); short TTL keeps punches fresh.
+WEEKLY_TOTALS_CACHE_SECONDS = int(os.environ.get("DJANGO_WEEKLY_TOTALS_CACHE_SECONDS", "90"))
+
+# Absenteeism chart: how many completed calendar years to show as bars (1–3). Lower = faster.
+ABSENTEEISM_CHART_YEAR_BARS = int(os.environ.get("DJANGO_ABSENTEEISM_CHART_YEAR_BARS", "1"))
+
 # Application definition
 
 INSTALLED_APPS = [

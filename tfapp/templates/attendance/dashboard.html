@@ -199,10 +199,10 @@
           <h4 class="card-title">Unplanned Absenteeism</h4>
           <p class="text-muted small mb-2">
             Percent of company scheduled hours (active non-exempt employees) lost to unplanned absences.
-            Bars show the last three completed calendar years (full year), then the last three completed calendar quarters, then each month of the current quarter to date.
-            Green line = 2% target; red line = linear trend across the points shown. The chart loads after the page so the rest of the dashboard stays responsive.
+            Bars show one or more completed calendar years (default is one year for speed), then the last three completed quarters, then each month of the current quarter to date.
+            Green line = 2% target; red line = linear trend across the points shown. The chart loads after the page.
           </p>
-          <p id="absenteeism-chart-status" class="text-muted small mb-2">Loading chart…</p>
+          <p id="absenteeism-chart-status" class="text-muted small mb-2"></p>
           <div class="position-relative" style="height: 320px; max-width: 100%;">
             <canvas id="absenteeismChart" aria-label="Unplanned absenteeism chart"></canvas>
           </div>
@@ -416,7 +416,16 @@
     statusEl.textContent = msg;
     statusEl.className = 'small mb-2 ' + (isError ? 'text-danger' : 'text-muted');
   }
-  fetch('{% url "attendance:absenteeism_chart_api" %}', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+  setStatus('Loading chart (first request after deploy can take up to ~2 minutes)…', false);
+  var chartAbort = new AbortController();
+  var chartAbortTimer = setTimeout(function () {
+    chartAbort.abort();
+  }, 120000);
+  fetch('{% url "attendance:absenteeism_chart_api" %}', {
+    credentials: 'same-origin',
+    headers: { 'Accept': 'application/json' },
+    signal: chartAbort.signal
+  })
     .then(function (r) {
       return r.text().then(function (body) {
         var ct = (r.headers.get('Content-Type') || '').toLowerCase();
@@ -519,7 +528,14 @@
       });
     })
     .catch(function (err) {
+      if (err && err.name === 'AbortError') {
+        setStatus('Chart request timed out after 2 minutes. The server may still be computing—try Refresh. If this keeps happening, set DJANGO_ABSENTEEISM_CHART_YEAR_BARS=1 on the server.', true);
+        return;
+      }
       setStatus((err && err.message) ? err.message : 'Could not load chart.', true);
+    })
+    .finally(function () {
+      clearTimeout(chartAbortTimer);
     });
 })();
 </script>

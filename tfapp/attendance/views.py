@@ -1,3 +1,4 @@
+import hashlib
 import io
 import logging
 from collections import defaultdict
@@ -170,11 +171,17 @@ def _scheduled_but_not_clocked_in(visible_users, on_date: date, *, at_time=None)
     if at_time is None:
         at_time = django_tz.now()
     now_local = django_tz.localtime(at_time)
+    user_list = list(visible_users)
+    uids = [u.id for u in user_list]
+    entries_by_uid = {}
+    if uids:
+        for e in TimeEntry.objects.filter(user_id__in=uids, date=on_date):
+            entries_by_uid[e.user_id] = e
     out = []
-    for u in visible_users:
+    for u in user_list:
         if get_scheduled_start_for_day(u, on_date) is None:
             continue
-        entry = TimeEntry.objects.filter(user=u, date=on_date).first()
+        entry = entries_by_uid.get(u.id)
         if entry is not None and entry.clock_in is not None:
             continue
         earliest = earliest_clock_in_allowed(u, on_date)
@@ -329,54 +336,25 @@ def _linear_trend_line(values: list[float]) -> list[float]:
 
 def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
     """
-    Bar chart: last 3 completed calendar years (annual %), then last 3 completed calendar
+    Bar chart: N completed calendar years (annual %), then last 3 completed calendar
     quarters, then each month of the current quarter to date.
-    Trend line = linear regression over those points. Target = 2%.
+    Only scans the date range needed for those bars (not always 3 full years back).
     """
     today = reference or date.today()
     cq = (today.month - 1) // 3 + 1
     cy = today.year
     cur_q_start = _first_day_of_quarter(cy, cq)
 
-    # Previous quarter (last fully ended before current quarter)
     day_before = cur_q_start - timedelta(days=1)
     y_end, m_end = day_before.year, day_before.month
     pq = (m_end - 1) // 3 + 1
 
-    labels: list[str] = []
-    pcts: list[float] = []
-
-    users = list(
-        CustomUser.objects.filter(is_active=True, is_exempt=False).prefetch_related(
-            "schedules"
-        )
+    year_bars = min(
+        3,
+        max(1, int(getattr(django_settings, "ABSENTEEISM_CHART_YEAR_BARS", 1))),
     )
-
     last_completed_year = today.year - 1
-    # Single pass over the full span (all chart periods are inside this range).
-    span_start = date(last_completed_year - 2, 1, 1)
-    span_end = today
-    sched_prefix, unplan_prefix, sched_idx = _scheduled_and_unplanned_prefixes(
-        users, span_start, span_end
-    )
 
-    def sched_between(ds: date, de: date) -> float:
-        return _range_from_prefix(sched_prefix, sched_idx, ds, de)
-
-    def unpl_between(ds: date, de: date) -> float:
-        return _range_from_prefix(unplan_prefix, sched_idx, ds, de)
-
-    # Three completed calendar years (oldest first): Jan 1 – Dec 31 each
-    for i in range(3):
-        y = last_completed_year - 2 + i
-        ys = date(y, 1, 1)
-        ye = date(y, 12, 31)
-        unpl = unpl_between(ys, ye)
-        sched = sched_between(ys, ye)
-        labels.append(str(y))
-        pcts.append(_absenteeism_pct(unpl, sched))
-
-    # Three completed quarters (oldest first)
     qy, qq = y_end, pq
     quarter_windows: list[tuple[date, date, str]] = []
     for _ in range(3):
@@ -390,14 +368,50 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
             qy -= 1
     quarter_windows.reverse()
 
+    q_month_starts = {1: 1, 2: 4, 3: 7, 4: 10}[cq]
+    current_q_first_month_start = date(cy, q_month_starts, 1)
+
+    earliest_year = date(last_completed_year - (year_bars - 1), 1, 1)
+    span_candidates = [earliest_year, current_q_first_month_start]
+    if quarter_windows:
+        span_candidates.append(quarter_windows[0][0])
+    span_start = min(span_candidates)
+    span_end = today
+
+    labels: list[str] = []
+    pcts: list[float] = []
+
+    users = list(
+        CustomUser.objects.filter(is_active=True, is_exempt=False).prefetch_related(
+            "schedules"
+        )
+    )
+
+    sched_prefix, unplan_prefix, sched_idx = _scheduled_and_unplanned_prefixes(
+        users, span_start, span_end
+    )
+
+    def sched_between(ds: date, de: date) -> float:
+        return _range_from_prefix(sched_prefix, sched_idx, ds, de)
+
+    def unpl_between(ds: date, de: date) -> float:
+        return _range_from_prefix(unplan_prefix, sched_idx, ds, de)
+
+    for i in range(year_bars):
+        y = last_completed_year - (year_bars - 1) + i
+        ys = date(y, 1, 1)
+        ye = date(y, 12, 31)
+        unpl = unpl_between(ys, ye)
+        sched = sched_between(ys, ye)
+        labels.append(str(y))
+        pcts.append(_absenteeism_pct(unpl, sched))
+
     for qs, qe, label in quarter_windows:
         unpl = unpl_between(qs, qe)
         sched = sched_between(qs, qe)
         labels.append(label)
         pcts.append(_absenteeism_pct(unpl, sched))
 
-    # Current quarter: one bar per month from quarter start through today
-    q_month_starts = {1: 1, 2: 4, 3: 7, 4: 10}[cq]
     for k in range(3):
         month = q_month_starts + k
         if month > 12:
@@ -424,10 +438,19 @@ def unplanned_absenteeism_chart_data(reference: date | None = None) -> dict:
 logger = logging.getLogger(__name__)
 
 
+def _user_ids_signature(user_ids: list[int]) -> str:
+    if not user_ids:
+        return "n"
+    return hashlib.sha256(
+        ",".join(str(i) for i in sorted(user_ids)).encode()
+    ).hexdigest()[:16]
+
+
 @login_required
 def absenteeism_chart_api(request):
     """Heavy chart series for the dashboard; loaded via fetch so the dashboard page returns quickly."""
-    cache_key = f"absenteeism_chart:{date.today().isoformat()}"
+    yb = getattr(django_settings, "ABSENTEEISM_CHART_YEAR_BARS", 1)
+    cache_key = f"absenteeism_chart:v2:{date.today().isoformat()}:yb{yb}"
     try:
         data = cache.get(cache_key)
         if data is None:
@@ -547,30 +570,64 @@ def dashboard(request):
     end_of_week = start_of_week + timedelta(days=6)
     ne_users = list(visible_users.filter(is_exempt=False).prefetch_related("schedules"))
     ne_ids = [u.id for u in ne_users]
-    entries_by_user = defaultdict(list)
-    if ne_ids:
-        for e in TimeEntry.objects.filter(
-            user_id__in=ne_ids, date__range=[start_of_week, end_of_week]
-        ):
-            entries_by_user[e.user_id].append(e)
+    wk_ttl = getattr(django_settings, "WEEKLY_TOTALS_CACHE_SECONDS", 90)
+    wk_key = f"wt_v1:{start_of_week}:{end_of_week}:{_user_ids_signature(ne_ids)}"
+    cached_wt = cache.get(wk_key)
+    if cached_wt is not None:
+        bulk_ids = [r["user_id"] for r in cached_wt]
+        um = CustomUser.objects.in_bulk(bulk_ids)
+        weekly_totals = []
+        for row in cached_wt:
+            u = um.get(row["user_id"])
+            if u is not None:
+                weekly_totals.append(
+                    (
+                        u,
+                        row["actual"],
+                        row["reported"],
+                        row["scheduled"],
+                        row["delta"],
+                    )
+                )
+    else:
+        entries_by_user = defaultdict(list)
+        if ne_ids:
+            for e in TimeEntry.objects.filter(
+                user_id__in=ne_ids, date__range=[start_of_week, end_of_week]
+            ):
+                entries_by_user[e.user_id].append(e)
 
-    weekly_totals = []
-    for u in ne_users:
-        total_actual = 0
-        total_reported = 0
-        for entry in entries_by_user[u.id]:
-            if entry.clock_in and entry.clock_out:
-                total_actual += entry.actual_worked_hours()
-                total_reported += entry.reported_worked_hours()
-        total_scheduled = _scheduled_hours_for_range(u, start_of_week, end_of_week)
-        delta = round(total_reported - total_scheduled, 2)
-        weekly_totals.append((
-            u,
-            round(total_actual, 2),
-            round(total_reported, 2),
-            round(total_scheduled, 2),
-            delta,
-        ))
+        weekly_totals = []
+        for u in ne_users:
+            total_actual = 0
+            total_reported = 0
+            for entry in entries_by_user[u.id]:
+                if entry.clock_in and entry.clock_out:
+                    total_actual += entry.actual_worked_hours()
+                    total_reported += entry.reported_worked_hours()
+            total_scheduled = _scheduled_hours_for_range(u, start_of_week, end_of_week)
+            delta = round(total_reported - total_scheduled, 2)
+            weekly_totals.append((
+                u,
+                round(total_actual, 2),
+                round(total_reported, 2),
+                round(total_scheduled, 2),
+                delta,
+            ))
+        cache.set(
+            wk_key,
+            [
+                {
+                    "user_id": row[0].id,
+                    "actual": row[1],
+                    "reported": row[2],
+                    "scheduled": row[3],
+                    "delta": row[4],
+                }
+                for row in weekly_totals
+            ],
+            wk_ttl,
+        )
 
     alerts = []
     if user.is_staff:
@@ -833,52 +890,88 @@ def payroll_view(request):
         key=_payroll_sort_key,
     )
     ne_payroll_ids = [u.id for u in ne_payroll_users]
-    entries_by_uid = defaultdict(list)
-    if ne_payroll_ids:
-        for e in TimeEntry.objects.filter(
-            user_id__in=ne_payroll_ids,
-            date__range=[start_of_week, end_of_week],
-        ):
-            entries_by_uid[e.user_id].append(e)
-
-    pto_by_uid = {}
-    if ne_payroll_ids:
-        for row in (
-            Occurrence.objects.filter(
+    wk_ttl = getattr(django_settings, "WEEKLY_TOTALS_CACHE_SECONDS", 90)
+    wk_key = f"wt_pay_v1:{start_of_week}:{end_of_week}:{_user_ids_signature(ne_payroll_ids)}"
+    cached_pay = cache.get(wk_key)
+    if cached_pay is not None:
+        bulk_ids = [r["user_id"] for r in cached_pay]
+        um = CustomUser.objects.in_bulk(bulk_ids)
+        weekly_totals = []
+        for row in cached_pay:
+            u = um.get(row["user_id"])
+            if u is not None:
+                weekly_totals.append(
+                    (
+                        u,
+                        row["actual"],
+                        row["reported"],
+                        row["scheduled"],
+                        row["pto"],
+                        row["personal"],
+                    )
+                )
+    else:
+        entries_by_uid = defaultdict(list)
+        if ne_payroll_ids:
+            for e in TimeEntry.objects.filter(
                 user_id__in=ne_payroll_ids,
                 date__range=[start_of_week, end_of_week],
-                pto_applied=True,
-            )
-            .exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
-            .values("user_id")
-            .annotate(
-                pto_sum=Sum("pto_hours_applied"),
-                per_sum=Sum("personal_hours_applied"),
-            )
-        ):
-            pto_by_uid[row["user_id"]] = (
-                float(row["pto_sum"] or 0),
-                float(row["per_sum"] or 0),
-            )
+            ):
+                entries_by_uid[e.user_id].append(e)
 
-    weekly_totals = []
-    for u in ne_payroll_users:
-        total_actual = 0
-        total_reported = 0
-        for entry in entries_by_uid[u.id]:
-            if entry.clock_in and entry.clock_out:
-                total_actual += entry.actual_worked_hours()
-                total_reported += entry.reported_worked_hours()
-        total_scheduled = _scheduled_hours_for_range(u, start_of_week, end_of_week)
-        pto_applied, personal_applied = pto_by_uid.get(u.id, (0.0, 0.0))
-        weekly_totals.append((
-            u,
-            round(total_actual, 2),
-            round(total_reported, 2),
-            round(total_scheduled, 2),
-            round(pto_applied, 2),
-            round(personal_applied, 2),
-        ))
+        pto_by_uid = {}
+        if ne_payroll_ids:
+            for row in (
+                Occurrence.objects.filter(
+                    user_id__in=ne_payroll_ids,
+                    date__range=[start_of_week, end_of_week],
+                    pto_applied=True,
+                )
+                .exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
+                .values("user_id")
+                .annotate(
+                    pto_sum=Sum("pto_hours_applied"),
+                    per_sum=Sum("personal_hours_applied"),
+                )
+            ):
+                pto_by_uid[row["user_id"]] = (
+                    float(row["pto_sum"] or 0),
+                    float(row["per_sum"] or 0),
+                )
+
+        weekly_totals = []
+        for u in ne_payroll_users:
+            total_actual = 0
+            total_reported = 0
+            for entry in entries_by_uid[u.id]:
+                if entry.clock_in and entry.clock_out:
+                    total_actual += entry.actual_worked_hours()
+                    total_reported += entry.reported_worked_hours()
+            total_scheduled = _scheduled_hours_for_range(u, start_of_week, end_of_week)
+            pto_applied, personal_applied = pto_by_uid.get(u.id, (0.0, 0.0))
+            weekly_totals.append((
+                u,
+                round(total_actual, 2),
+                round(total_reported, 2),
+                round(total_scheduled, 2),
+                round(pto_applied, 2),
+                round(personal_applied, 2),
+            ))
+        cache.set(
+            wk_key,
+            [
+                {
+                    "user_id": row[0].id,
+                    "actual": row[1],
+                    "reported": row[2],
+                    "scheduled": row[3],
+                    "pto": row[4],
+                    "personal": row[5],
+                }
+                for row in weekly_totals
+            ],
+            wk_ttl,
+        )
 
     alerts = []
     if user.role in [
