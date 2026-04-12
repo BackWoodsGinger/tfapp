@@ -194,6 +194,7 @@
         </div>
       </div>
 
+      {% if show_absenteeism_chart %}
       <div class="card mb-4">
         <div class="card-body">
           <h4 class="card-title">Unplanned Absenteeism</h4>
@@ -208,6 +209,7 @@
           </div>
         </div>
       </div>
+      {% endif %}
 
       <!-- Absence report card (moved from Payroll) -->
       <div class="card mb-4">
@@ -233,9 +235,18 @@
             </div>
             <button type="submit" class="btn btn-primary">Download Report</button>
           </form>
+          {{ user_service_dates|json_script:"dashboard-user-service-dates" }}
           <script>
             (function() {
-              var userServiceDates = {{ user_service_dates_json|safe }};
+              var dataEl = document.getElementById("dashboard-user-service-dates");
+              var userServiceDates = {};
+              if (dataEl && dataEl.textContent) {
+                try {
+                  userServiceDates = JSON.parse(dataEl.textContent);
+                } catch (e) {
+                  userServiceDates = {};
+                }
+              }
               var todayIso = "{{ today_iso|escapejs }}";
               var btn = document.getElementById("current-service-year-btn");
               var userSelect = document.getElementById("id_user");
@@ -260,7 +271,8 @@
                 var today = new Date(todayIso + "T12:00:00");
                 var parts = serviceDateIso.split("-");
                 var annivThisYear = new Date(today.getFullYear(), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-                var start, end = today;
+                var end = today;
+                var start;
                 if (annivThisYear > today) {
                   start = new Date(today.getFullYear() - 1, parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
                 } else {
@@ -405,8 +417,10 @@
     </div>
   </div>
 </div>
+{% if show_absenteeism_chart %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
 <script>
+/* global Chart */
 (function () {
   var statusEl = document.getElementById('absenteeism-chart-status');
   var canvas = document.getElementById('absenteeismChart');
@@ -539,4 +553,5 @@
     });
 })();
 </script>
+{% endif %}
 {% endblock %}

@@ -449,6 +449,8 @@ def _user_ids_signature(user_ids: list[int]) -> str:
 @login_required
 def absenteeism_chart_api(request):
     """Heavy chart series for the dashboard; loaded via fetch so the dashboard page returns quickly."""
+    if request.user.role not in (RoleChoices.EXECUTIVE, RoleChoices.MANAGER):
+        return JsonResponse({"error": "forbidden"}, status=403)
     yb = getattr(django_settings, "ABSENTEEISM_CHART_YEAR_BARS", 1)
     cache_key = f"absenteeism_chart:v2:{date.today().isoformat()}:yb{yb}"
     try:
@@ -763,7 +765,7 @@ def dashboard(request):
         "report_form": report_form,
         "report_occurrences": report_occurrences,
         "report_selected_user": report_selected_user,
-        "user_service_dates_json": json.dumps(user_service_dates),
+        "user_service_dates": user_service_dates,
         "today_iso": report_today.isoformat(),
         "clock_in_overrides": clock_in_overrides,
         "is_lead_role_or_above": is_lead_role_or_above,
@@ -779,6 +781,8 @@ def dashboard(request):
         "perfect_attendance_rows": perfect_attendance_rows,
         "pa_hours_total": pa_hours_total,
         "show_perfect_attendance_hours": user.role == RoleChoices.EXECUTIVE,
+        "show_absenteeism_chart": user.role
+        in (RoleChoices.EXECUTIVE, RoleChoices.MANAGER),
     }
     return render(request, "attendance/dashboard.html", context)
 
