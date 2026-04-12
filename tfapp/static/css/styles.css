@@ -296,6 +296,13 @@ input[type="date"].form-control {
   max-width: 100%;
 }
 
+/* Payroll weekly import: align file input with buttons across Firefox / WebKit / Chromium */
+.payroll-schedule-import input[type="file"].payroll-csv-file-input.form-control-sm {
+  max-width: 100%;
+  min-height: calc(1.5em + 0.5rem + 2px);
+  line-height: 1.5;
+}
+
 /* Narrow phones: slightly smaller root size so layouts and tables read better */
 @media (max-width: 575.98px) {
   html {
