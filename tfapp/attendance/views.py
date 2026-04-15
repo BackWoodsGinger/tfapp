@@ -1520,16 +1520,13 @@ def close_payroll(request):
     # Ensure holiday occurrences exist for this payroll week
     ensure_holiday_occurrences_for_range(week_start, week_ending)
 
-    incomplete_entries = TimeEntry.objects.filter(
-        date__range=[week_start, week_ending]
-    ).filter(
-        Q(clock_in__isnull=True) |
-        Q(clock_out__isnull=True) |
-        Q(lunch_in__isnull=True) |
-        Q(lunch_out__isnull=True)
-    )
+    incomplete_entries = [
+        e
+        for e in TimeEntry.objects.filter(date__range=[week_start, week_ending])
+        if e.is_incomplete()
+    ]
 
-    if incomplete_entries.exists():
+    if incomplete_entries:
         messages.error(request, "Cannot close payroll. Some time entries are incomplete.")
         return redirect("attendance:payroll")
 
@@ -1614,12 +1611,9 @@ def close_payroll(request):
                         is_variance_to_schedule=True,
                     ).exists()
                     if not has_variance:
-                        expected_week_hours = user_total_scheduled.get(user.id, total_scheduled)
-                        subtype = (
-                            OccurrenceSubtype.EXCHANGE
-                            if total_worked_hours >= expected_week_hours
-                            else OccurrenceSubtype.TIME_OFF
-                        )
+                        # Variance-to-schedule rows are always marked Exchange; PTO/personal
+                        # application is decided later from weekly totals.
+                        subtype = OccurrenceSubtype.EXCHANGE
                         Occurrence.objects.create(
                             user=user,
                             occurrence_type=OccurrenceType.UNPLANNED,
@@ -1632,8 +1626,43 @@ def close_payroll(request):
                         )
                 current += timedelta(days=1)
 
+        # Exchange occurrences should represent only the remaining weekly shortfall
+        # after make-up time and approved time off are counted.
+        for user in users:
+            expected = user_total_scheduled.get(user.id, 0)
+            if expected <= 0:
+                continue
+            worked = user_total_worked.get(user.id, 0)
+            approved_week = sum(approved_time_off_by_user_date.get(user.id, {}).values())
+            tardy_week = sum(
+                Occurrence.objects.filter(
+                    user=user,
+                    date__range=[week_start, week_ending],
+                    subtype__in=[
+                        OccurrenceSubtype.TARDY_IN_GRACE,
+                        OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+                    ],
+                ).values_list("duration_hours", flat=True)
+            )
+            weekly_shortfall = max(0.0, round(expected - (worked + approved_week + tardy_week), 2))
+            remaining = weekly_shortfall
+            exchange_variances = list(
+                Occurrence.objects.filter(
+                    user=user,
+                    date__range=[week_start, week_ending],
+                    is_variance_to_schedule=True,
+                    subtype=OccurrenceSubtype.EXCHANGE,
+                ).order_by("date", "id")
+            )
+            for occ in exchange_variances:
+                new_duration = min(occ.duration_hours, remaining)
+                if round(occ.duration_hours, 2) != round(new_duration, 2):
+                    occ.duration_hours = round(new_duration, 2)
+                    occ.save(update_fields=["duration_hours"])
+                remaining = max(0.0, round(remaining - new_duration, 2))
+
         # Apply PTO before accrual (use current balance, not hours earned this week).
-        # EXCHANGE when user worked 40+ gets no PTO applied.
+        # EXCHANGE uses PTO/personal only when the user is still short of weekly schedule.
         week_occurrences = list(
             Occurrence.objects.filter(
                 date__range=[week_start, week_ending],
@@ -1644,7 +1673,7 @@ def close_payroll(request):
             .select_related("user")
             .order_by("user_id", "date")
         )
-        # Also include EXCHANGE only when user worked < 40 (then apply PTO)
+        # Include EXCHANGE occurrences only when the user is still below weekly schedule.
         exchange_occurrences = list(
             Occurrence.objects.filter(
                 date__range=[week_start, week_ending],
@@ -1660,7 +1689,7 @@ def close_payroll(request):
                 user_total_scheduled[occ.user_id] = expected
             # Only apply PTO/personal to EXCHANGE when the user did not meet their
             # scheduled hours for the week.
-            if worked < expected:
+            if worked < expected and occ.duration_hours > 0:
                 week_occurrences.append(occ)
         week_occurrences.sort(key=lambda o: (o.user_id, o.date))
 
@@ -1669,14 +1698,13 @@ def close_payroll(request):
             occ.apply_pto()
 
         # Accrue PTO for the week (after applying so balance used is pre-accrual).
-        # Policy: FT under 2 yr and part-time accrue 1 hr PTO per 30 hrs worked (time entries only, not PTO from requests).
-        # Cap at 40 regular hours so overtime does not accrue.
+        # Policy: FT under 2 yr and part-time accrue 1 hr PTO per 30 hrs worked
+        # from all reported time-entry hours (including overtime).
         for user in users:
-            total_worked_hours = user_total_worked.get(user.id, 0)  # from reported (quarter-hour) time entries only
+            total_worked_hours = user_total_worked.get(user.id, 0)  # reported time-entry hours only
             if total_worked_hours and (user.years_of_service() <= 2 or user.is_part_time):
                 user.refresh_from_db()  # use balance after apply_pto so accrual doesn't overwrite
-                hours_for_accrual = min(total_worked_hours, 40.0)
-                accrued = user.accrue_pto(hours_for_accrual)
+                accrued = user.accrue_pto(total_worked_hours)
                 if accrued:
                     PayrollPeriodUserSnapshot.objects.update_or_create(
                         period=period,

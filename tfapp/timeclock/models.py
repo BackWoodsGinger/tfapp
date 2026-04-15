@@ -66,10 +66,7 @@ class TimeEntry(models.Model):
             and self.clock_out
             and self.lunch_out is None
             and self.lunch_in is None
-            and not (
-                get_scheduled_lunch_out_for_day(self.user, self.date)
-                and get_scheduled_lunch_in_for_day(self.user, self.date)
-            )
+            and scheduled_lunch_datetimes_for_entry(self) is None
         ):
             return False
         return True
@@ -94,10 +91,7 @@ class TimeEntry(models.Model):
             return lunch
         if work_through_lunch_approved_for_day(self.user, self.date):
             return timedelta(0)
-        if not (
-            get_scheduled_lunch_out_for_day(self.user, self.date)
-            and get_scheduled_lunch_in_for_day(self.user, self.date)
-        ):
+        if scheduled_lunch_datetimes_for_entry(self) is None:
             return timedelta(0)
         return timedelta(minutes=30)
 

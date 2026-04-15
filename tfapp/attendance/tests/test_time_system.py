@@ -12,6 +12,8 @@ from attendance.models import (
     CustomUser,
     Occurrence,
     OccurrenceSubtype,
+    PayrollPeriod,
+    PayrollPeriodUserSnapshot,
     RoleChoices,
     TimeOffRequestStatus,
     WorkSchedule,
@@ -517,3 +519,215 @@ class TestReportsIncompleteAlerts(TestCase):
         self.assertEqual(response.status_code, 200)
         alerts = response.context.get("alerts", [])
         self.assertEqual(len(alerts), 0)
+
+
+class TestPayrollCloseLunchValidation(TestCase):
+    """Payroll close should honor schedule-aware and approved lunch rules."""
+
+    def setUp(self):
+        self.client = Client()
+        self.admin = CustomUser.objects.create_user(
+            username="payrolladmin",
+            password="testpass",
+            is_staff=True,
+            role=RoleChoices.EXECUTIVE,
+        )
+        self.client.force_login(self.admin)
+        self.close_url = reverse("attendance:close_payroll")
+
+    def test_close_payroll_allows_approved_work_through_lunch_without_lunch_punches(self):
+        tz = timezone.get_current_timezone()
+        user = CustomUser.objects.create_user(username="wtlclose", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=0,  # Monday
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        d = date(2025, 3, 3)  # Monday
+        WorkThroughLunchRequest.objects.create(
+            user=user,
+            work_date=d,
+            status=TimeOffRequestStatus.APPROVED,
+        )
+        TimeEntry.objects.create(
+            user=user,
+            date=d,
+            clock_in=timezone.make_aware(datetime(2025, 3, 3, 5, 0, 0), tz),
+            clock_out=timezone.make_aware(datetime(2025, 3, 3, 15, 30, 0), tz),
+        )
+
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
+
+    def test_close_payroll_allows_shift_ending_before_scheduled_lunch(self):
+        tz = timezone.get_current_timezone()
+        user = CustomUser.objects.create_user(username="leftbeforelunch", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=0,  # Monday
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        d = date(2025, 3, 3)  # Monday
+        entry = TimeEntry.objects.create(
+            user=user,
+            date=d,
+            clock_in=timezone.make_aware(datetime(2025, 3, 3, 5, 0, 0), tz),
+            clock_out=timezone.make_aware(datetime(2025, 3, 3, 9, 0, 0), tz),
+        )
+
+        self.assertFalse(entry.is_incomplete())
+        self.assertAlmostEqual(entry.actual_worked_hours(), 4.0, places=2)
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
+
+    def test_close_payroll_allows_unscheduled_overtime_day_without_lunch_punches(self):
+        tz = timezone.get_current_timezone()
+        user = CustomUser.objects.create_user(username="unscheduledot", password="x")
+        d = date(2025, 3, 7)  # Friday, no schedule configured
+        entry = TimeEntry.objects.create(
+            user=user,
+            date=d,
+            clock_in=timezone.make_aware(datetime(2025, 3, 7, 7, 0, 0), tz),
+            clock_out=timezone.make_aware(datetime(2025, 3, 7, 12, 0, 0), tz),
+        )
+
+        self.assertFalse(entry.is_incomplete())
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
+
+
+class TestPayrollCloseAccrualAndExchange(TestCase):
+    """Payroll close should accrue on overtime and preserve exchange subtype behavior."""
+
+    def setUp(self):
+        self.client = Client()
+        self.admin = CustomUser.objects.create_user(
+            username="payrolladmin2",
+            password="testpass",
+            is_staff=True,
+            role=RoleChoices.EXECUTIVE,
+        )
+        self.client.force_login(self.admin)
+        self.close_url = reverse("attendance:close_payroll")
+        self.tz = timezone.get_current_timezone()
+
+    def _entry(self, user, d, in_h, in_m, out_h, out_m):
+        return TimeEntry.objects.create(
+            user=user,
+            date=d,
+            clock_in=timezone.make_aware(datetime(d.year, d.month, d.day, in_h, in_m, 0), self.tz),
+            clock_out=timezone.make_aware(datetime(d.year, d.month, d.day, out_h, out_m, 0), self.tz),
+        )
+
+    def test_accrual_includes_overtime_hours(self):
+        user = CustomUser.objects.create_user(
+            username="accrualot",
+            password="x",
+            service_date=date.today() - timedelta(days=365),  # in 0-2yr bucket
+            pto_balance=0.0,
+        )
+        # Scheduled Mon-Thu 10h paid (5:00-15:30 with 30m lunch)
+        for day in [0, 1, 2, 3]:
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        # Friday overtime day (unscheduled): 6h
+        week_dates = [
+            date(2025, 3, 3),
+            date(2025, 3, 4),
+            date(2025, 3, 5),
+            date(2025, 3, 6),
+            date(2025, 3, 7),
+        ]
+        for d in week_dates[:4]:
+            self._entry(user, d, 5, 0, 15, 30)  # 10h reported each day
+        self._entry(user, week_dates[4], 7, 0, 13, 0)  # 6h overtime day
+
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 200)
+        user.refresh_from_db()
+        self.assertAlmostEqual(user.pto_balance, 1.53, places=2)  # 46 / 30 = 1.53
+        period = PayrollPeriod.objects.get(week_ending=date(2025, 3, 8))
+        snapshot = PayrollPeriodUserSnapshot.objects.get(period=period, user=user)
+        self.assertAlmostEqual(snapshot.pto_accrued_hours, 1.53, places=2)
+
+    def test_exchange_without_pto_when_weekly_hours_met(self):
+        user = CustomUser.objects.create_user(
+            username="exchangefull",
+            password="x",
+            pto_balance=5.0,
+        )
+        # Mon-Wed 10h schedule
+        for day in [0, 1, 2]:
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        # Work Monday/Wednesday and make up missed Tuesday on Thursday.
+        self._entry(user, date(2025, 3, 3), 5, 0, 15, 30)  # Mon
+        self._entry(user, date(2025, 3, 5), 5, 0, 15, 30)  # Wed
+        self._entry(user, date(2025, 3, 6), 5, 0, 15, 30)  # Thu make-up
+
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 200)
+        occ = Occurrence.objects.get(
+            user=user,
+            date=date(2025, 3, 4),  # missed scheduled Tuesday
+            is_variance_to_schedule=True,
+        )
+        self.assertEqual(occ.subtype, OccurrenceSubtype.EXCHANGE)
+        self.assertFalse(occ.pto_applied)
+        self.assertEqual(occ.pto_hours_applied, 0.0)
+        self.assertEqual(occ.personal_hours_applied, 0.0)
+
+    def test_exchange_applies_pto_when_weekly_hours_short(self):
+        user = CustomUser.objects.create_user(
+            username="exchangepartial",
+            password="x",
+            pto_balance=4.0,
+            personal_time_balance=0.0,
+        )
+        # Mon-Wed 10h schedule
+        for day in [0, 1, 2]:
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        # Miss Tuesday; only make up 6h Thursday => weekly shortfall remains 4h
+        self._entry(user, date(2025, 3, 3), 5, 0, 15, 30)  # Mon 10h
+        self._entry(user, date(2025, 3, 5), 5, 0, 15, 30)  # Wed 10h
+        self._entry(user, date(2025, 3, 6), 7, 0, 13, 0)   # Thu 6h make-up
+
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 200)
+        occ = Occurrence.objects.get(
+            user=user,
+            date=date(2025, 3, 4),  # missed scheduled Tuesday
+            is_variance_to_schedule=True,
+        )
+        self.assertEqual(occ.subtype, OccurrenceSubtype.EXCHANGE)
+        self.assertTrue(occ.pto_applied)
+        self.assertAlmostEqual(occ.pto_hours_applied, 4.0, places=2)
+        self.assertAlmostEqual(occ.personal_hours_applied, 0.0, places=2)
