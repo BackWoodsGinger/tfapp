@@ -95,6 +95,35 @@ class TimeEntry(models.Model):
             return timedelta(0)
         return timedelta(minutes=30)
 
+    def _reported_lunch_deduction_timedelta(self):
+        """
+        Lunch deduction used for payroll-reported hours.
+        lunch_out rounds down to prior quarter-hour; lunch_in rounds up to next quarter-hour.
+        """
+        if not (self.clock_in and self.clock_out):
+            return timedelta(0)
+        if self.lunch_out and self.lunch_in:
+            lo_local = timezone.localtime(self.lunch_out)
+            li_local = timezone.localtime(self.lunch_in)
+
+            lo_rounded = lo_local.replace(
+                minute=(lo_local.minute // 15) * 15,
+                second=0,
+                microsecond=0,
+            )
+            li_base = li_local.replace(minute=0, second=0, microsecond=0)
+            li_rounded = li_base + timedelta(minutes=((li_local.minute + 14) // 15) * 15)
+
+            lunch = li_rounded - lo_rounded
+            if lunch < timedelta(minutes=30):
+                lunch = timedelta(minutes=30)
+            return lunch
+        if work_through_lunch_approved_for_day(self.user, self.date):
+            return timedelta(0)
+        if scheduled_lunch_datetimes_for_entry(self) is None:
+            return timedelta(0)
+        return timedelta(minutes=30)
+
     def _worked_seconds(self):
         """Worked seconds after lunch deduction."""
         if not (self.clock_in and self.clock_out):
@@ -114,7 +143,7 @@ class TimeEntry(models.Model):
         - clock-in uses schedule grace/tardy policy (<=4 min late = on-time),
           5+ min late rounds up from scheduled start to next 15-min mark.
         - clock-out rounds down to prior 15-min mark.
-        - lunch is deducted with a 30-minute minimum using actual lunch punches.
+        - lunch uses quarter-hour rounding (out down, in up) with 30-minute minimum.
         Keeps actual punches untouched while reporting payroll-compliant hours.
         """
         if not (self.clock_in and self.clock_out):
@@ -154,7 +183,7 @@ class TimeEntry(models.Model):
             return 0.0
 
         worked = adjusted_out - adjusted_in
-        lunch = self._lunch_deduction_timedelta()
+        lunch = self._reported_lunch_deduction_timedelta()
 
         seconds = max((worked - lunch).total_seconds(), 0)
         hours = Decimal(str(seconds / 3600))

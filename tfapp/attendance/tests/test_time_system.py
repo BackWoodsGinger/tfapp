@@ -823,10 +823,13 @@ class TestReportedHoursOverridesAndLunchRounding(TestCase):
         entry = TimeEntry.objects.create(
             user=self.user,
             date=date(2025, 3, 3),  # Monday
-            clock_in=self._dt(2025, 3, 3, 5, 0),
-            lunch_out=self._dt(2025, 3, 3, 11, 0),
-            lunch_in=self._dt(2025, 3, 3, 14, 1),  # Extended lunch
+            clock_in=self._dt(2025, 3, 3, 4, 45),
+            lunch_out=self._dt(2025, 3, 3, 9, 25),
+            lunch_in=self._dt(2025, 3, 3, 12, 26),
             clock_out=self._dt(2025, 3, 3, 15, 30),
         )
-        self.assertAlmostEqual(entry.actual_worked_hours(), 7.48, places=2)
+        # Actual keeps true punches: (10h45m span - 3h1m lunch) = 7h44m => 7.73
+        self.assertAlmostEqual(entry.actual_worked_hours(), 7.73, places=2)
+        # Reported uses schedule start (no early override), floors out, and rounds lunch edges:
+        # lunch_out 9:25 -> 9:15, lunch_in 12:26 -> 12:30 => 3h15m deduction.
         self.assertAlmostEqual(entry.reported_worked_hours(), 7.25, places=2)
