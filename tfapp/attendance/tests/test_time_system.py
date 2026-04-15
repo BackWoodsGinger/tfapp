@@ -731,3 +731,102 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
         self.assertTrue(occ.pto_applied)
         self.assertAlmostEqual(occ.pto_hours_applied, 4.0, places=2)
         self.assertAlmostEqual(occ.personal_hours_applied, 0.0, places=2)
+
+    def test_tardy_out_of_grace_converts_to_zero_exchange_when_weekly_hours_met(self):
+        user = CustomUser.objects.create_user(
+            username="tardyexchange",
+            password="x",
+            pto_balance=5.0,
+        )
+        # Mon-Thu scheduled 10h paid shifts
+        for day in [0, 1, 2, 3]:
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        # Monday one hour late (9h worked), Tue/Wed/Thu normal (10h each), plus Friday 10h unscheduled make-up.
+        self._entry(user, date(2025, 3, 3), 6, 0, 15, 30)  # Mon => tardy out of grace expected
+        self._entry(user, date(2025, 3, 4), 5, 0, 15, 30)  # Tue
+        self._entry(user, date(2025, 3, 5), 5, 0, 15, 30)  # Wed
+        self._entry(user, date(2025, 3, 6), 5, 0, 15, 30)  # Thu
+        self._entry(user, date(2025, 3, 7), 5, 0, 15, 30)  # Fri unscheduled make-up
+
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 200)
+        occ = Occurrence.objects.get(user=user, date=date(2025, 3, 3), is_variance_to_schedule=True)
+        self.assertEqual(occ.subtype, OccurrenceSubtype.EXCHANGE)
+        self.assertAlmostEqual(occ.duration_hours, 0.0, places=2)
+        self.assertFalse(occ.pto_applied)
+        self.assertAlmostEqual(occ.pto_hours_applied, 0.0, places=2)
+
+
+class TestReportedHoursOverridesAndLunchRounding(TestCase):
+    """Reported-hours policy for early starts, overrides, and long lunches."""
+
+    def setUp(self):
+        self.tz = timezone.get_current_timezone()
+        self.user = CustomUser.objects.create_user(username="reportedhours", password="x")
+        for day in [0, 1, 2, 3]:
+            WorkSchedule.objects.create(
+                user=self.user,
+                day=day,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        self.approver = CustomUser.objects.create_user(username="manager1", password="x")
+
+    def _dt(self, y, m, d, hh, mm):
+        return timezone.make_aware(datetime(y, m, d, hh, mm, 0), self.tz)
+
+    def test_scheduled_early_clock_in_not_credited_without_override(self):
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2025, 3, 3),  # Monday
+            clock_in=self._dt(2025, 3, 3, 4, 45),
+            lunch_out=self._dt(2025, 3, 3, 11, 0),
+            lunch_in=self._dt(2025, 3, 3, 11, 30),
+            clock_out=self._dt(2025, 3, 3, 15, 30),
+        )
+        self.assertAlmostEqual(entry.reported_worked_hours(), 10.0, places=2)
+
+    def test_scheduled_early_clock_in_credited_with_override(self):
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2025, 3, 3),  # Monday
+            clock_in=self._dt(2025, 3, 3, 4, 45),
+            lunch_out=self._dt(2025, 3, 3, 11, 0),
+            lunch_in=self._dt(2025, 3, 3, 11, 30),
+            clock_out=self._dt(2025, 3, 3, 15, 30),
+            clock_in_authorized_by=self.approver,
+        )
+        self.assertAlmostEqual(entry.reported_worked_hours(), 10.25, places=2)
+
+    def test_unscheduled_early_clock_in_not_credited_without_override(self):
+        # Friday is unscheduled; fallback schedule start from nearby days is 5:00.
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2025, 3, 7),  # Friday
+            clock_in=self._dt(2025, 3, 7, 4, 45),
+            lunch_out=self._dt(2025, 3, 7, 11, 0),
+            lunch_in=self._dt(2025, 3, 7, 11, 30),
+            clock_out=self._dt(2025, 3, 7, 15, 30),
+        )
+        self.assertAlmostEqual(entry.reported_worked_hours(), 10.0, places=2)
+
+    def test_long_lunch_result_is_floored_to_quarter_hour(self):
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2025, 3, 3),  # Monday
+            clock_in=self._dt(2025, 3, 3, 5, 0),
+            lunch_out=self._dt(2025, 3, 3, 11, 0),
+            lunch_in=self._dt(2025, 3, 3, 14, 1),  # Extended lunch
+            clock_out=self._dt(2025, 3, 3, 15, 30),
+        )
+        self.assertAlmostEqual(entry.actual_worked_hours(), 7.48, places=2)
+        self.assertAlmostEqual(entry.reported_worked_hours(), 7.25, places=2)

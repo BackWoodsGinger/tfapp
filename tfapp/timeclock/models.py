@@ -122,14 +122,29 @@ class TimeEntry(models.Model):
 
         scheduled_start = self._scheduled_start_time_for_date()
         if not scheduled_start:
-            actual = Decimal(str(self.actual_worked_hours()))
-            quarter_hours = (actual * Decimal("4")).to_integral_value(rounding=ROUND_DOWN)
-            adjusted = (quarter_hours / Decimal("4")).quantize(Decimal("0.01"))
-            return float(adjusted)
-
-        _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
-            self.clock_in, scheduled_start
-        )
+            # Unscheduled day: only credit early time when an approver override exists.
+            fallback_start = self._fallback_scheduled_start_time_for_unscheduled_day()
+            if self.clock_in_authorized_by or not fallback_start:
+                adjusted_in = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
+            else:
+                _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+                    self.clock_in, fallback_start
+                )
+        else:
+            # Scheduled day: early clock-ins require override to be credited.
+            if self.clock_in_authorized_by:
+                clock_in_local = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
+                scheduled_local = self._scheduled_local_datetime(scheduled_start)
+                if clock_in_local < scheduled_local:
+                    adjusted_in = clock_in_local
+                else:
+                    _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+                        self.clock_in, scheduled_start
+                    )
+            else:
+                _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+                    self.clock_in, scheduled_start
+                )
 
         out_local = timezone.localtime(self.clock_out)
         rounded_out_minutes = (out_local.minute // 15) * 15
@@ -142,7 +157,10 @@ class TimeEntry(models.Model):
         lunch = self._lunch_deduction_timedelta()
 
         seconds = max((worked - lunch).total_seconds(), 0)
-        return float(Decimal(str(seconds / 3600)).quantize(Decimal("0.01")))
+        hours = Decimal(str(seconds / 3600))
+        quarter_hours = (hours * Decimal("4")).to_integral_value(rounding=ROUND_DOWN)
+        adjusted = (quarter_hours / Decimal("4")).quantize(Decimal("0.01"))
+        return float(adjusted)
 
     def rounded_start(self):
         if self.clock_in:
@@ -194,6 +212,23 @@ class TimeEntry(models.Model):
         Scheduled start time for this entry date from weekly_schedule or WorkSchedule.
         """
         return get_scheduled_start_for_day(self.user, self.date)
+
+    def _fallback_scheduled_start_time_for_unscheduled_day(self):
+        """
+        For unscheduled days, infer a reference start from nearby scheduled weekdays.
+        Prefers prior days in the same week, then following days.
+        """
+        for offset in range(1, 7):
+            prev_day = self.date - timedelta(days=offset)
+            start = get_scheduled_start_for_day(self.user, prev_day)
+            if start:
+                return start
+        for offset in range(1, 7):
+            next_day = self.date + timedelta(days=offset)
+            start = get_scheduled_start_for_day(self.user, next_day)
+            if start:
+                return start
+        return None
 
     def check_tardy(self):
         """

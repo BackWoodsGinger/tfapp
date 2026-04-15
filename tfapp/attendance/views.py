@@ -1661,6 +1661,38 @@ def close_payroll(request):
                     occ.save(update_fields=["duration_hours"])
                 remaining = max(0.0, round(remaining - new_duration, 2))
 
+        # If the user met or exceeded weekly scheduled hours, convert out-of-grace tardies
+        # to zero-hour Exchange rows so no PTO/personal is deducted.
+        for user in users:
+            expected = user_total_scheduled.get(user.id, 0)
+            if expected <= 0:
+                continue
+            worked = user_total_worked.get(user.id, 0)
+            if worked < expected:
+                continue
+            tardy_out_rows = Occurrence.objects.filter(
+                user=user,
+                date__range=[week_start, week_ending],
+                subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+            )
+            for occ in tardy_out_rows:
+                occ.subtype = OccurrenceSubtype.EXCHANGE
+                occ.duration_hours = 0.0
+                occ.is_variance_to_schedule = True
+                occ.pto_applied = False
+                occ.pto_hours_applied = 0.0
+                occ.personal_hours_applied = 0.0
+                occ.save(
+                    update_fields=[
+                        "subtype",
+                        "duration_hours",
+                        "is_variance_to_schedule",
+                        "pto_applied",
+                        "pto_hours_applied",
+                        "personal_hours_applied",
+                    ]
+                )
+
         # Apply PTO before accrual (use current balance, not hours earned this week).
         # EXCHANGE uses PTO/personal only when the user is still short of weekly schedule.
         week_occurrences = list(
