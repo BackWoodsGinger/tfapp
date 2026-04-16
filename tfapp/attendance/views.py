@@ -1634,17 +1634,7 @@ def close_payroll(request):
                 continue
             worked = user_total_worked.get(user.id, 0)
             approved_week = sum(approved_time_off_by_user_date.get(user.id, {}).values())
-            tardy_week = sum(
-                Occurrence.objects.filter(
-                    user=user,
-                    date__range=[week_start, week_ending],
-                    subtype__in=[
-                        OccurrenceSubtype.TARDY_IN_GRACE,
-                        OccurrenceSubtype.TARDY_OUT_OF_GRACE,
-                    ],
-                ).values_list("duration_hours", flat=True)
-            )
-            weekly_shortfall = max(0.0, round(expected - (worked + approved_week + tardy_week), 2))
+            weekly_shortfall = max(0.0, round(expected - (worked + approved_week), 2))
             remaining = weekly_shortfall
             exchange_variances = list(
                 Occurrence.objects.filter(
@@ -1668,7 +1658,8 @@ def close_payroll(request):
             if expected <= 0:
                 continue
             worked = user_total_worked.get(user.id, 0)
-            if worked < expected:
+            approved_week = sum(approved_time_off_by_user_date.get(user.id, {}).values())
+            if (worked + approved_week) < expected:
                 continue
             tardy_out_rows = Occurrence.objects.filter(
                 user=user,
@@ -1719,9 +1710,10 @@ def close_payroll(request):
             if expected is None:
                 expected = _scheduled_hours_for_range(occ.user, week_start, week_ending)
                 user_total_scheduled[occ.user_id] = expected
+            approved_week = sum(approved_time_off_by_user_date.get(occ.user_id, {}).values())
             # Only apply PTO/personal to EXCHANGE when the user did not meet their
             # scheduled hours for the week.
-            if worked < expected and occ.duration_hours > 0:
+            if (worked + approved_week) < expected and occ.duration_hours > 0:
                 week_occurrences.append(occ)
         week_occurrences.sort(key=lambda o: (o.user_id, o.date))
 

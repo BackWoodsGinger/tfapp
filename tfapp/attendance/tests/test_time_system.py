@@ -763,6 +763,48 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
         self.assertFalse(occ.pto_applied)
         self.assertAlmostEqual(occ.pto_hours_applied, 0.0, places=2)
 
+    def test_unscheduled_makeup_reduces_exchange_shortfall(self):
+        """
+        Miss two scheduled 10h days, work 4h on an unscheduled day:
+        exchange totals should reflect net 16h shortfall (10 + 6).
+        """
+        user = CustomUser.objects.create_user(
+            username="makeup4",
+            password="x",
+            pto_balance=20.0,
+            personal_time_balance=0.0,
+        )
+        # Mon-Thu scheduled 10h paid shifts
+        for day in [0, 1, 2, 3]:
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        # Work Wed/Thu only (miss Mon/Tue), then work 4h Fri unscheduled.
+        self._entry(user, date(2025, 3, 5), 5, 0, 15, 30)  # Wed 10
+        self._entry(user, date(2025, 3, 6), 5, 0, 15, 30)  # Thu 10
+        self._entry(user, date(2025, 3, 7), 7, 0, 11, 0)   # Fri 4 unscheduled
+
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 200)
+
+        occs = list(
+            Occurrence.objects.filter(
+                user=user,
+                is_variance_to_schedule=True,
+                date__in=[date(2025, 3, 3), date(2025, 3, 4)],
+            ).order_by("date")
+        )
+        self.assertEqual(len(occs), 2)
+        self.assertEqual(occs[0].subtype, OccurrenceSubtype.EXCHANGE)
+        self.assertEqual(occs[1].subtype, OccurrenceSubtype.EXCHANGE)
+        self.assertAlmostEqual(occs[0].duration_hours, 10.0, places=2)
+        self.assertAlmostEqual(occs[1].duration_hours, 6.0, places=2)
+
 
 class TestReportedHoursOverridesAndLunchRounding(TestCase):
     """Reported-hours policy for early starts, overrides, and long lunches."""
