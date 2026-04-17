@@ -559,7 +559,10 @@ class TestPayrollCloseLunchValidation(TestCase):
             clock_out=timezone.make_aware(datetime(2025, 3, 3, 15, 30, 0), tz),
         )
 
-        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
 
@@ -584,7 +587,10 @@ class TestPayrollCloseLunchValidation(TestCase):
 
         self.assertFalse(entry.is_incomplete())
         self.assertAlmostEqual(entry.actual_worked_hours(), 4.0, places=2)
-        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
 
@@ -600,7 +606,10 @@ class TestPayrollCloseLunchValidation(TestCase):
         )
 
         self.assertFalse(entry.is_incomplete())
-        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
 
@@ -657,7 +666,10 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
             self._entry(user, d, 5, 0, 15, 30)  # 10h reported each day
         self._entry(user, week_dates[4], 7, 0, 13, 0)  # 6h overtime day
 
-        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
         self.assertEqual(response.status_code, 200)
         user.refresh_from_db()
         self.assertAlmostEqual(user.pto_balance, 1.53, places=2)  # 46 / 30 = 1.53
@@ -686,7 +698,10 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
         self._entry(user, date(2025, 3, 5), 5, 0, 15, 30)  # Wed
         self._entry(user, date(2025, 3, 6), 5, 0, 15, 30)  # Thu make-up
 
-        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
         self.assertEqual(response.status_code, 200)
         occ = Occurrence.objects.get(
             user=user,
@@ -720,7 +735,10 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
         self._entry(user, date(2025, 3, 5), 5, 0, 15, 30)  # Wed 10h
         self._entry(user, date(2025, 3, 6), 7, 0, 13, 0)   # Thu 6h make-up
 
-        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
         self.assertEqual(response.status_code, 200)
         occ = Occurrence.objects.get(
             user=user,
@@ -755,7 +773,10 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
         self._entry(user, date(2025, 3, 6), 5, 0, 15, 30)  # Thu
         self._entry(user, date(2025, 3, 7), 5, 0, 15, 30)  # Fri unscheduled make-up
 
-        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
         self.assertEqual(response.status_code, 200)
         occ = Occurrence.objects.get(user=user, date=date(2025, 3, 3), is_variance_to_schedule=True)
         self.assertEqual(occ.subtype, OccurrenceSubtype.EXCHANGE)
@@ -789,7 +810,10 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
         self._entry(user, date(2025, 3, 6), 5, 0, 15, 30)  # Thu 10
         self._entry(user, date(2025, 3, 7), 7, 0, 11, 0)   # Fri 4 unscheduled
 
-        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
         self.assertEqual(response.status_code, 200)
 
         occs = list(
@@ -804,6 +828,168 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
         self.assertEqual(occs[1].subtype, OccurrenceSubtype.EXCHANGE)
         self.assertAlmostEqual(occs[0].duration_hours, 10.0, places=2)
         self.assertAlmostEqual(occs[1].duration_hours, 6.0, places=2)
+
+    def test_schedule_over_40_applies_no_pto_when_worked_at_least_40(self):
+        user = CustomUser.objects.create_user(
+            username="sched44worked41",
+            password="x",
+            pto_balance=10.0,
+            personal_time_balance=0.0,
+            service_date=date.today() - timedelta(days=365 * 5),
+        )
+        # 44 scheduled: Mon-Thu 10h + Fri 4h
+        for day in [0, 1, 2, 3]:
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        WorkSchedule.objects.create(
+            user=user,
+            day=4,
+            start_time=time(5, 0),
+            lunch_out=None,
+            lunch_in=None,
+            end_time=time(9, 0),
+        )
+        # Worked 41.75 total
+        self._entry(user, date(2025, 3, 3), 5, 0, 15, 30)   # 10
+        self._entry(user, date(2025, 3, 4), 5, 0, 15, 30)   # 10
+        self._entry(user, date(2025, 3, 5), 5, 0, 15, 30)   # 10
+        self._entry(user, date(2025, 3, 6), 5, 45, 15, 30)  # 9.25
+        self._entry(user, date(2025, 3, 7), 5, 0, 7, 30)    # 2.5
+
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        user.refresh_from_db()
+        self.assertAlmostEqual(user.pto_balance, 10.0, places=2)
+        exchanges = Occurrence.objects.filter(
+            user=user,
+            is_variance_to_schedule=True,
+            subtype=OccurrenceSubtype.EXCHANGE,
+        )
+        self.assertTrue(exchanges.exists())
+        self.assertTrue(all(abs(o.duration_hours) < 0.001 for o in exchanges))
+        self.assertFalse(any(o.pto_applied for o in exchanges))
+
+    def test_schedule_over_40_applies_pto_only_up_to_40_hour_floor(self):
+        user = CustomUser.objects.create_user(
+            username="sched44worked39",
+            password="x",
+            pto_balance=10.0,
+            personal_time_balance=0.0,
+            service_date=date.today() - timedelta(days=365 * 5),
+        )
+        # 44 scheduled: Mon-Thu 10h + Fri 4h
+        for day in [0, 1, 2, 3]:
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        WorkSchedule.objects.create(
+            user=user,
+            day=4,
+            start_time=time(5, 0),
+            lunch_out=None,
+            lunch_in=None,
+            end_time=time(9, 0),
+        )
+        # Worked 39 total
+        self._entry(user, date(2025, 3, 3), 5, 0, 15, 30)   # 10
+        self._entry(user, date(2025, 3, 4), 5, 0, 15, 30)   # 10
+        self._entry(user, date(2025, 3, 5), 5, 0, 15, 30)   # 10
+        self._entry(user, date(2025, 3, 6), 5, 0, 14, 0)    # 8.5
+        self._entry(user, date(2025, 3, 7), 5, 0, 5, 30)    # 0.5
+
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        user.refresh_from_db()
+        # Should deduct only 1.0 toward 40-hour floor (not 5.0 toward scheduled 44)
+        self.assertAlmostEqual(user.pto_balance, 9.0, places=2)
+        exchange_rows = Occurrence.objects.filter(
+            user=user,
+            is_variance_to_schedule=True,
+            subtype=OccurrenceSubtype.EXCHANGE,
+            pto_applied=True,
+        )
+        self.assertAlmostEqual(
+            sum(o.pto_hours_applied for o in exchange_rows),
+            1.0,
+            places=2,
+        )
+
+
+class TestPayrollCloseOverrideApproval(TestCase):
+    """Payroll finalize should allow approving missing overrides in close flow."""
+
+    def setUp(self):
+        self.client = Client()
+        self.admin = CustomUser.objects.create_user(
+            username="payrolladmin3",
+            password="testpass",
+            is_staff=True,
+            role=RoleChoices.EXECUTIVE,
+        )
+        self.client.force_login(self.admin)
+        self.close_url = reverse("attendance:close_payroll")
+        self.tz = timezone.get_current_timezone()
+
+    def _entry(self, user, d, in_h, in_m, out_h, out_m):
+        return TimeEntry.objects.create(
+            user=user,
+            date=d,
+            clock_in=timezone.make_aware(datetime(d.year, d.month, d.day, in_h, in_m, 0), self.tz),
+            clock_out=timezone.make_aware(datetime(d.year, d.month, d.day, out_h, out_m, 0), self.tz),
+        )
+
+    def test_finalize_blocks_when_missing_override_not_approved(self):
+        user = CustomUser.objects.create_user(username="needoverride1", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=0,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        self._entry(user, date(2025, 3, 7), 4, 45, 15, 30)  # Friday unscheduled early
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(PayrollPeriod.objects.filter(week_ending=date(2025, 3, 8), is_finalized=True).exists())
+
+    def test_finalize_can_approve_missing_override_and_close(self):
+        user = CustomUser.objects.create_user(username="needoverride2", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=0,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        entry = self._entry(user, date(2025, 3, 7), 4, 45, 15, 30)  # Friday unscheduled early
+
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertEqual(entry.clock_in_authorized_by_id, self.admin.id)
+        self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
 
 
 class TestReportedHoursOverridesAndLunchRounding(TestCase):

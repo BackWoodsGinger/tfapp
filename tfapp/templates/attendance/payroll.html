@@ -128,6 +128,25 @@
                         <option value="{{ value }}" {% if end_of_week|date:"Y-m-d" == value %}selected{% endif %}>{{ display }}</option>
                       {% endfor %}
                     </select>
+                    {% if pending_override_entries %}
+                    <div class="alert alert-warning mt-3 mb-2">
+                      <strong>{{ pending_override_entries|length }} item{{ pending_override_entries|length|pluralize }} need clock-in override approval</strong>
+                      <ul class="small mb-0 mt-2">
+                        {% for row in pending_override_entries %}
+                          <li>
+                            {{ row.entry.user.payroll_display_name }} on {{ row.entry.date }} —
+                            {% if row.reason == "unscheduled" %}unscheduled shift{% else %}early clock-in{% endif %}
+                          </li>
+                        {% endfor %}
+                      </ul>
+                    </div>
+                    <div class="form-check mt-2">
+                      <input class="form-check-input" type="checkbox" id="approve_missing_overrides" name="approve_missing_overrides" value="1">
+                      <label class="form-check-label" for="approve_missing_overrides">
+                        Approve these missing clock-in overrides while finalizing payroll
+                      </label>
+                    </div>
+                    {% endif %}
                     <p class="small text-muted mt-2 mb-0">Finalizes the week, applies PTO accrual (0–2 yr), tardy absences, variance PTO, then exports CSV.</p>
                   </div>
                   <div class="modal-footer">

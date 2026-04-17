@@ -55,6 +55,7 @@ from .payroll_utils import (
     is_payroll_week_finalized as _is_payroll_week_finalized,
 )
 from .schedule_utils import (
+    clock_in_requires_approver,
     crosses_midnight_for_day,
     earliest_clock_in_allowed,
     get_scheduled_shift_end_datetime,
@@ -1009,6 +1010,9 @@ def payroll_view(request):
     }
 
     payroll_finalized = _is_payroll_week_finalized(end_of_week)
+    pending_override_entries = _entries_requiring_clock_in_override(
+        start_of_week, end_of_week
+    )
 
     return render(request, "attendance/payroll.html", {
         "form": form,
@@ -1021,6 +1025,7 @@ def payroll_view(request):
         "payroll_weeks": payroll_weeks,
         "payroll_weeks_display": payroll_weeks_display,
         "payroll_finalized": payroll_finalized,
+        "pending_override_entries": pending_override_entries,
         "user_service_dates_json": json.dumps(user_service_dates),
         "today_iso": today.isoformat(),
     })
@@ -1439,6 +1444,37 @@ def _scheduled_hours_for_day(user, d):
     return scheduled_duration_hours_for_day(user, d)
 
 
+def _required_week_hours_for_policy(scheduled_week_hours: float) -> float:
+    """
+    Weekly hours that can require PTO/personal application.
+    Policy cap: once a user reaches 40 worked/covered hours, do not apply additional PTO.
+    """
+    return min(scheduled_week_hours, 40.0)
+
+
+def _entries_requiring_clock_in_override(week_start: date, week_ending: date):
+    """
+    Time entries in week that require clock-in override approval but do not have it yet.
+    """
+    out = []
+    rows = (
+        TimeEntry.objects.filter(
+            date__range=[week_start, week_ending],
+            clock_in__isnull=False,
+            clock_in_authorized_by__isnull=True,
+        )
+        .select_related("user")
+        .order_by("date", "user__payroll_lastname", "user__payroll_firstname", "user__username")
+    )
+    for e in rows:
+        requires, reason = clock_in_requires_approver(
+            e.user, django_tz.localtime(e.clock_in), e.date
+        )
+        if requires:
+            out.append({"entry": e, "reason": reason or "unscheduled"})
+    return out
+
+
 def _get_scheduled_start_time(user, d):
     """Return scheduled start time for user on date d from weekly_schedule or WorkSchedule, or None."""
     return get_scheduled_start_for_day(user, d)
@@ -1516,6 +1552,25 @@ def close_payroll(request):
         return redirect("attendance:payroll")
 
     week_start = week_ending - timedelta(days=6)
+
+    approve_missing_overrides = (request.POST.get("approve_missing_overrides") or "").lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
+    pending_override_entries = _entries_requiring_clock_in_override(week_start, week_ending)
+    if pending_override_entries and not approve_missing_overrides:
+        messages.error(
+            request,
+            "Cannot close payroll: some entries need clock-in override approval. "
+            "Use the Close Payroll modal option to approve and finalize.",
+        )
+        return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
+    if pending_override_entries and approve_missing_overrides:
+        TimeEntry.objects.filter(
+            id__in=[row["entry"].id for row in pending_override_entries]
+        ).update(clock_in_authorized_by=request.user)
 
     # Ensure holiday occurrences exist for this payroll week
     ensure_holiday_occurrences_for_range(week_start, week_ending)
@@ -1632,9 +1687,10 @@ def close_payroll(request):
             expected = user_total_scheduled.get(user.id, 0)
             if expected <= 0:
                 continue
+            required_week_hours = _required_week_hours_for_policy(expected)
             worked = user_total_worked.get(user.id, 0)
             approved_week = sum(approved_time_off_by_user_date.get(user.id, {}).values())
-            weekly_shortfall = max(0.0, round(expected - (worked + approved_week), 2))
+            weekly_shortfall = max(0.0, round(required_week_hours - (worked + approved_week), 2))
             remaining = weekly_shortfall
             exchange_variances = list(
                 Occurrence.objects.filter(
@@ -1657,9 +1713,10 @@ def close_payroll(request):
             expected = user_total_scheduled.get(user.id, 0)
             if expected <= 0:
                 continue
+            required_week_hours = _required_week_hours_for_policy(expected)
             worked = user_total_worked.get(user.id, 0)
             approved_week = sum(approved_time_off_by_user_date.get(user.id, {}).values())
-            if (worked + approved_week) < expected:
+            if (worked + approved_week) < required_week_hours:
                 continue
             tardy_out_rows = Occurrence.objects.filter(
                 user=user,
@@ -1710,10 +1767,11 @@ def close_payroll(request):
             if expected is None:
                 expected = _scheduled_hours_for_range(occ.user, week_start, week_ending)
                 user_total_scheduled[occ.user_id] = expected
+            required_week_hours = _required_week_hours_for_policy(expected)
             approved_week = sum(approved_time_off_by_user_date.get(occ.user_id, {}).values())
             # Only apply PTO/personal to EXCHANGE when the user did not meet their
             # scheduled hours for the week.
-            if (worked + approved_week) < expected and occ.duration_hours > 0:
+            if (worked + approved_week) < required_week_hours and occ.duration_hours > 0:
                 week_occurrences.append(occ)
         week_occurrences.sort(key=lambda o: (o.user_id, o.date))
 
