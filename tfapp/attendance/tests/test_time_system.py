@@ -980,7 +980,7 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
             self.close_url,
             {
                 "week_ending": "2025-03-08",
-                "approved_override_entry_ids": [str(fri.id)],
+                "approved_override_entry_ids": [f"{fri.id}:unscheduled"],
             },
         )
         self.assertEqual(response.status_code, 200)
@@ -1063,7 +1063,7 @@ class TestPayrollCloseOverrideApproval(TestCase):
             self.close_url,
             {
                 "week_ending": "2025-03-08",
-                "approved_override_entry_ids": [str(entry.id)],
+                "approved_override_entry_ids": [f"{entry.id}:unscheduled", f"{entry.id}:early"],
             },
         )
         self.assertEqual(response.status_code, 200)
@@ -1088,7 +1088,7 @@ class TestPayrollCloseOverrideApproval(TestCase):
             self.close_url,
             {
                 "week_ending": "2025-03-08",
-                "approved_override_entry_ids": [str(entry_a.id)],
+                "approved_override_entry_ids": [f"{entry_a.id}:unscheduled"],
             },
         )
         self.assertEqual(response.status_code, 302)
@@ -1119,7 +1119,7 @@ class TestPayrollCloseOverrideApproval(TestCase):
             self.close_url,
             {
                 "week_ending": "2025-03-08",
-                "denied_override_entry_ids": [str(entry.id)],
+                "denied_override_entry_ids": [f"{entry.id}:unscheduled", f"{entry.id}:early"],
             },
         )
         self.assertEqual(response.status_code, 200)
@@ -1127,6 +1127,40 @@ class TestPayrollCloseOverrideApproval(TestCase):
         self.assertIsNone(entry.clock_in_authorized_by_id)
         self.assertTrue(entry.clock_in_override_denied)
         self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
+
+    def test_exactly_15_minutes_early_requires_early_approval(self):
+        user = CustomUser.objects.create_user(username="needoverride5", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=0,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        entry = self._entry(user, date(2025, 3, 3), 4, 45, 15, 30)  # Monday exactly 15 early
+
+        # No approval selected -> blocked
+        response = self.client.post(self.close_url, {"week_ending": "2025-03-08"})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(
+            PayrollPeriod.objects.filter(
+                week_ending=date(2025, 3, 8),
+                is_finalized=True,
+            ).exists()
+        )
+
+        # Early approval selected -> closes and sets early approval field
+        response = self.client.post(
+            self.close_url,
+            {
+                "week_ending": "2025-03-08",
+                "approved_override_entry_ids": [f"{entry.id}:early"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertEqual(entry.clock_in_early_authorized_by_id, self.admin.id)
 
 
 class TestReportedHoursOverridesAndLunchRounding(TestCase):
@@ -1168,7 +1202,7 @@ class TestReportedHoursOverridesAndLunchRounding(TestCase):
             lunch_out=self._dt(2025, 3, 3, 11, 0),
             lunch_in=self._dt(2025, 3, 3, 11, 30),
             clock_out=self._dt(2025, 3, 3, 15, 30),
-            clock_in_authorized_by=self.approver,
+            clock_in_early_authorized_by=self.approver,
         )
         self.assertAlmostEqual(entry.reported_worked_hours(), 10.25, places=2)
 

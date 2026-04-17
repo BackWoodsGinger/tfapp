@@ -36,9 +36,21 @@ class TimeEntry(models.Model):
         related_name="authorized_clock_ins",
         help_text="Manager/supervisor who approved clock-in when unscheduled or more than 15 minutes early.",
     )
+    clock_in_early_authorized_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="authorized_early_clock_ins",
+        help_text="Manager/supervisor who approved early-time credit on the clock-in.",
+    )
     clock_in_override_denied = models.BooleanField(
         default=False,
         help_text="Set when payroll review denies an override-required clock-in; keeps entry from pending-approval queue.",
+    )
+    clock_in_early_override_denied = models.BooleanField(
+        default=False,
+        help_text="Set when payroll review denies early-time credit on an override-required clock-in.",
     )
 
     class Meta:
@@ -157,19 +169,27 @@ class TimeEntry(models.Model):
         if not scheduled_start:
             # Unscheduled day: only credit early time when an approver override exists.
             fallback_start = self._fallback_scheduled_start_time_for_unscheduled_day()
-            if self.clock_in_authorized_by or not fallback_start:
-                adjusted_in = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
+            clock_in_local = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
+            if not fallback_start:
+                adjusted_in = clock_in_local
+            elif self.clock_in_authorized_by and self.clock_in_early_authorized_by:
+                adjusted_in = clock_in_local
+            elif self.clock_in_authorized_by:
+                _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+                    self.clock_in, fallback_start
+                )
             else:
                 _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
                     self.clock_in, fallback_start
                 )
         else:
             # Scheduled day: early clock-ins require override to be credited.
-            if self.clock_in_authorized_by:
+            if self.clock_in_early_authorized_by:
                 clock_in_local = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
                 scheduled_local = self._scheduled_local_datetime(scheduled_start)
                 if clock_in_local < scheduled_local:
-                    adjusted_in = clock_in_local
+                    adjusted_minutes = (clock_in_local.minute // 15) * 15
+                    adjusted_in = clock_in_local.replace(minute=adjusted_minutes, second=0, microsecond=0)
                 else:
                     _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
                         self.clock_in, scheduled_start
@@ -347,8 +367,12 @@ class TimeEntry(models.Model):
             ensure_unique_slug(self, "slug", max_length=48)
         if self.clock_in_authorized_by_id:
             self.clock_in_override_denied = False
+        if self.clock_in_early_authorized_by_id:
+            self.clock_in_early_override_denied = False
         if self.clock_in_override_denied:
             self.clock_in_authorized_by = None
+        if self.clock_in_early_override_denied:
+            self.clock_in_early_authorized_by = None
         if (
             self.clock_in
             and self.clock_out

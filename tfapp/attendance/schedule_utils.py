@@ -258,7 +258,7 @@ def clock_in_requires_approver(user, now, d: date) -> tuple[bool, str | None]:
     if not start:
         return True, "unscheduled"
     earliest = earliest_clock_in_allowed(user, d)
-    if earliest and now < earliest:
+    if earliest and now <= earliest:
         return True, "early"
     return False, None
 

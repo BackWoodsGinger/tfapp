@@ -144,21 +144,21 @@
                             <input
                               class="form-check-input"
                               type="checkbox"
-                              id="override_entry_approve_{{ row.entry.id }}"
+                              id="override_entry_approve_{{ row.entry.id }}_{{ row.reason }}"
                               name="approved_override_entry_ids"
-                              value="{{ row.entry.id }}"
+                              value="{{ row.key }}"
                             >
-                            <label class="form-check-label" for="override_entry_approve_{{ row.entry.id }}">Approve</label>
+                            <label class="form-check-label" for="override_entry_approve_{{ row.entry.id }}_{{ row.reason }}">Approve</label>
                           </div>
                           <div class="form-check">
                             <input
                               class="form-check-input"
                               type="checkbox"
-                              id="override_entry_deny_{{ row.entry.id }}"
+                              id="override_entry_deny_{{ row.entry.id }}_{{ row.reason }}"
                               name="denied_override_entry_ids"
-                              value="{{ row.entry.id }}"
+                              value="{{ row.key }}"
                             >
-                            <label class="form-check-label" for="override_entry_deny_{{ row.entry.id }}">Deny</label>
+                            <label class="form-check-label" for="override_entry_deny_{{ row.entry.id }}_{{ row.reason }}">Deny</label>
                           </div>
                         </div>
                       </div>

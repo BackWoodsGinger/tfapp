@@ -1419,6 +1419,7 @@ def payroll_schedule_csv_upload(request):
             entry.lunch_in = li_a
             entry.clock_out = cout
             entry.clock_in_override_denied = False
+            entry.clock_in_early_override_denied = False
             entry.save()
             sync_tardy_occurrences_for_time_entry(entry)
             applied += 1
@@ -1462,18 +1463,49 @@ def _entries_requiring_clock_in_override(week_start: date, week_ending: date):
         TimeEntry.objects.filter(
             date__range=[week_start, week_ending],
             clock_in__isnull=False,
-            clock_in_authorized_by__isnull=True,
-            clock_in_override_denied=False,
         )
         .select_related("user")
         .order_by("date", "user__payroll_lastname", "user__payroll_firstname", "user__username")
     )
     for e in rows:
-        requires, reason = clock_in_requires_approver(
-            e.user, django_tz.localtime(e.clock_in), e.date
-        )
-        if requires:
-            out.append({"entry": e, "reason": reason or "unscheduled"})
+        clock_in_local = django_tz.localtime(e.clock_in)
+        requires, reason = clock_in_requires_approver(e.user, clock_in_local, e.date)
+        if reason == "unscheduled":
+            if not e.clock_in_authorized_by_id and not e.clock_in_override_denied:
+                out.append(
+                    {
+                        "entry": e,
+                        "reason": "unscheduled",
+                        "key": f"{e.id}:unscheduled",
+                    }
+                )
+            fallback_start = e._fallback_scheduled_start_time_for_unscheduled_day()
+            if fallback_start:
+                fallback_local = django_tz.make_aware(
+                    datetime.combine(e.date, fallback_start),
+                    django_tz.get_current_timezone(),
+                )
+                if (
+                    clock_in_local <= fallback_local
+                    and not e.clock_in_early_authorized_by_id
+                    and not e.clock_in_early_override_denied
+                ):
+                    out.append(
+                        {
+                            "entry": e,
+                            "reason": "early",
+                            "key": f"{e.id}:early",
+                        }
+                    )
+        elif reason == "early":
+            if not e.clock_in_early_authorized_by_id and not e.clock_in_early_override_denied:
+                out.append(
+                    {
+                        "entry": e,
+                        "reason": "early",
+                        "key": f"{e.id}:early",
+                    }
+                )
     return out
 
 
@@ -1610,18 +1642,18 @@ def close_payroll(request):
             "on",
             "yes",
         }
-        selected_ids = {
-            int(v)
+        selected_keys = {
+            v.strip()
             for v in request.POST.getlist("approved_override_entry_ids")
-            if (v or "").isdigit()
+            if (v or "").strip()
         }
-        denied_ids = {
-            int(v)
+        denied_keys = {
+            v.strip()
             for v in request.POST.getlist("denied_override_entry_ids")
-            if (v or "").isdigit()
+            if (v or "").strip()
         }
-        approvable_ids = {row["entry"].id for row in pending_override_entries}
-        conflicting = selected_ids.intersection(denied_ids).intersection(approvable_ids)
+        approvable_keys = {row["key"] for row in pending_override_entries}
+        conflicting = selected_keys.intersection(denied_keys).intersection(approvable_keys)
         if conflicting:
             messages.error(
                 request,
@@ -1629,19 +1661,52 @@ def close_payroll(request):
             )
             return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
         if approve_all:
-            ids_to_approve = sorted(approvable_ids)
+            keys_to_approve = sorted(approvable_keys)
         else:
-            ids_to_approve = sorted(selected_ids.intersection(approvable_ids))
-        ids_to_deny = sorted(denied_ids.intersection(approvable_ids))
-        if ids_to_approve:
-            TimeEntry.objects.filter(id__in=ids_to_approve).update(
+            keys_to_approve = sorted(selected_keys.intersection(approvable_keys))
+        keys_to_deny = sorted(denied_keys.intersection(approvable_keys))
+
+        approve_unscheduled_ids = []
+        approve_early_ids = []
+        for key in keys_to_approve:
+            eid_str, kind = key.split(":", 1)
+            if not eid_str.isdigit():
+                continue
+            if kind == "unscheduled":
+                approve_unscheduled_ids.append(int(eid_str))
+            elif kind == "early":
+                approve_early_ids.append(int(eid_str))
+
+        deny_unscheduled_ids = []
+        deny_early_ids = []
+        for key in keys_to_deny:
+            eid_str, kind = key.split(":", 1)
+            if not eid_str.isdigit():
+                continue
+            if kind == "unscheduled":
+                deny_unscheduled_ids.append(int(eid_str))
+            elif kind == "early":
+                deny_early_ids.append(int(eid_str))
+
+        if approve_unscheduled_ids:
+            TimeEntry.objects.filter(id__in=approve_unscheduled_ids).update(
                 clock_in_authorized_by=request.user,
                 clock_in_override_denied=False,
             )
-        if ids_to_deny:
-            TimeEntry.objects.filter(id__in=ids_to_deny).update(
+        if approve_early_ids:
+            TimeEntry.objects.filter(id__in=approve_early_ids).update(
+                clock_in_early_authorized_by=request.user,
+                clock_in_early_override_denied=False,
+            )
+        if deny_unscheduled_ids:
+            TimeEntry.objects.filter(id__in=deny_unscheduled_ids).update(
                 clock_in_authorized_by=None,
                 clock_in_override_denied=True,
+            )
+        if deny_early_ids:
+            TimeEntry.objects.filter(id__in=deny_early_ids).update(
+                clock_in_early_authorized_by=None,
+                clock_in_early_override_denied=True,
             )
         remaining = _entries_requiring_clock_in_override(week_start, week_ending)
         if remaining:
