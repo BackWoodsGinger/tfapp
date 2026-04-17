@@ -1553,24 +1553,36 @@ def close_payroll(request):
 
     week_start = week_ending - timedelta(days=6)
 
-    approve_missing_overrides = (request.POST.get("approve_missing_overrides") or "").lower() in {
-        "1",
-        "true",
-        "on",
-        "yes",
-    }
     pending_override_entries = _entries_requiring_clock_in_override(week_start, week_ending)
-    if pending_override_entries and not approve_missing_overrides:
-        messages.error(
-            request,
-            "Cannot close payroll: some entries need clock-in override approval. "
-            "Use the Close Payroll modal option to approve and finalize.",
-        )
-        return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
-    if pending_override_entries and approve_missing_overrides:
-        TimeEntry.objects.filter(
-            id__in=[row["entry"].id for row in pending_override_entries]
-        ).update(clock_in_authorized_by=request.user)
+    if pending_override_entries:
+        approve_all = (request.POST.get("approve_missing_overrides") or "").lower() in {
+            "1",
+            "true",
+            "on",
+            "yes",
+        }
+        selected_ids = {
+            int(v)
+            for v in request.POST.getlist("approved_override_entry_ids")
+            if (v or "").isdigit()
+        }
+        approvable_ids = {row["entry"].id for row in pending_override_entries}
+        if approve_all:
+            ids_to_approve = sorted(approvable_ids)
+        else:
+            ids_to_approve = sorted(selected_ids.intersection(approvable_ids))
+        if ids_to_approve:
+            TimeEntry.objects.filter(id__in=ids_to_approve).update(
+                clock_in_authorized_by=request.user
+            )
+        remaining = _entries_requiring_clock_in_override(week_start, week_ending)
+        if remaining:
+            messages.error(
+                request,
+                f"Cannot close payroll: {len(remaining)} override item(s) still need review. "
+                "Approve valid entries in the Close Payroll modal, and correct or remove entries that should not be approved.",
+            )
+            return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
 
     # Ensure holiday occurrences exist for this payroll week
     ensure_holiday_occurrences_for_range(week_start, week_ending)

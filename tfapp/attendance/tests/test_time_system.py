@@ -984,12 +984,47 @@ class TestPayrollCloseOverrideApproval(TestCase):
 
         response = self.client.post(
             self.close_url,
-            {"week_ending": "2025-03-08", "approve_missing_overrides": "1"},
+            {
+                "week_ending": "2025-03-08",
+                "approved_override_entry_ids": [str(entry.id)],
+            },
         )
         self.assertEqual(response.status_code, 200)
         entry.refresh_from_db()
         self.assertEqual(entry.clock_in_authorized_by_id, self.admin.id)
         self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
+
+    def test_finalize_with_partial_selection_keeps_unreviewed_pending(self):
+        user = CustomUser.objects.create_user(username="needoverride3", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=0,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        entry_a = self._entry(user, date(2025, 3, 7), 4, 45, 15, 30)
+        entry_b = self._entry(user, date(2025, 3, 6), 4, 45, 15, 30)
+
+        response = self.client.post(
+            self.close_url,
+            {
+                "week_ending": "2025-03-08",
+                "approved_override_entry_ids": [str(entry_a.id)],
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        entry_a.refresh_from_db()
+        entry_b.refresh_from_db()
+        self.assertEqual(entry_a.clock_in_authorized_by_id, self.admin.id)
+        self.assertIsNone(entry_b.clock_in_authorized_by_id)
+        self.assertFalse(
+            PayrollPeriod.objects.filter(
+                week_ending=date(2025, 3, 8),
+                is_finalized=True,
+            ).exists()
+        )
 
 
 class TestReportedHoursOverridesAndLunchRounding(TestCase):
