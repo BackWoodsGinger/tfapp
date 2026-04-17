@@ -11,6 +11,7 @@ from django.utils import timezone
 from attendance.models import (
     CustomUser,
     Occurrence,
+    OccurrenceType,
     OccurrenceSubtype,
     PayrollPeriod,
     PayrollPeriodUserSnapshot,
@@ -930,6 +931,82 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
             1.0,
             places=2,
         )
+
+    def test_exchange_replaces_orphan_time_off_without_double_application(self):
+        user = CustomUser.objects.create_user(
+            username="exchange_replaces_timeoff",
+            password="x",
+            pto_balance=0.0,
+            personal_time_balance=0.0,
+            service_date=date.today() - timedelta(days=365 * 5),
+        )
+        # Mon-Thu scheduled 10h paid shifts
+        for day in [0, 1, 2, 3]:
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+
+        # Legacy/orphan TIME_OFF rows for missed Mon/Tue (already applied).
+        occ_mon = Occurrence.objects.create(
+            user=user,
+            date=date(2025, 3, 3),
+            occurrence_type=OccurrenceType.UNPLANNED,
+            subtype=OccurrenceSubtype.TIME_OFF,
+            duration_hours=10.0,
+        )
+        occ_tue = Occurrence.objects.create(
+            user=user,
+            date=date(2025, 3, 4),
+            occurrence_type=OccurrenceType.UNPLANNED,
+            subtype=OccurrenceSubtype.TIME_OFF,
+            duration_hours=10.0,
+        )
+        occ_mon.apply_pto()
+        occ_tue.apply_pto()
+        user.refresh_from_db()
+        self.assertAlmostEqual(user.personal_time_balance, 20.0, places=2)
+
+        # Work Wed/Thu and 4h Friday unscheduled make-up.
+        self._entry(user, date(2025, 3, 5), 5, 0, 15, 30)  # Wed 10
+        self._entry(user, date(2025, 3, 6), 5, 0, 15, 30)  # Thu 10
+        fri = self._entry(user, date(2025, 3, 7), 7, 0, 11, 0)   # Fri 4 unscheduled
+
+        response = self.client.post(
+            self.close_url,
+            {
+                "week_ending": "2025-03-08",
+                "approved_override_entry_ids": [str(fri.id)],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        # Orphan TIME_OFF rows are removed, leaving only Exchange variance rows.
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=user,
+                date__in=[date(2025, 3, 3), date(2025, 3, 4)],
+                subtype=OccurrenceSubtype.TIME_OFF,
+                time_off_request__isnull=True,
+                is_variance_to_schedule=False,
+            ).exists()
+        )
+        exchanges = list(
+            Occurrence.objects.filter(
+                user=user,
+                date__in=[date(2025, 3, 3), date(2025, 3, 4)],
+                subtype=OccurrenceSubtype.EXCHANGE,
+                is_variance_to_schedule=True,
+            ).order_by("date")
+        )
+        self.assertEqual(len(exchanges), 2)
+        self.assertAlmostEqual(exchanges[0].duration_hours, 10.0, places=2)
+        self.assertAlmostEqual(exchanges[1].duration_hours, 6.0, places=2)
+        user.refresh_from_db()
+        self.assertAlmostEqual(user.personal_time_balance, 16.0, places=2)
 
 
 class TestPayrollCloseOverrideApproval(TestCase):

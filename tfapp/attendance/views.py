@@ -1477,6 +1477,53 @@ def _entries_requiring_clock_in_override(week_start: date, week_ending: date):
     return out
 
 
+def _revert_and_delete_orphan_time_off_for_exchange_week(
+    users,
+    week_start: date,
+    week_ending: date,
+):
+    """
+    Remove legacy/orphan TIME_OFF rows when an Exchange variance exists for the same user/date.
+    Keeps a single source of truth for schedule variance so PTO/personal isn't double-applied.
+    """
+    exchange_days = set(
+        Occurrence.objects.filter(
+            user__in=users,
+            date__range=[week_start, week_ending],
+            subtype=OccurrenceSubtype.EXCHANGE,
+            is_variance_to_schedule=True,
+        ).values_list("user_id", "date")
+    )
+    if not exchange_days:
+        return
+
+    for user_id, occ_date in exchange_days:
+        orphan_rows = Occurrence.objects.filter(
+            user_id=user_id,
+            date=occ_date,
+            subtype=OccurrenceSubtype.TIME_OFF,
+            is_variance_to_schedule=False,
+            time_off_request__isnull=True,
+        )
+        if not orphan_rows.exists():
+            continue
+        user = CustomUser.objects.get(pk=user_id)
+        pto_refund = 0.0
+        personal_refund = 0.0
+        for occ in orphan_rows:
+            if occ.pto_applied:
+                pto_refund += float(occ.pto_hours_applied or 0.0)
+                personal_refund += float(occ.personal_hours_applied or 0.0)
+            occ.delete()
+        if pto_refund or personal_refund:
+            user.pto_balance = round(user.pto_balance + pto_refund, 2)
+            user.personal_time_balance = round(
+                max(0.0, user.personal_time_balance - personal_refund),
+                2,
+            )
+            user.save(update_fields=["pto_balance", "personal_time_balance"])
+
+
 def _get_scheduled_start_time(user, d):
     """Return scheduled start time for user on date d from weekly_schedule or WorkSchedule, or None."""
     return get_scheduled_start_for_day(user, d)
@@ -1739,6 +1786,12 @@ def close_payroll(request):
                     occ.duration_hours = round(new_duration, 2)
                     occ.save(update_fields=["duration_hours"])
                 remaining = max(0.0, round(remaining - new_duration, 2))
+
+        _revert_and_delete_orphan_time_off_for_exchange_week(
+            users,
+            week_start,
+            week_ending,
+        )
 
         # If the user met or exceeded weekly scheduled hours, convert out-of-grace tardies
         # to zero-hour Exchange rows so no PTO/personal is deducted.
