@@ -1418,6 +1418,7 @@ def payroll_schedule_csv_upload(request):
             entry.lunch_out = lo_a
             entry.lunch_in = li_a
             entry.clock_out = cout
+            entry.clock_in_override_denied = False
             entry.save()
             sync_tardy_occurrences_for_time_entry(entry)
             applied += 1
@@ -1462,6 +1463,7 @@ def _entries_requiring_clock_in_override(week_start: date, week_ending: date):
             date__range=[week_start, week_ending],
             clock_in__isnull=False,
             clock_in_authorized_by__isnull=True,
+            clock_in_override_denied=False,
         )
         .select_related("user")
         .order_by("date", "user__payroll_lastname", "user__payroll_firstname", "user__username")
@@ -1566,21 +1568,40 @@ def close_payroll(request):
             for v in request.POST.getlist("approved_override_entry_ids")
             if (v or "").isdigit()
         }
+        denied_ids = {
+            int(v)
+            for v in request.POST.getlist("denied_override_entry_ids")
+            if (v or "").isdigit()
+        }
         approvable_ids = {row["entry"].id for row in pending_override_entries}
+        conflicting = selected_ids.intersection(denied_ids).intersection(approvable_ids)
+        if conflicting:
+            messages.error(
+                request,
+                "An override entry cannot be both approved and denied. Update selections and try again.",
+            )
+            return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
         if approve_all:
             ids_to_approve = sorted(approvable_ids)
         else:
             ids_to_approve = sorted(selected_ids.intersection(approvable_ids))
+        ids_to_deny = sorted(denied_ids.intersection(approvable_ids))
         if ids_to_approve:
             TimeEntry.objects.filter(id__in=ids_to_approve).update(
-                clock_in_authorized_by=request.user
+                clock_in_authorized_by=request.user,
+                clock_in_override_denied=False,
+            )
+        if ids_to_deny:
+            TimeEntry.objects.filter(id__in=ids_to_deny).update(
+                clock_in_authorized_by=None,
+                clock_in_override_denied=True,
             )
         remaining = _entries_requiring_clock_in_override(week_start, week_ending)
         if remaining:
             messages.error(
                 request,
                 f"Cannot close payroll: {len(remaining)} override item(s) still need review. "
-                "Approve valid entries in the Close Payroll modal, and correct or remove entries that should not be approved.",
+                "Approve or deny each item in the Close Payroll modal, and correct entries as needed.",
             )
             return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
 

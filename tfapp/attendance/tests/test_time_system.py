@@ -1026,6 +1026,31 @@ class TestPayrollCloseOverrideApproval(TestCase):
             ).exists()
         )
 
+    def test_finalize_can_deny_override_and_close_when_all_reviewed(self):
+        user = CustomUser.objects.create_user(username="needoverride4", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=0,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        entry = self._entry(user, date(2025, 3, 7), 4, 45, 15, 30)
+
+        response = self.client.post(
+            self.close_url,
+            {
+                "week_ending": "2025-03-08",
+                "denied_override_entry_ids": [str(entry.id)],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        entry.refresh_from_db()
+        self.assertIsNone(entry.clock_in_authorized_by_id)
+        self.assertTrue(entry.clock_in_override_denied)
+        self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
+
 
 class TestReportedHoursOverridesAndLunchRounding(TestCase):
     """Reported-hours policy for early starts, overrides, and long lunches."""

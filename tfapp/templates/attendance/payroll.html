@@ -129,34 +129,38 @@
                       {% endfor %}
                     </select>
                     {% if pending_override_entries %}
-                    <div class="alert alert-warning mt-3 mb-2">
-                      <strong>{{ pending_override_entries|length }} item{{ pending_override_entries|length|pluralize }} need clock-in override approval</strong>
-                      <ul class="small mb-0 mt-2">
-                        {% for row in pending_override_entries %}
-                          <li>
-                            {{ row.entry.user.payroll_display_name }} on {{ row.entry.date }} —
-                            {% if row.reason == "unscheduled" %}unscheduled shift{% else %}early clock-in{% endif %}
-                          </li>
-                        {% endfor %}
-                      </ul>
-                    </div>
-                    <div class="small text-muted mb-2">
-                      Select only the entries you want to approve now. Payroll will finalize only when no pending override items remain.
+                    <div class="small text-muted mt-3 mb-2">
+                      {{ pending_override_entries|length }} pending override item{{ pending_override_entries|length|pluralize }}. Select Approve or Deny for each.
                     </div>
                     <div class="border rounded p-2" style="max-height: 220px; overflow-y: auto;">
                       {% for row in pending_override_entries %}
-                      <div class="form-check">
-                        <input
-                          class="form-check-input"
-                          type="checkbox"
-                          id="override_entry_{{ row.entry.id }}"
-                          name="approved_override_entry_ids"
-                          value="{{ row.entry.id }}"
-                        >
-                        <label class="form-check-label" for="override_entry_{{ row.entry.id }}">
+                      <div class="py-1 border-bottom">
+                        <div class="small">
                           {{ row.entry.user.payroll_display_name }} — {{ row.entry.date }} —
                           {% if row.reason == "unscheduled" %}unscheduled shift{% else %}early clock-in{% endif %}
-                        </label>
+                        </div>
+                        <div class="d-flex gap-3 mt-1">
+                          <div class="form-check">
+                            <input
+                              class="form-check-input"
+                              type="checkbox"
+                              id="override_entry_approve_{{ row.entry.id }}"
+                              name="approved_override_entry_ids"
+                              value="{{ row.entry.id }}"
+                            >
+                            <label class="form-check-label" for="override_entry_approve_{{ row.entry.id }}">Approve</label>
+                          </div>
+                          <div class="form-check">
+                            <input
+                              class="form-check-input"
+                              type="checkbox"
+                              id="override_entry_deny_{{ row.entry.id }}"
+                              name="denied_override_entry_ids"
+                              value="{{ row.entry.id }}"
+                            >
+                            <label class="form-check-label" for="override_entry_deny_{{ row.entry.id }}">Deny</label>
+                          </div>
+                        </div>
                       </div>
                       {% endfor %}
                     </div>

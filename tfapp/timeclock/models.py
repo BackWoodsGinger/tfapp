@@ -36,6 +36,10 @@ class TimeEntry(models.Model):
         related_name="authorized_clock_ins",
         help_text="Manager/supervisor who approved clock-in when unscheduled or more than 15 minutes early.",
     )
+    clock_in_override_denied = models.BooleanField(
+        default=False,
+        help_text="Set when payroll review denies an override-required clock-in; keeps entry from pending-approval queue.",
+    )
 
     class Meta:
         constraints = [
@@ -341,6 +345,10 @@ class TimeEntry(models.Model):
     def save(self, *args, **kwargs):
         if not self.slug:
             ensure_unique_slug(self, "slug", max_length=48)
+        if self.clock_in_authorized_by_id:
+            self.clock_in_override_denied = False
+        if self.clock_in_override_denied:
+            self.clock_in_authorized_by = None
         if (
             self.clock_in
             and self.clock_out
