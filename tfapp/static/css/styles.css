@@ -126,6 +126,25 @@ header #main-header {
 }
 
 /*
+ * File inputs on dark cards: .card-body overrides --bs-body-color to light text, but
+ * Bootstrap’s ::file-selector-button still uses :root --bs-tertiary-bg (near-white),
+ * so the “Choose file” label becomes light-on-light. Match button chrome to the card.
+ */
+.card-body .form-control[type="file"] {
+  color: var(--bs-body-color);
+  background-color: var(--bs-body-bg);
+}
+.card-body .form-control[type="file"]::file-selector-button,
+.card-body .form-control[type="file"]::-webkit-file-upload-button {
+  color: #f8f9fa;
+  background-color: #495057;
+}
+.card-body .form-control[type="file"]:hover:not(:disabled):not([readonly])::file-selector-button,
+.card-body .form-control[type="file"]:hover:not(:disabled):not([readonly])::-webkit-file-upload-button {
+  background-color: #5c636a;
+}
+
+/*
  * Tables: light gray body on dark cards; darker gray header row; dark text.
  * (Card body keeps light CSS variables for non-table copy; tables reset below.)
  */
