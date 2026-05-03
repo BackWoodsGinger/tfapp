@@ -25,6 +25,8 @@ from django.core.cache import cache
 from django.http import HttpResponse
 from django.http import JsonResponse
 from django.template.loader import get_template
+
+from accounts.models import UserProfile
 from xhtml2pdf import pisa
 from .models import (
     CustomUser,
@@ -744,6 +746,14 @@ def dashboard(request):
 
     scheduled_not_clocked = _scheduled_but_not_clocked_in(visible_users, today)
 
+    profile_avatar_url = None
+    try:
+        _prof = user.profile
+        if _prof.photo:
+            profile_avatar_url = _prof.photo.url
+    except UserProfile.DoesNotExist:
+        pass
+
     context = {
         "user_list": visible_users,
         "selected_user": selected_user,
@@ -784,6 +794,7 @@ def dashboard(request):
         "show_perfect_attendance_hours": user.role == RoleChoices.EXECUTIVE,
         "show_absenteeism_chart": user.role
         in (RoleChoices.EXECUTIVE, RoleChoices.MANAGER),
+        "profile_avatar_url": profile_avatar_url,
     }
     return render(request, "attendance/dashboard.html", context)
 

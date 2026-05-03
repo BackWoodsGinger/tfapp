@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block content %}
 <div class="container mt-4">
   <div class="row justify-content-center">
@@ -22,7 +23,24 @@
 
       <div class="card mb-4">
         <div class="card-body">
-          <h3>Welcome, {% if user.first_name %}{{ user.first_name }}{% else %}{{ user.username }}{% endif %}</h3>
+          <div class="d-flex align-items-center gap-2 gap-sm-3 flex-wrap mb-1">
+            <a
+              href="{% url 'profile' %}"
+              class="flex-shrink-0 rounded-circle border border-secondary overflow-hidden shadow-sm"
+              style="width: 2.5rem; height: 2.5rem;"
+              aria-label="Your profile"
+            >
+              <img
+                src="{% if profile_avatar_url %}{{ profile_avatar_url }}{% else %}{% static 'img/redman.jpg' %}{% endif %}"
+                alt=""
+                width="40"
+                height="40"
+                class="d-block w-100 h-100"
+                style="object-fit: cover;"
+              >
+            </a>
+            <h3 class="mb-0">Welcome, {% if user.first_name %}{{ user.first_name }}{% else %}{{ user.username }}{% endif %}</h3>
+          </div>
 
           <h5 class="mt-4">Scheduled today — not clocked in</h5>
           <p class="text-muted small mb-2">Employees with a schedule for today who have not clocked in yet, shown only from 15 minutes before their scheduled start until their scheduled shift end (half-days drop off after end time).</p>
