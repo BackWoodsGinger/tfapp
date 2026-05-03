@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} — Messages{% endblock %}
+
+{% block content %}
+<div class="container mt-4 mb-5">
+  <div class="row justify-content-center">
+    <div class="col-12 col-xl-11">
+  <nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb mb-0">
+      <li class="breadcrumb-item"><a href="{% url 'messaging:inbox' %}">Messages</a></li>
+      <li class="breadcrumb-item active" aria-current="page">{{ title }}</li>
+    </ol>
+  </nav>
+
+  <div class="row g-4">
+    <div class="col-lg-8">
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <h1 class="h5 mb-0">{{ title }}</h1>
+          {% if conversation.is_group %}
+          <span class="badge bg-secondary">Group</span>
+          {% else %}
+          <span class="badge bg-secondary">Direct</span>
+          {% endif %}
+        </div>
+        <div class="card-body border-bottom" style="max-height: min(55vh, 28rem); overflow-y: auto;">
+          {% for m in messages %}
+          <div class="mb-3 {% if m.sender_id == user.id %}text-end{% endif %}">
+            <div class="small text-muted mb-1">
+              {{ m.sender.payroll_display_name }} · {{ m.created_at|date:"M j, g:i A" }}
+            </div>
+            <div class="d-inline-block text-start border rounded px-3 py-2 bg-dark bg-opacity-10" style="max-width: 85%; white-space: pre-wrap;">{{ m.body_plain }}</div>
+          </div>
+          {% empty %}
+          <p class="text-muted small mb-0">No messages yet — say hello below.</p>
+          {% endfor %}
+        </div>
+        <div class="card-body">
+          <form method="post" class="mb-0">
+            {% csrf_token %}
+            {{ form.body }}
+            {% if form.body.errors %}
+            <div class="invalid-feedback d-block">{{ form.body.errors|striptags }}</div>
+            {% endif %}
+            <button type="submit" class="btn btn-primary mt-2">Send</button>
+          </form>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header"><h2 class="h6 mb-0">People in this chat</h2></div>
+        <ul class="list-group list-group-flush">
+          {% for p in participants %}
+          <li class="list-group-item small">{{ p.user.payroll_display_name }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

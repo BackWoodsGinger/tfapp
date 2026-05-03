@@ -9,12 +9,17 @@
 
 {% block content %}
 <div class="container mt-4 mb-5">
-  <nav aria-label="breadcrumb" class="mb-3">
-    <ol class="breadcrumb mb-0">
-      <li class="breadcrumb-item"><a href="{% url 'resources:home' %}#directory">Resources</a></li>
-      <li class="breadcrumb-item active" aria-current="page">{{ subject.payroll_display_name }}</li>
-    </ol>
-  </nav>
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <nav aria-label="breadcrumb" class="mb-0">
+      <ol class="breadcrumb mb-0">
+        <li class="breadcrumb-item"><a href="{% url 'resources:home' %}#directory">Resources</a></li>
+        <li class="breadcrumb-item active" aria-current="page">{{ subject.payroll_display_name }}</li>
+      </ol>
+    </nav>
+    {% if user.is_authenticated and user.id != subject.id %}
+    <a class="btn btn-primary btn-sm flex-shrink-0" href="{% url 'messaging:start_dm' subject.public_slug %}">Message</a>
+    {% endif %}
+  </div>
 
   <div class="row g-4">
     <div class="col-12 col-md-4 col-lg-3">

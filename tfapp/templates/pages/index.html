@@ -271,6 +271,22 @@
         </div>
       </div>
     </div>
+
+    <div class="row g-3 justify-content-center mt-2">
+      <div class="col-10 col-sm-8 col-md-5 col-lg-4">
+        <div class="card home-app-card h-100">
+          <div class="card-body text-center d-flex flex-column">
+            <div class="home-app-card__icon" aria-hidden="true"><i class="fas fa-comments fa-2x"></i></div>
+            <h3 class="card-title h5 mb-3">Messages</h3>
+            {% if user.is_authenticated %}
+            <a class="btn btn-primary mt-auto" href="{% url 'messaging:inbox' %}">Open</a>
+            {% else %}
+            <a class="btn btn-primary mt-auto" href="{% url 'login' %}?next={% url 'messaging:inbox' %}">Sign in</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

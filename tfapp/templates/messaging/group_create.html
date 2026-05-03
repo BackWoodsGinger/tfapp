@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}New group — Messages{% endblock %}
+
+{% block content %}
+<div class="container mt-4 mb-5">
+  <div class="row justify-content-center">
+    <div class="col-lg-8">
+  <nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb mb-0">
+      <li class="breadcrumb-item"><a href="{% url 'messaging:inbox' %}">Messages</a></li>
+      <li class="breadcrumb-item active" aria-current="page">New group</li>
+    </ol>
+  </nav>
+  <div class="card">
+    <div class="card-header"><h1 class="h4 mb-0">Start a group conversation</h1></div>
+    <div class="card-body">
+      <p class="small text-muted">Choose a name and at least two other active users. You will be added automatically.</p>
+      <form method="post">
+        {% csrf_token %}
+        <div class="mb-3">
+          <label class="form-label" for="id_name">Group name</label>
+          {{ form.name }}
+          {% if form.name.errors %}<div class="invalid-feedback d-block">{{ form.name.errors|striptags }}</div>{% endif %}
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="id_members">Members</label>
+          {{ form.members }}
+          <div class="form-text">{{ form.members.help_text }}</div>
+          {% if form.members.errors %}<div class="invalid-feedback d-block">{{ form.members.errors|striptags }}</div>{% endif %}
+        </div>
+        <button type="submit" class="btn btn-primary">Create group</button>
+        <a href="{% url 'messaging:inbox' %}" class="btn btn-outline-secondary ms-2">Cancel</a>
+      </form>
+    </div>
+  </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -115,6 +115,7 @@ INSTALLED_APPS = [
     'attendance',
     'timeclock',
     'resources.apps.ResourcesConfig',
+    'messaging.apps.MessagingConfig',
     'crispy_forms',
     'crispy_bootstrap5',
 ]

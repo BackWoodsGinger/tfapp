@@ -11,6 +11,7 @@ urlpatterns = [
     path('attendance/', include('attendance.urls')),
     path('timeclock/', include('timeclock.urls')),
     path('resources/', include('resources.urls')),
+    path('messages/', include('messaging.urls')),
 ]
 
 if settings.DEBUG:
