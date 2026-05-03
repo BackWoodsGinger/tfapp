@@ -87,7 +87,11 @@ def profile(request):
         action = request.POST.get("action") or ""
 
         if action == "save_profile":
-            form = UserProfileForm(request.POST, request.FILES, instance=profile_obj)
+            post_data = request.POST
+            if profile_obj.bio and "bio" not in request.POST:
+                post_data = request.POST.copy()
+                post_data["bio"] = profile_obj.bio
+            form = UserProfileForm(post_data, request.FILES, instance=profile_obj)
             if form.is_valid():
                 form.save()
                 messages.success(request, "Profile updated.")
@@ -105,6 +109,12 @@ def profile(request):
                     **doc_display_ctx,
                 },
             )
+
+        if action == "save_bio":
+            profile_obj.bio = request.POST.get("bio", "")
+            profile_obj.save(update_fields=["bio"])
+            messages.success(request, "Bio updated.")
+            return redirect("profile")
 
         if action == "upload_document":
             doc_form = ProfileCredentialDocumentForm(request.POST, request.FILES)
