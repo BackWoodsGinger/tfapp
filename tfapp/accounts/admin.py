@@ -32,7 +32,10 @@ class UserCareerRoleInterestAdmin(admin.ModelAdmin):
 
 @admin.register(ProfileCredentialDocument)
 class ProfileCredentialDocumentAdmin(admin.ModelAdmin):
-    list_display = ("user", "title", "uploaded_at")
+    list_display = ("user", "title", "display_order", "uploaded_at")
+    list_editable = ("display_order",)
+    list_filter = ("user",)
+    ordering = ("user", "display_order", "id")
     search_fields = ("user__username", "title")
     raw_id_fields = ("user",)
     readonly_fields = ("uploaded_at",)

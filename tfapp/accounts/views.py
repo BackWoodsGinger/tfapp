@@ -5,6 +5,7 @@ from django.contrib import messages, auth
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import PasswordChangeDoneView, PasswordChangeView
 from django.db import transaction
+from django.db.models import Max
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -74,9 +75,10 @@ def profile(request):
     profile_obj, _ = UserProfile.objects.get_or_create(user=request.user)
     career_roles = list(CareerRole.objects.filter(is_active=True).order_by("sort_order", "name"))
     documents_list = list(
-        ProfileCredentialDocument.objects.filter(user=request.user).order_by("-uploaded_at")
+        ProfileCredentialDocument.objects.filter(user=request.user).order_by("display_order", "id")
     )
     doc_display_ctx = _credential_display_context(documents_list)
+    doc_display_ctx["credential_documents_ordered"] = documents_list
     career_interests = list(
         UserCareerRoleInterest.objects.filter(user=request.user).select_related("role")
     )
@@ -109,6 +111,11 @@ def profile(request):
             if doc_form.is_valid():
                 doc = doc_form.save(commit=False)
                 doc.user = request.user
+                agg = ProfileCredentialDocument.objects.filter(user=request.user).aggregate(
+                    m=Max("display_order")
+                )
+                max_ord = agg["m"]
+                doc.display_order = (max_ord + 1) if max_ord is not None else 0
                 doc.save()
                 messages.success(request, "Document uploaded.")
                 return redirect("profile")
@@ -132,6 +139,27 @@ def profile(request):
             doc.file.delete(save=False)
             doc.delete()
             messages.success(request, "Document removed.")
+            return redirect("profile")
+
+        if action == "reorder_credentials":
+            raw = (request.POST.get("credential_order") or "").strip()
+            parts = [p.strip() for p in raw.split(",") if p.strip().isdigit()]
+            try:
+                ids = [int(p) for p in parts]
+            except ValueError:
+                ids = []
+            owned = set(
+                ProfileCredentialDocument.objects.filter(user=request.user).values_list("pk", flat=True)
+            )
+            if not ids or len(ids) != len(owned) or set(ids) != owned:
+                messages.error(request, "Invalid reorder request.")
+                return redirect("profile")
+            with transaction.atomic():
+                for i, pk in enumerate(ids):
+                    ProfileCredentialDocument.objects.filter(pk=pk, user=request.user).update(
+                        display_order=i
+                    )
+            messages.success(request, "Certificate order updated.")
             return redirect("profile")
 
         if action == "save_interests":

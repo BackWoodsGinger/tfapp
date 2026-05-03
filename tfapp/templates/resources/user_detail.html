@@ -48,34 +48,26 @@
       <div class="card mb-4">
         <div class="card-header"><h2 class="h5 mb-0">Degrees &amp; certificates</h2></div>
         <div class="card-body">
-          {% if credential_image_documents or credential_non_image_documents %}
-          {% if credential_image_documents %}
-          <div class="row row-cols-2 row-cols-md-3 g-3 mb-3">
-            {% for doc in credential_image_documents %}
-            <div class="col">
-              <div class="card h-100 border shadow-sm overflow-hidden">
-                <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer" class="d-block position-relative bg-dark bg-opacity-10" style="aspect-ratio:4/3;">
-                  <img src="{{ doc.file.url }}" alt="" class="position-absolute top-0 start-0 w-100 h-100" style="object-fit:cover;" loading="lazy">
-                </a>
-                <div class="card-body p-2 small text-truncate" title="{{ doc.title|default:'Image'|escape }}">
-                  {% if doc.title %}{{ doc.title }}{% else %}Image{% endif %}
-                </div>
+          {% if credential_documents_ordered %}
+          <div class="d-flex flex-column gap-2">
+            {% for doc in credential_documents_ordered %}
+            <div class="border rounded p-2 d-flex flex-wrap align-items-center gap-2 gap-md-3 bg-dark bg-opacity-10">
+              {% if doc.is_web_image %}
+              <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0 rounded border overflow-hidden" style="width: 5.5rem; height: 4rem;">
+                <img src="{{ doc.file.url }}" alt="" width="88" height="64" class="w-100 h-100" style="object-fit: cover;" loading="lazy">
+              </a>
+              {% else %}
+              <span class="flex-shrink-0 d-inline-flex align-items-center justify-content-center rounded border bg-body-secondary" style="width: 5.5rem; height: 4rem;">
+                {% if doc.is_pdf %}<i class="fas fa-file-pdf text-danger fa-2x" aria-hidden="true"></i>{% else %}<i class="fas fa-file-alt text-secondary fa-2x" aria-hidden="true"></i>{% endif %}
+              </span>
+              {% endif %}
+              <div class="flex-grow-1 min-w-0">
+                <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer" class="fw-semibold text-break">{% if doc.title %}{{ doc.title }}{% elif doc.is_web_image %}Image{% elif doc.is_pdf %}PDF{% else %}File{% endif %}</a>
+                <div class="small text-muted">{{ doc.uploaded_at|date:"M j, Y" }}</div>
               </div>
             </div>
             {% endfor %}
           </div>
-          {% endif %}
-          {% if credential_non_image_documents %}
-          <h3 class="h6 text-muted text-uppercase small">PDF &amp; other files</h3>
-          <ul class="list-unstyled mb-0">
-            {% for doc in credential_non_image_documents %}
-            <li class="mb-1">
-              <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer">{% if doc.title %}{{ doc.title }}{% elif doc.is_pdf %}PDF{% else %}Download{% endif %}</a>
-              <span class="text-muted small"> — {{ doc.uploaded_at|date:"M j, Y" }}</span>
-            </li>
-            {% endfor %}
-          </ul>
-          {% endif %}
           {% else %}
           <p class="text-muted small mb-0">No documents on file.</p>
           {% endif %}

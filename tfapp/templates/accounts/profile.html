@@ -90,12 +90,12 @@
             </div>
           </div>
 
-          <div class="card mb-4">
+          <div class="card mb-4" id="degrees-certificates">
             <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
               <h5 class="mb-0">Degrees &amp; certificates</h5>
             </div>
             <div class="card-body">
-              <p class="small text-muted">Upload PDF or image files of diplomas, certifications, or licenses (max 15 MB each). Common image formats (PNG, JPEG, WebP, GIF, BMP) show as thumbnails in a grid; PDFs and other files appear in a list below.</p>
+              <p class="small text-muted">Upload PDF or image files of diplomas, certifications, or licenses (max 15 MB each). Drag the handle (<span class="text-muted">⠿</span>) to change the order everything appears in; images show a thumbnail and PDFs show an icon.</p>
               <form method="post" enctype="multipart/form-data" class="row g-2 align-items-end mb-4">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="upload_document">
@@ -118,65 +118,26 @@
                 </div>
               </form>
 
-              {% if credential_image_documents or credential_non_image_documents %}
-              {% if credential_image_documents %}
-              <p class="small text-muted mb-2">Image uploads (click to open full size).</p>
-              <div class="row row-cols-2 row-cols-md-3 row-cols-lg-4 g-3 mb-4">
-                {% for doc in credential_image_documents %}
-                <div class="col">
-                  <div class="card h-100 border shadow-sm overflow-hidden">
-                    <a
-                      href="{{ doc.file.url }}"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="d-block position-relative bg-dark bg-opacity-10"
-                      style="aspect-ratio: 4 / 3;"
-                      aria-label="Open {{ doc.title|default:'image'|escape }} full size"
-                    >
-                      <img
-                        src="{{ doc.file.url }}"
-                        alt=""
-                        class="position-absolute top-0 start-0 w-100 h-100"
-                        style="object-fit: cover;"
-                        loading="lazy"
-                        decoding="async"
-                      >
+              {% if credential_documents_ordered %}
+              <form id="credential-reorder-csrf" class="d-none">{% csrf_token %}</form>
+              <div id="credential-sort-list" class="d-flex flex-column gap-2 mb-2" data-profile-url="{% url 'profile' %}">
+                {% for doc in credential_documents_ordered %}
+                <div class="credential-sort-item border rounded p-2 d-flex flex-wrap align-items-center gap-2 gap-md-3 bg-dark bg-opacity-10" data-id="{{ doc.pk }}">
+                  <span class="credential-drag-handle text-secondary flex-shrink-0 px-1" style="cursor: grab;" title="Drag to reorder" role="button" tabindex="0" aria-grabbed="false">⠿</span>
+                  {% if doc.is_web_image %}
+                  <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer" class="flex-shrink-0 rounded border overflow-hidden" style="width: 5.5rem; height: 4rem;">
+                    <img src="{{ doc.file.url }}" alt="" width="88" height="64" class="w-100 h-100" style="object-fit: cover;" loading="lazy">
+                  </a>
+                  {% else %}
+                  <span class="flex-shrink-0 d-inline-flex align-items-center justify-content-center rounded border bg-body-secondary" style="width: 5.5rem; height: 4rem;">
+                    {% if doc.is_pdf %}<i class="fas fa-file-pdf text-danger fa-2x" aria-hidden="true"></i>{% else %}<i class="fas fa-file-alt text-secondary fa-2x" aria-hidden="true"></i>{% endif %}
+                  </span>
+                  {% endif %}
+                  <div class="flex-grow-1 min-w-0">
+                    <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer" class="fw-semibold text-break d-inline-block">
+                      {% if doc.title %}{{ doc.title }}{% elif doc.is_web_image %}Image{% elif doc.is_pdf %}PDF document{% else %}File{% endif %}
                     </a>
-                    <div class="card-body p-2 d-flex flex-column gap-1">
-                      <div class="small fw-semibold text-truncate" title="{{ doc.title|default:'Certificate image'|escape }}">
-                        {% if doc.title %}{{ doc.title }}{% else %}Certificate image{% endif %}
-                      </div>
-                      <div class="small text-muted">{{ doc.uploaded_at|date:"M j, Y" }}</div>
-                      <form method="post" class="mt-1" onsubmit="return confirm('Remove this document?');">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="delete_document">
-                        <input type="hidden" name="document_id" value="{{ doc.pk }}">
-                        <button type="submit" class="btn btn-sm btn-outline-danger w-100">Remove</button>
-                      </form>
-                    </div>
-                  </div>
-                </div>
-                {% endfor %}
-              </div>
-              {% endif %}
-
-              {% if credential_non_image_documents %}
-              <h6 class="text-muted text-uppercase small mb-2 {% if credential_image_documents %}mt-1{% endif %}">PDF &amp; other files</h6>
-              <ul class="list-group list-group-flush">
-                {% for doc in credential_non_image_documents %}
-                <li class="list-group-item px-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                  <div class="min-w-0 d-flex align-items-start gap-2">
-                    {% if doc.is_pdf %}
-                    <i class="fas fa-file-pdf text-danger fa-lg mt-1 flex-shrink-0" aria-hidden="true"></i>
-                    {% else %}
-                    <i class="fas fa-file-alt text-secondary fa-lg mt-1 flex-shrink-0" aria-hidden="true"></i>
-                    {% endif %}
-                    <div class="min-w-0">
-                      <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer" class="fw-semibold text-break d-inline-block">
-                        {% if doc.title %}{{ doc.title }}{% elif doc.is_pdf %}PDF document{% else %}File download{% endif %}
-                      </a>
-                      <div class="small text-muted">{{ doc.uploaded_at|date:"M j, Y g:i A" }}</div>
-                    </div>
+                    <div class="small text-muted">{{ doc.uploaded_at|date:"M j, Y g:i A" }}</div>
                   </div>
                   <form method="post" class="m-0 flex-shrink-0" onsubmit="return confirm('Remove this document?');">
                     {% csrf_token %}
@@ -184,10 +145,9 @@
                     <input type="hidden" name="document_id" value="{{ doc.pk }}">
                     <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
                   </form>
-                </li>
+                </div>
                 {% endfor %}
-              </ul>
-              {% endif %}
+              </div>
               {% else %}
               <p class="text-muted small mb-0">No documents uploaded yet.</p>
               {% endif %}
@@ -274,4 +234,40 @@
     </div>
   </div>
 </div>
+{% if credential_documents_ordered %}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<script>
+(function () {
+  var list = document.getElementById("credential-sort-list");
+  if (!list || typeof Sortable === "undefined") return;
+  var csrfForm = document.getElementById("credential-reorder-csrf");
+  var tokenInput = csrfForm && csrfForm.querySelector("[name=csrfmiddlewaretoken]");
+  var url = list.getAttribute("data-profile-url");
+  if (!tokenInput || !url) return;
+  Sortable.create(list, {
+    animation: 150,
+    handle: ".credential-drag-handle",
+    draggable: ".credential-sort-item",
+    onEnd: function () {
+      var ids = [].map.call(list.querySelectorAll(".credential-sort-item"), function (el) {
+        return el.getAttribute("data-id");
+      });
+      var fd = new FormData();
+      fd.append("csrfmiddlewaretoken", tokenInput.value);
+      fd.append("action", "reorder_credentials");
+      fd.append("credential_order", ids.join(","));
+      fetch(url, { method: "POST", body: fd, credentials: "same-origin" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("reorder failed");
+          window.location.reload();
+        })
+        .catch(function () {
+          alert("Could not save certificate order. Please try again.");
+          window.location.reload();
+        });
+    },
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

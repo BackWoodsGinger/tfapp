@@ -45,8 +45,11 @@ def user_detail(request, user_slug):
     interests = list(
         UserCareerRoleInterest.objects.filter(user=u).select_related("role").order_by("role__sort_order", "role__name")
     )
-    cred_qs = ProfileCredentialDocument.objects.filter(user=u).order_by("-uploaded_at")
-    cred_ctx = _credential_display_context(list(cred_qs))
+    cred_list = list(
+        ProfileCredentialDocument.objects.filter(user=u).order_by("display_order", "id")
+    )
+    cred_ctx = _credential_display_context(cred_list)
+    cred_ctx["credential_documents_ordered"] = cred_list
     return render(
         request,
         "resources/user_detail.html",

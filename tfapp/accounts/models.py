@@ -108,9 +108,14 @@ class ProfileCredentialDocument(models.Model):
     )
     file = models.FileField(upload_to="profile_credentials/%Y/%m/")
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    display_order = models.PositiveIntegerField(
+        default=0,
+        db_index=True,
+        help_text="Lower numbers appear first; drag to reorder on your profile.",
+    )
 
     class Meta:
-        ordering = ["-uploaded_at"]
+        ordering = ["display_order", "id"]
 
     def credential_file_suffix_lower(self):
         try:
