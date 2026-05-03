@@ -10,10 +10,6 @@
     <h1 class="h2 mb-0">Messages</h1>
     <a class="btn btn-primary btn-sm" href="{% url 'messaging:group_create' %}">New group</a>
   </div>
-  <p class="small text-muted">
-    Message bodies are <strong>encrypted at rest</strong> on the server (Fernet, key derived from your Django <code>SECRET_KEY</code>).
-    This is not end-to-end encryption: anyone with server access and the secret can decrypt.
-  </p>
   {% if rows %}
   <div class="list-group shadow-sm">
     {% for row in rows %}
