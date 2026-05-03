@@ -6,11 +6,11 @@
 {% block content %}
 <div class="container mt-4 mb-5">
   <div class="row justify-content-center">
-    <div class="col-lg-10">
+    <div class="col-12">
       <h2 class="mb-3">Your profile</h2>
 
       <div class="row g-4">
-        <div class="col-md-4">
+        <div class="col-12 col-md-4 col-lg-3">
           <div class="card">
             <div class="card-header">
               <h5 class="mb-0">Photo</h5>
@@ -30,7 +30,7 @@
           </div>
         </div>
 
-        <div class="col-md-8">
+        <div class="col-12 col-md-8 col-lg-9">
           <div class="card mb-4">
             <div class="card-header">
               <h5 class="mb-0">Account &amp; contact</h5>
@@ -80,7 +80,7 @@
               <h5 class="mb-0">Degrees &amp; certificates</h5>
             </div>
             <div class="card-body">
-              <p class="small text-muted">Upload PDF or image files of diplomas, certifications, or licenses (max 15 MB each).</p>
+              <p class="small text-muted">Upload PDF or image files of diplomas, certifications, or licenses (max 15 MB each). Common image formats (PNG, JPEG, WebP, GIF, BMP) show as thumbnails in a grid; PDFs and other files appear in a list below.</p>
               <form method="post" enctype="multipart/form-data" class="row g-2 align-items-end mb-4">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="upload_document">
@@ -103,17 +103,67 @@
                 </div>
               </form>
 
-              {% if credential_documents %}
-              <ul class="list-group list-group-flush">
-                {% for doc in credential_documents %}
-                <li class="list-group-item px-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                  <div class="min-w-0">
-                    <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer" class="fw-semibold text-break">
-                      {% if doc.title %}{{ doc.title }}{% else %}Credential file{% endif %}
+              {% if credential_image_documents or credential_non_image_documents %}
+              {% if credential_image_documents %}
+              <p class="small text-muted mb-2">Image uploads (click to open full size).</p>
+              <div class="row row-cols-2 row-cols-md-3 row-cols-lg-4 g-3 mb-4">
+                {% for doc in credential_image_documents %}
+                <div class="col">
+                  <div class="card h-100 border shadow-sm overflow-hidden">
+                    <a
+                      href="{{ doc.file.url }}"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="d-block position-relative bg-dark bg-opacity-10"
+                      style="aspect-ratio: 4 / 3;"
+                      aria-label="Open {{ doc.title|default:'image'|escape }} full size"
+                    >
+                      <img
+                        src="{{ doc.file.url }}"
+                        alt=""
+                        class="position-absolute top-0 start-0 w-100 h-100"
+                        style="object-fit: cover;"
+                        loading="lazy"
+                        decoding="async"
+                      >
                     </a>
-                    <div class="small text-muted">{{ doc.uploaded_at|date:"M j, Y g:i A" }}</div>
+                    <div class="card-body p-2 d-flex flex-column gap-1">
+                      <div class="small fw-semibold text-truncate" title="{{ doc.title|default:'Certificate image'|escape }}">
+                        {% if doc.title %}{{ doc.title }}{% else %}Certificate image{% endif %}
+                      </div>
+                      <div class="small text-muted">{{ doc.uploaded_at|date:"M j, Y" }}</div>
+                      <form method="post" class="mt-1" onsubmit="return confirm('Remove this document?');">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete_document">
+                        <input type="hidden" name="document_id" value="{{ doc.pk }}">
+                        <button type="submit" class="btn btn-sm btn-outline-danger w-100">Remove</button>
+                      </form>
+                    </div>
                   </div>
-                  <form method="post" class="m-0" onsubmit="return confirm('Remove this document?');">
+                </div>
+                {% endfor %}
+              </div>
+              {% endif %}
+
+              {% if credential_non_image_documents %}
+              <h6 class="text-muted text-uppercase small mb-2 {% if credential_image_documents %}mt-1{% endif %}">PDF &amp; other files</h6>
+              <ul class="list-group list-group-flush">
+                {% for doc in credential_non_image_documents %}
+                <li class="list-group-item px-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                  <div class="min-w-0 d-flex align-items-start gap-2">
+                    {% if doc.is_pdf %}
+                    <i class="fas fa-file-pdf text-danger fa-lg mt-1 flex-shrink-0" aria-hidden="true"></i>
+                    {% else %}
+                    <i class="fas fa-file-alt text-secondary fa-lg mt-1 flex-shrink-0" aria-hidden="true"></i>
+                    {% endif %}
+                    <div class="min-w-0">
+                      <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer" class="fw-semibold text-break d-inline-block">
+                        {% if doc.title %}{{ doc.title }}{% elif doc.is_pdf %}PDF document{% else %}File download{% endif %}
+                      </a>
+                      <div class="small text-muted">{{ doc.uploaded_at|date:"M j, Y g:i A" }}</div>
+                    </div>
+                  </div>
+                  <form method="post" class="m-0 flex-shrink-0" onsubmit="return confirm('Remove this document?');">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="delete_document">
                     <input type="hidden" name="document_id" value="{{ doc.pk }}">
@@ -122,6 +172,7 @@
                 </li>
                 {% endfor %}
               </ul>
+              {% endif %}
               {% else %}
               <p class="text-muted small mb-0">No documents uploaded yet.</p>
               {% endif %}

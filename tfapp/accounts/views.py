@@ -13,6 +13,19 @@ from .forms import ProfileCredentialDocumentForm, UserProfileForm
 from .models import CareerRole, ProfileCredentialDocument, UserCareerRoleInterest, UserProfile
 from .session_utils import register_user_session
 
+def _credential_display_context(documents_ordered_newest_first):
+    image_docs = []
+    other_docs = []
+    for d in documents_ordered_newest_first:
+        if d.is_web_image():
+            image_docs.append(d)
+        else:
+            other_docs.append(d)
+    return {
+        "credential_image_documents": image_docs,
+        "credential_non_image_documents": other_docs,
+    }
+
 
 def _safe_next_redirect_url(request):
     next_url = (request.POST.get("next") or request.GET.get("next") or "").strip()
@@ -60,7 +73,10 @@ def logout(request):
 def profile(request):
     profile_obj, _ = UserProfile.objects.get_or_create(user=request.user)
     career_roles = list(CareerRole.objects.filter(is_active=True).order_by("sort_order", "name"))
-    documents = ProfileCredentialDocument.objects.filter(user=request.user)
+    documents_list = list(
+        ProfileCredentialDocument.objects.filter(user=request.user).order_by("-uploaded_at")
+    )
+    doc_display_ctx = _credential_display_context(documents_list)
     career_interests = list(
         UserCareerRoleInterest.objects.filter(user=request.user).select_related("role")
     )
@@ -83,8 +99,8 @@ def profile(request):
                     "profile_form": form,
                     "document_form": ProfileCredentialDocumentForm(),
                     "career_roles": career_roles,
-                    "credential_documents": documents,
                     "career_interests": career_interests,
+                    **doc_display_ctx,
                 },
             )
 
@@ -105,8 +121,8 @@ def profile(request):
                     "profile_form": UserProfileForm(instance=profile_obj),
                     "document_form": doc_form,
                     "career_roles": career_roles,
-                    "credential_documents": documents,
                     "career_interests": career_interests,
+                    **doc_display_ctx,
                 },
             )
 
@@ -157,8 +173,8 @@ def profile(request):
             "profile_form": UserProfileForm(instance=profile_obj),
             "document_form": ProfileCredentialDocumentForm(),
             "career_roles": career_roles,
-            "credential_documents": documents,
             "career_interests": career_interests,
+            **doc_display_ctx,
         },
     )
 

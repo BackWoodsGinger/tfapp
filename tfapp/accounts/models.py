@@ -1,5 +1,10 @@
+from pathlib import Path
+
 from django.conf import settings
 from django.db import models
+
+# File types safe to render as <img> thumbnails on the profile page (not SVG/PDF).
+CREDENTIAL_WEB_IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 
 
 class UserSession(models.Model):
@@ -106,6 +111,19 @@ class ProfileCredentialDocument(models.Model):
 
     class Meta:
         ordering = ["-uploaded_at"]
+
+    def credential_file_suffix_lower(self):
+        try:
+            name = self.file.name
+        except (ValueError, AttributeError):
+            name = ""
+        return Path((name or "").lower()).suffix
+
+    def is_web_image(self):
+        return self.credential_file_suffix_lower() in CREDENTIAL_WEB_IMAGE_EXTENSIONS
+
+    def is_pdf(self):
+        return self.credential_file_suffix_lower() == ".pdf"
 
     def __str__(self):
         label = self.title or self.file.name
