@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block title %}Add event — Resources{% endblock %}
+
+{% block site_navbar %}
+{% include "partials/_navbar_minimal.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4 mb-5">
+  <div class="row justify-content-center">
+    <div class="col-lg-8">
+  <nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb mb-0">
+      <li class="breadcrumb-item"><a href="{% url 'resources:home' %}#events">Resources</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Add event</li>
+    </ol>
+  </nav>
+  <div class="card">
+    <div class="card-header"><h1 class="h4 mb-0">Add event</h1></div>
+    <div class="card-body">
+      <p class="small text-muted">Executives only. You may attach multiple images (each up to 10 MB).</p>
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="mb-3">
+          <label class="form-label" for="id_title">Title <span class="text-muted">(optional)</span></label>
+          {{ form.title }}
+        </div>
+        <div class="row g-2 mb-3">
+          <div class="col-md-6">
+            <label class="form-label" for="id_event_date">Date</label>
+            {{ form.event_date }}
+          </div>
+          <div class="col-md-6">
+            <label class="form-label" for="id_event_time">Time</label>
+            {{ form.event_time }}
+            <div class="form-check mt-2">
+              {{ form.all_day }}
+              <label class="form-check-label" for="id_all_day">All day</label>
+            </div>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="id_details">Details</label>
+          {{ form.details }}
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="id_attachments">Image attachments</label>
+          <input type="file" name="attachments" id="id_attachments" class="form-control form-control-sm" accept="image/*" multiple>
+        </div>
+        {% if form.errors %}
+        <div class="alert alert-danger small">Please correct the errors below.</div>
+        {% endif %}
+        {% for field in form %}
+        {% if field.errors %}
+        <div class="text-danger small mb-2">{{ field.label }}: {{ field.errors|striptags }}</div>
+        {% endif %}
+        {% endfor %}
+        {% if form.non_field_errors %}
+        <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+        {% endif %}
+        <button type="submit" class="btn btn-primary">Save event</button>
+        <a class="btn btn-outline-secondary ms-2" href="{% url 'resources:home' %}#events">Cancel</a>
+      </form>
+    </div>
+  </div>
+  </div>
+</div>
+{% endblock %}

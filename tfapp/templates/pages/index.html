@@ -221,8 +221,8 @@
       Sign in to submit a message for review by clicking the ticker above. You must be logged in to submit a message.
       {% endif %}
     </p>
-    <div class="row g-4 justify-content-center">
-      <div class="col-10 col-sm-8 col-md-6 col-lg-4">
+    <div class="row g-4 justify-content-center row-cols-1 row-cols-sm-2 row-cols-xl-4">
+      <div class="col">
         <div class="card home-app-card h-100">
           <div class="card-body text-center d-flex flex-column">
             <div class="home-app-card__icon" aria-hidden="true"><i class="fas fa-clock fa-2x"></i></div>
@@ -231,11 +231,11 @@
           </div>
         </div>
       </div>
-      <div class="col-10 col-sm-8 col-md-6 col-lg-4">
+      <div class="col">
         <div class="card home-app-card h-100">
           <div class="card-body text-center d-flex flex-column">
-            <div class="home-app-card__icon" aria-hidden="true"><i class="fas fa-calendar-alt fa-2x"></i></div>
-            <h3 class="card-title h5 mb-3">Attendance</h3>
+            <div class="home-app-card__icon" aria-hidden="true"><i class="fas fa-th-large fa-2x"></i></div>
+            <h3 class="card-title h5 mb-3">Dashboard</h3>
             {% if user.is_authenticated %}
             <a class="btn btn-primary mt-auto" href="{% url 'attendance:dashboard' %}">Open</a>
             {% else %}
@@ -244,7 +244,7 @@
           </div>
         </div>
       </div>
-      <div class="col-10 col-sm-8 col-md-6 col-lg-4">
+      <div class="col">
         <div class="card home-app-card h-100">
           <div class="card-body text-center d-flex flex-column">
             <div class="home-app-card__icon" aria-hidden="true"><i class="fas fa-user-circle fa-2x"></i></div>
@@ -253,6 +253,19 @@
             <a class="btn btn-primary mt-auto" href="{% url 'profile' %}">Open</a>
             {% else %}
             <a class="btn btn-primary mt-auto" href="{% url 'login' %}?next={% url 'profile' %}">Sign in</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="card home-app-card h-100">
+          <div class="card-body text-center d-flex flex-column">
+            <div class="home-app-card__icon" aria-hidden="true"><i class="fas fa-book-reader fa-2x"></i></div>
+            <h3 class="card-title h5 mb-3">Resources</h3>
+            {% if user.is_authenticated %}
+            <a class="btn btn-primary mt-auto" href="{% url 'resources:home' %}">Open</a>
+            {% else %}
+            <a class="btn btn-primary mt-auto" href="{% url 'login' %}?next={% url 'resources:home' %}">Sign in</a>
             {% endif %}
           </div>
         </div>

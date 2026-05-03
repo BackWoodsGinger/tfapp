@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}{{ policy.title }} — Policies{% endblock %}
+
+{% block site_navbar %}
+{% include "partials/_navbar_minimal.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4 mb-5">
+  <div class="row justify-content-center">
+    <div class="col-lg-10">
+  <nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb mb-0">
+      <li class="breadcrumb-item"><a href="{% url 'resources:home' %}#policies">Resources</a></li>
+      <li class="breadcrumb-item active" aria-current="page">{{ policy.title }}</li>
+    </ol>
+  </nav>
+  <div class="card">
+    <div class="card-header">
+      <h1 class="h4 mb-0">{{ policy.title }}</h1>
+    </div>
+    <div class="card-body">
+      <div class="policy-body">{{ policy.body|linebreaks }}</div>
+    </div>
+  </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

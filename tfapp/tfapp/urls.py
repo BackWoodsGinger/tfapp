@@ -10,6 +10,7 @@ urlpatterns = [
     path('accounts/', include('accounts.urls')),
     path('attendance/', include('attendance.urls')),
     path('timeclock/', include('timeclock.urls')),
+    path('resources/', include('resources.urls')),
 ]
 
 if settings.DEBUG:

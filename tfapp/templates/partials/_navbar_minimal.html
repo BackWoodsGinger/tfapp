@@ -1,0 +1,31 @@
+{% load static %}
+
+<nav class="navbar navbar-expand-sm navbar-dark bg-primary p-0">
+  <div class="container">
+    <a class="navbar-brand" href="{% url 'index' %}">
+      <img src="{% static 'img/tube-fab-roman-engineering.webp' %}" class="object-fill-none border rounded" alt="TF-R" style="max-height: 60px;">
+    </a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarMinimal" aria-controls="navbarMinimal" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse justify-content-end" id="navbarMinimal">
+      <ul class="navbar-nav ms-auto align-items-sm-center">
+        <li class="nav-item me-sm-3">
+          <a class="nav-link {% if request.path == '/' or request.path == '' %}active{% endif %}" href="{% url 'index' %}">Home</a>
+        </li>
+        {% if user.is_authenticated %}
+        <li class="nav-item">
+          <a href="javascript:{document.getElementById('logout-minimal').submit();}" class="nav-link">Logout</a>
+          <form action="{% url 'logout' %}" method="POST" id="logout-minimal" class="d-none">
+            {% csrf_token %}
+          </form>
+        </li>
+        {% else %}
+        <li class="nav-item">
+          <a class="nav-link" href="{% url 'login' %}"><i class="fas fa-sign-in-alt" aria-hidden="true"></i> Login</a>
+        </li>
+        {% endif %}
+      </ul>
+    </div>
+  </div>
+</nav>

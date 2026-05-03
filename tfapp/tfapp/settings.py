@@ -114,6 +114,7 @@ INSTALLED_APPS = [
     'pages.apps.PagesConfig',
     'attendance',
     'timeclock',
+    'resources.apps.ResourcesConfig',
     'crispy_forms',
     'crispy_bootstrap5',
 ]

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Resources{% endblock %}
+
+{% block site_navbar %}
+{% include "partials/_navbar_minimal.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4 mb-5">
+  <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-4">
+    <h1 class="h2 mb-0">Resources</h1>
+    <nav class="d-flex flex-wrap gap-2" aria-label="Resources sections">
+      <a class="btn btn-sm btn-outline-secondary" href="#directory">Directory</a>
+      <a class="btn btn-sm btn-outline-secondary" href="#events">Events</a>
+      <a class="btn btn-sm btn-outline-secondary" href="#policies">Policies</a>
+    </nav>
+  </div>
+
+  <section id="directory" class="card mb-5">
+    <div class="card-header">
+      <h2 class="h5 mb-0">Directory</h2>
+    </div>
+    <div class="card-body">
+      <p class="text-muted small">People in the system (alphabetical). Select a name to view their profile, bio, credentials, and career interests.</p>
+      <ul class="list-columns mb-0">
+        {% for u in directory_users %}
+        <li class="mb-1">
+          <a href="{% url 'resources:user_detail' u.public_slug %}">{{ u.payroll_display_name }}</a>
+        </li>
+        {% empty %}
+        <li class="text-muted">No active users found.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </section>
+
+  <section id="events" class="card mb-5">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <h2 class="h5 mb-0">Events</h2>
+      {% if is_executive %}
+      <a class="btn btn-sm btn-primary" href="{% url 'resources:event_add' %}">Add event</a>
+      {% endif %}
+    </div>
+    <div class="card-body">
+      <p class="text-muted small">Switch between year, month, week, and day. Click an event name for full details and attachments.</p>
+      <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Calendar view">
+          <button type="button" class="btn btn-outline-secondary" id="resources-cal-view-year" data-cal-mode="year">Year</button>
+          <button type="button" class="btn btn-outline-secondary active" id="resources-cal-view-month" data-cal-mode="month">Month</button>
+          <button type="button" class="btn btn-outline-secondary" id="resources-cal-view-week" data-cal-mode="week">Week</button>
+          <button type="button" class="btn btn-outline-secondary" id="resources-cal-view-day" data-cal-mode="day">Day</button>
+        </div>
+        <div class="btn-group btn-group-sm ms-md-auto" role="group" aria-label="Navigate">
+          <button type="button" class="btn btn-outline-secondary" id="resources-cal-prev" aria-label="Previous">&lsaquo;</button>
+          <button type="button" class="btn btn-outline-secondary" id="resources-cal-today">Today</button>
+          <button type="button" class="btn btn-outline-secondary" id="resources-cal-next" aria-label="Next">&rsaquo;</button>
+        </div>
+      </div>
+      <h3 class="h6 text-center mb-3" id="resources-calendar-title"></h3>
+      <div id="resources-calendar-root" class="resources-calendar-root"></div>
+    </div>
+  </section>
+
+  <section id="policies" class="card mb-4">
+    <div class="card-header">
+      <h2 class="h5 mb-0">Policies</h2>
+    </div>
+    <div class="card-body">
+      <div class="mb-4">
+        <h3 class="h6">Employee handbook</h3>
+        {% if handbook and handbook.pdf %}
+        <a class="btn btn-outline-primary btn-sm" href="{% url 'resources:handbook_download' %}">Download handbook (PDF)</a>
+        <p class="small text-muted mb-0 mt-2">Last updated {{ handbook.updated_at|date:"M j, Y g:i A" }}.</p>
+        {% else %}
+        <p class="text-muted small mb-0">The handbook PDF has not been uploaded yet. Executives can add it in the admin under Resources → Employee handbook.</p>
+        {% endif %}
+      </div>
+      <div>
+        <h3 class="h6">Company policies</h3>
+        {% if policies %}
+        <ul class="list-unstyled mb-0">
+          {% for p in policies %}
+          <li class="mb-1">
+            <a href="{% url 'resources:policy_detail' p.slug %}">{{ p.title }}</a>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted small mb-0">No policies yet. Executives can add them in the admin under Resources → Policies.</p>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+</div>
+
+<style>
+  .list-columns {
+    column-width: 14rem;
+    column-gap: 2rem;
+    padding-left: 1.25rem;
+  }
+  .resources-calendar-root table td {
+    word-break: break-word;
+  }
+</style>
+<div id="resources-calendar-bootstrap" data-feed-url="{% url 'resources:events_feed' %}" hidden></div>
+<script src="{% static 'js/resources-calendar.js' %}"></script>
+{% endblock %}

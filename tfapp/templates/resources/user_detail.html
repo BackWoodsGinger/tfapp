@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ subject.payroll_display_name }} — Directory{% endblock %}
+
+{% block site_navbar %}
+{% include "partials/_navbar_minimal.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4 mb-5">
+  <nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb mb-0">
+      <li class="breadcrumb-item"><a href="{% url 'resources:home' %}#directory">Resources</a></li>
+      <li class="breadcrumb-item active" aria-current="page">{{ subject.payroll_display_name }}</li>
+    </ol>
+  </nav>
+
+  <div class="row g-4">
+    <div class="col-12 col-md-4 col-lg-3">
+      <div class="card">
+        <div class="card-body text-center">
+          <img
+            src="{% if profile and profile.photo %}{{ profile.photo.url }}{% else %}{% static 'img/redman.jpg' %}{% endif %}"
+            alt=""
+            class="img-fluid rounded mb-2"
+            style="max-height: 220px; width: auto; object-fit: cover;"
+          >
+          <h1 class="h4 mb-0">{{ subject.payroll_display_name }}</h1>
+          {% if subject.department %}
+          <p class="small text-muted mb-0">{{ subject.department }}</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-md-8 col-lg-9">
+      <div class="card mb-4">
+        <div class="card-header"><h2 class="h5 mb-0">Bio</h2></div>
+        <div class="card-body">
+          {% if profile and profile.bio %}
+          <div class="profile-bio-static">{{ profile.bio|linebreaks }}</div>
+          {% else %}
+          <p class="text-muted small mb-0">No bio on file.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><h2 class="h5 mb-0">Degrees &amp; certificates</h2></div>
+        <div class="card-body">
+          {% if credential_image_documents or credential_non_image_documents %}
+          {% if credential_image_documents %}
+          <div class="row row-cols-2 row-cols-md-3 g-3 mb-3">
+            {% for doc in credential_image_documents %}
+            <div class="col">
+              <div class="card h-100 border shadow-sm overflow-hidden">
+                <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer" class="d-block position-relative bg-dark bg-opacity-10" style="aspect-ratio:4/3;">
+                  <img src="{{ doc.file.url }}" alt="" class="position-absolute top-0 start-0 w-100 h-100" style="object-fit:cover;" loading="lazy">
+                </a>
+                <div class="card-body p-2 small text-truncate" title="{{ doc.title|default:'Image'|escape }}">
+                  {% if doc.title %}{{ doc.title }}{% else %}Image{% endif %}
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if credential_non_image_documents %}
+          <h3 class="h6 text-muted text-uppercase small">PDF &amp; other files</h3>
+          <ul class="list-unstyled mb-0">
+            {% for doc in credential_non_image_documents %}
+            <li class="mb-1">
+              <a href="{{ doc.file.url }}" target="_blank" rel="noopener noreferrer">{% if doc.title %}{{ doc.title }}{% elif doc.is_pdf %}PDF{% else %}Download{% endif %}</a>
+              <span class="text-muted small"> — {{ doc.uploaded_at|date:"M j, Y" }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% else %}
+          <p class="text-muted small mb-0">No documents on file.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-header"><h2 class="h5 mb-0">Career interests</h2></div>
+        <div class="card-body">
+          {% if career_interests %}
+          <ul class="mb-0">
+            {% for row in career_interests %}
+            <li>{{ row.role.name }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="text-muted small mb-0">None listed.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
