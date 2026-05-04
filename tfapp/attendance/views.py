@@ -51,6 +51,7 @@ from .models import (
     ABSENCE_REPORT_LEAVE_AND_NO_PERSONAL_SUBTYPES,
 )
 from . import approval_emails
+from .group_report_charts import group_report_pie_pair_uris
 from .forms import ReportFilterForm, TimeOffRequestForm, WorkThroughLunchRequestForm, AdjustPunchRequestForm
 from .payroll_utils import (
     week_ending_for_date as _week_ending_for_date,
@@ -623,6 +624,8 @@ def dashboard(request):
     report_selected_user = None
     report_group_summary = []
     report_group_by_label = ""
+    report_pie_hours_uri = None
+    report_pie_records_uri = None
     report_today = localdate()
     if report_form.is_valid():
         report_mode = report_form.cleaned_data.get("report_mode") or ReportFilterForm.REPORT_MODE_INDIVIDUAL
@@ -645,7 +648,9 @@ def dashboard(request):
             if subtype_filters:
                 occ_qs = occ_qs.filter(subtype__in=subtype_filters)
             report_group_summary = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
-            _annotate_group_rows_chart_widths(report_group_summary)
+            report_pie_hours_uri, report_pie_records_uri = group_report_pie_pair_uris(
+                report_group_summary
+            )
         elif report_mode == ReportFilterForm.REPORT_MODE_INDIVIDUAL and report_form.cleaned_data.get("user"):
             report_selected_user = report_form.cleaned_data["user"]
             if report_start_date and report_end_date:
@@ -775,6 +780,8 @@ def dashboard(request):
         "report_selected_user": report_selected_user,
         "report_group_summary": report_group_summary,
         "report_group_by_label": report_group_by_label,
+        "report_pie_hours_uri": report_pie_hours_uri,
+        "report_pie_records_uri": report_pie_records_uri,
         "user_service_dates": user_service_dates,
         "today_iso": report_today.isoformat(),
         "clock_in_overrides": clock_in_overrides,
@@ -985,17 +992,6 @@ def _aggregate_group_absence_report_rows(occurrences, group_by: str) -> list:
             }
         )
     return result
-
-
-def _annotate_group_rows_chart_widths(group_rows: list) -> None:
-    """Set bar_pct_hours and bar_pct_records (0–100) on each row for chart UI."""
-    if not group_rows:
-        return
-    max_h = max(r["total_hours"] for r in group_rows) or 1.0
-    max_c = max(r["occurrence_count"] for r in group_rows) or 1
-    for r in group_rows:
-        r["bar_pct_hours"] = min(100, int(round(100 * r["total_hours"] / max_h)))
-        r["bar_pct_records"] = min(100, int(round(100 * r["occurrence_count"] / max_c)))
 
 
 def _report_logo_data_uri():
@@ -2336,7 +2332,7 @@ def generate_report_pdf(request):
         if subtype_filters:
             occ_qs = occ_qs.filter(subtype__in=subtype_filters)
         group_rows = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
-        _annotate_group_rows_chart_widths(group_rows)
+        pie_hours_uri, pie_records_uri = group_report_pie_pair_uris(group_rows)
         distinct_user_ids = set(occ_qs.values_list("user_id", flat=True))
         grand = {
             "occurrence_count": sum(r["occurrence_count"] for r in group_rows),
@@ -2356,6 +2352,8 @@ def generate_report_pdf(request):
                 "subtype_filter_label": subtype_filter_label,
                 "group_rows": group_rows,
                 "grand": grand,
+                "pie_hours_uri": pie_hours_uri,
+                "pie_records_uri": pie_records_uri,
             }
         )
         response = HttpResponse(content_type="application/pdf")

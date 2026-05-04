@@ -15,11 +15,8 @@
         td.num, th.num { text-align: right; }
         tfoot td { font-weight: bold; }
         .muted { color: #444; font-size: 9px; margin: 0 0 6px 0; }
-        .bar-row { margin-bottom: 8px; page-break-inside: avoid; }
-        .bar-label { font-size: 10px; margin-bottom: 2px; }
-        .bar-track { background: #e8e8e8; height: 11px; width: 100%; border: 1px solid #bbb; }
-        .bar-fill-hours { background: #2c559c; height: 11px; }
-        .bar-fill-records { background: #2d9cdb; height: 11px; }
+        .chart-wrap { margin: 8px 0 14px 0; page-break-inside: avoid; }
+        .chart-wrap img { width: 340px; max-width: 100%; height: auto; display: block; }
         .group-block { margin-bottom: 14px; page-break-inside: avoid; }
         .group-block h4 { margin: 0 0 4px 0; font-size: 11px; }
     </style>
@@ -59,25 +56,25 @@
         </tbody>
     </table>
 
-    <p class="section-title">Summary — total hours by group</p>
-    <p class="muted">Bar width is relative to the group with the most hours in this report.</p>
-    {% for row in group_rows %}
-    <div class="bar-row">
-        <div class="bar-label"><strong>{{ row.group_label }}</strong> — {{ row.total_hours|floatformat:2 }} hrs ({{ row.unique_employees }} staff, {{ row.occurrence_count }} records)</div>
-        <div class="bar-track"><div class="bar-fill-hours" style="width: {{ row.bar_pct_hours }}%;"></div></div>
+    <p class="section-title">Summary — total hours by group (pie)</p>
+    <p class="muted">Slice size is proportional to each group’s total absence hours in this report. Legend lists share of the whole.</p>
+    {% if pie_hours_uri %}
+    <div class="chart-wrap">
+        <img src="{{ pie_hours_uri }}" alt="Hours by group" />
     </div>
-    {% empty %}
-    <p class="muted">No groups.</p>
-    {% endfor %}
+    {% else %}
+    <p class="muted">Not enough non-zero hours to draw a chart.</p>
+    {% endif %}
 
-    <p class="section-title">Summary — absence records by group</p>
-    <p class="muted">Bar width is relative to the group with the most records.</p>
-    {% for row in group_rows %}
-    <div class="bar-row">
-        <div class="bar-label"><strong>{{ row.group_label }}</strong> — {{ row.occurrence_count }} records</div>
-        <div class="bar-track"><div class="bar-fill-records" style="width: {{ row.bar_pct_records }}%;"></div></div>
+    <p class="section-title">Summary — absence records by group (pie)</p>
+    <p class="muted">Slice size is proportional to each group’s absence record count.</p>
+    {% if pie_records_uri %}
+    <div class="chart-wrap">
+        <img src="{{ pie_records_uri }}" alt="Records by group" />
     </div>
-    {% endfor %}
+    {% else %}
+    <p class="muted">Not enough records to draw a chart.</p>
+    {% endif %}
 
     <p class="section-title">Detail by group and employee</p>
     {% for row in group_rows %}
