@@ -195,8 +195,8 @@
         <div class="card-body">
           <h3 class="mb-2">Generate Attendance Report</h3>
           <p class="text-muted small mb-3">
-            Choose an individual employee PDF (same layout as before) or a group analytics PDF
-            summarized by department, typical Monday shift, or supervisor. Optional subtype filter
+            Choose an individual employee PDF or a group analytics PDF
+            summarized by department or supervisor. Optional subtype filter
             limits rows to one absence type or all types.
           </p>
           <form method="get" action="{% url 'attendance:generate_report_pdf' %}" id="absence-report-form" class="mb-0">
