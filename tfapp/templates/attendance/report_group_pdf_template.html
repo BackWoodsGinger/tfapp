@@ -112,6 +112,7 @@
                     <th>Username</th>
                     <th>Department</th>
                     <th>Supervisor</th>
+                    <th>Group lead</th>
                     <th class="num">Records</th>
                     <th class="num">Hours</th>
                     <th class="num">PTO</th>
@@ -125,13 +126,14 @@
                     <td>{{ u.username }}</td>
                     <td>{{ u.department }}</td>
                     <td>{{ u.supervisor }}</td>
+                    <td>{{ u.group_lead }}</td>
                     <td class="num">{{ u.occurrence_count }}</td>
                     <td class="num">{{ u.total_hours|floatformat:2 }}</td>
                     <td class="num">{{ u.pto_applied|floatformat:2 }}</td>
                     <td class="num">{{ u.personal_applied|floatformat:2 }}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="8">No employees in this group.</td></tr>
+                <tr><td colspan="9">No employees in this group.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

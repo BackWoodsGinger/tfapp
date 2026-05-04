@@ -50,6 +50,7 @@ class ReportFilterForm(forms.Form):
     REPORT_GROUP_BY_CHOICES = [
         ("department", "Department"),
         ("supervisor", "Supervisor / reporting line"),
+        ("group_lead", "Group lead"),
     ]
 
     report_mode = forms.ChoiceField(

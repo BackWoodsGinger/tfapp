@@ -644,7 +644,7 @@ def dashboard(request):
             occ_qs = Occurrence.objects.filter(
                 user__in=visible_users,
                 date__range=(report_start_date, report_end_date),
-            ).select_related("user", "user__supervisor")
+            ).select_related("user", "user__supervisor", "user__group_lead")
             if subtype_filters:
                 occ_qs = occ_qs.filter(subtype__in=subtype_filters)
             report_group_summary = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
@@ -900,7 +900,7 @@ def _user_row_sort_key(u: CustomUser | None) -> tuple:
 
 
 def _aggregate_group_absence_report_rows(occurrences, group_by: str) -> list:
-    """Summarize occurrences by department or supervisor, with per-user detail rows."""
+    """Summarize occurrences by department, supervisor, or group lead, with per-user detail rows."""
     groups = defaultdict(
         lambda: {
             "user_ids": set(),
@@ -924,12 +924,20 @@ def _aggregate_group_absence_report_rows(occurrences, group_by: str) -> list:
         u = o.user
         if group_by == "department":
             key = (u.department or "").strip() or "(No department)"
-        else:
+        elif group_by == "supervisor":
             key = (
                 u.supervisor.payroll_display_name()
                 if getattr(u, "supervisor_id", None)
                 else "(No supervisor)"
             )
+        elif group_by == "group_lead":
+            key = (
+                u.group_lead.payroll_display_name()
+                if getattr(u, "group_lead_id", None)
+                else "(No group lead)"
+            )
+        else:
+            key = (u.department or "").strip() or "(No department)"
         row = groups[key]
         row["user_ids"].add(u.pk)
         row["occurrence_count"] += 1
@@ -971,6 +979,11 @@ def _aggregate_group_absence_report_rows(occurrences, group_by: str) -> list:
                     "supervisor": (
                         u.supervisor.payroll_display_name()
                         if u and getattr(u, "supervisor_id", None)
+                        else "—"
+                    ),
+                    "group_lead": (
+                        u.group_lead.payroll_display_name()
+                        if u and getattr(u, "group_lead_id", None)
                         else "—"
                     ),
                     "occurrence_count": stat["occurrence_count"],
@@ -2328,7 +2341,7 @@ def generate_report_pdf(request):
         occ_qs = Occurrence.objects.filter(
             user__in=visible_users,
             date__range=(start_date, end_date),
-        ).select_related("user", "user__supervisor")
+        ).select_related("user", "user__supervisor", "user__group_lead")
         if subtype_filters:
             occ_qs = occ_qs.filter(subtype__in=subtype_filters)
         group_rows = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
