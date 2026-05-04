@@ -491,26 +491,7 @@ def dashboard(request):
     else:
         selected_date = today
 
-    if user.role == RoleChoices.EXECUTIVE:
-        visible_users = CustomUser.objects.all()
-    elif user.role == RoleChoices.MANAGER:
-        visible_users = CustomUser.objects.filter(department=user.department)
-    elif user.role == RoleChoices.SUPERVISOR:
-        visible_users = CustomUser.objects.filter(Q(supervisor=user) | Q(id=user.id))
-    elif user.role == RoleChoices.GROUP_LEAD:
-        visible_users = CustomUser.objects.filter(Q(group_lead=user) | Q(id=user.id))
-    elif user.role == RoleChoices.TEAM_LEAD:
-        visible_users = CustomUser.objects.filter(Q(team_lead=user) | Q(id=user.id))
-    else:
-        visible_users = CustomUser.objects.filter(id=user.id)
-
-    visible_users = visible_users.order_by(
-        "payroll_lastname",
-        "payroll_firstname",
-        "last_name",
-        "first_name",
-        "username",
-    )
+    visible_users = _users_visible_for_attendance_viewer(user)
 
     selected_slug = request.GET.get("user_slug")
     selected_user_id = request.GET.get("user_id")
@@ -563,13 +544,6 @@ def dashboard(request):
         RoleChoices.MANAGER,
         RoleChoices.EXECUTIVE,
     ]
-    if is_lead_role_or_above:
-        daily_occurrences = Occurrence.objects.filter(
-            user__in=visible_users,
-            date=selected_date,
-        ).order_by("user__username", "date")
-    else:
-        daily_occurrences = []
 
     start_of_week = today - timedelta(days=(today.weekday() + 1) % 7)
     end_of_week = start_of_week + timedelta(days=6)
@@ -647,15 +621,39 @@ def dashboard(request):
     report_form.fields["user"].queryset = visible_users
     report_occurrences = []
     report_selected_user = None
+    report_group_summary = []
+    report_group_by_label = ""
     report_today = localdate()
-    if report_form.is_valid() and report_form.cleaned_data.get("user"):
-        report_selected_user = report_form.cleaned_data["user"]
-        report_start_date = report_form.cleaned_data["start_date"]
-        report_end_date = report_form.cleaned_data["end_date"]
-        if report_start_date and report_end_date:
-            report_occurrences = Occurrence.objects.filter(
-                user=report_selected_user, date__range=(report_start_date, report_end_date)
-            ).order_by("date")
+    if report_form.is_valid():
+        report_mode = report_form.cleaned_data.get("report_mode") or ReportFilterForm.REPORT_MODE_INDIVIDUAL
+        report_start_date = report_form.cleaned_data.get("start_date")
+        report_end_date = report_form.cleaned_data.get("end_date")
+        subtype_filters = report_form.cleaned_data.get("subtype_filter") or []
+        if (
+            report_mode == ReportFilterForm.REPORT_MODE_GROUP
+            and report_start_date
+            and report_end_date
+        ):
+            group_by = report_form.cleaned_data.get("report_group_by") or "department"
+            report_group_by_label = dict(ReportFilterForm.REPORT_GROUP_BY_CHOICES).get(
+                group_by, group_by
+            )
+            occ_qs = Occurrence.objects.filter(
+                user__in=visible_users,
+                date__range=(report_start_date, report_end_date),
+            ).select_related("user", "user__supervisor")
+            if subtype_filters:
+                occ_qs = occ_qs.filter(subtype__in=subtype_filters)
+            report_group_summary = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
+            _annotate_group_rows_chart_widths(report_group_summary)
+        elif report_mode == ReportFilterForm.REPORT_MODE_INDIVIDUAL and report_form.cleaned_data.get("user"):
+            report_selected_user = report_form.cleaned_data["user"]
+            if report_start_date and report_end_date:
+                report_occurrences = Occurrence.objects.filter(
+                    user=report_selected_user, date__range=(report_start_date, report_end_date)
+                ).order_by("date")
+                if subtype_filters:
+                    report_occurrences = report_occurrences.filter(subtype__in=subtype_filters)
 
     user_service_dates = {
         str(u.public_slug): u.service_date.isoformat() if u.service_date else None
@@ -758,7 +756,6 @@ def dashboard(request):
         "user_list": visible_users,
         "selected_user": selected_user,
         "selected_date": selected_date,
-        "daily_occurrences": daily_occurrences,
         "past_occurrences": past_occurrences,
         "future_occurrences": future_occurrences,
         "current_pto": selected_user.pto_balance,
@@ -776,6 +773,8 @@ def dashboard(request):
         "report_form": report_form,
         "report_occurrences": report_occurrences,
         "report_selected_user": report_selected_user,
+        "report_group_summary": report_group_summary,
+        "report_group_by_label": report_group_by_label,
         "user_service_dates": user_service_dates,
         "today_iso": report_today.isoformat(),
         "clock_in_overrides": clock_in_overrides,
@@ -795,6 +794,7 @@ def dashboard(request):
         "show_absenteeism_chart": user.role
         in (RoleChoices.EXECUTIVE, RoleChoices.MANAGER),
         "profile_avatar_url": profile_avatar_url,
+        "can_view_attendance_reports": user_can_view_reports(user),
     }
     return render(request, "attendance/dashboard.html", context)
 
@@ -857,6 +857,174 @@ def user_can_view_reports(user):
         RoleChoices.MANAGER,
         RoleChoices.EXECUTIVE,
     ]
+
+
+def _users_visible_for_attendance_viewer(viewer: CustomUser):
+    """Same visibility rules as the attendance dashboard user picker."""
+    if viewer.role == RoleChoices.EXECUTIVE:
+        qs = CustomUser.objects.all()
+    elif viewer.role == RoleChoices.MANAGER:
+        qs = CustomUser.objects.filter(department=viewer.department)
+    elif viewer.role == RoleChoices.SUPERVISOR:
+        qs = CustomUser.objects.filter(Q(supervisor=viewer) | Q(id=viewer.id))
+    elif viewer.role == RoleChoices.GROUP_LEAD:
+        qs = CustomUser.objects.filter(Q(group_lead=viewer) | Q(id=viewer.id))
+    elif viewer.role == RoleChoices.TEAM_LEAD:
+        qs = CustomUser.objects.filter(Q(team_lead=viewer) | Q(id=viewer.id))
+    else:
+        qs = CustomUser.objects.filter(id=viewer.id)
+    return qs.order_by(
+        "payroll_lastname",
+        "payroll_firstname",
+        "last_name",
+        "first_name",
+        "username",
+    )
+
+
+def _user_row_sort_key(u: CustomUser | None) -> tuple:
+    if not u:
+        return ("", "", "")
+    return (
+        (u.payroll_lastname or u.last_name or u.username or "").lower(),
+        (u.payroll_firstname or u.first_name or "").lower(),
+        (u.username or "").lower(),
+    )
+
+
+def _aggregate_group_absence_report_rows(occurrences, group_by: str) -> list:
+    """Summarize occurrences by department or supervisor, with per-user detail rows."""
+    groups = defaultdict(
+        lambda: {
+            "user_ids": set(),
+            "occurrence_count": 0,
+            "total_hours": 0.0,
+            "pto_applied": 0.0,
+            "personal_applied": 0.0,
+            "by_subtype": defaultdict(lambda: {"count": 0, "hours": 0.0}),
+            "by_user": defaultdict(
+                lambda: {
+                    "occurrence_count": 0,
+                    "total_hours": 0.0,
+                    "pto_applied": 0.0,
+                    "personal_applied": 0.0,
+                    "_user": None,
+                }
+            ),
+        }
+    )
+    for o in occurrences:
+        u = o.user
+        if group_by == "department":
+            key = (u.department or "").strip() or "(No department)"
+        else:
+            key = (
+                u.supervisor.payroll_display_name()
+                if getattr(u, "supervisor_id", None)
+                else "(No supervisor)"
+            )
+        row = groups[key]
+        row["user_ids"].add(u.pk)
+        row["occurrence_count"] += 1
+        row["total_hours"] += float(o.duration_hours or 0)
+        row["pto_applied"] += float(o.pto_hours_applied or 0)
+        row["personal_applied"] += float(o.personal_hours_applied or 0)
+        sub_label = o.get_subtype_display()
+        row["by_subtype"][sub_label]["count"] += 1
+        row["by_subtype"][sub_label]["hours"] += float(o.duration_hours or 0)
+
+        bu = row["by_user"][u.pk]
+        bu["_user"] = u
+        bu["occurrence_count"] += 1
+        bu["total_hours"] += float(o.duration_hours or 0)
+        bu["pto_applied"] += float(o.pto_hours_applied or 0)
+        bu["personal_applied"] += float(o.personal_hours_applied or 0)
+
+    result = []
+    for label in sorted(groups.keys(), key=lambda s: (s or "").lower()):
+        g = groups[label]
+        by_sub = sorted(
+            (
+                {"subtype": k, "count": v["count"], "hours": v["hours"]}
+                for k, v in g["by_subtype"].items()
+            ),
+            key=lambda r: (-r["hours"], r["subtype"].lower()),
+        )
+        users_detail = []
+        for _uid, stat in sorted(
+            g["by_user"].items(),
+            key=lambda item: _user_row_sort_key(item[1].get("_user")),
+        ):
+            u = stat["_user"]
+            users_detail.append(
+                {
+                    "payroll_name": u.payroll_display_name() if u else "",
+                    "username": u.username if u else "",
+                    "department": (u.department or "—") if u else "—",
+                    "supervisor": (
+                        u.supervisor.payroll_display_name()
+                        if u and getattr(u, "supervisor_id", None)
+                        else "—"
+                    ),
+                    "occurrence_count": stat["occurrence_count"],
+                    "total_hours": stat["total_hours"],
+                    "pto_applied": stat["pto_applied"],
+                    "personal_applied": stat["personal_applied"],
+                }
+            )
+        result.append(
+            {
+                "group_label": label,
+                "unique_employees": len(g["user_ids"]),
+                "occurrence_count": g["occurrence_count"],
+                "total_hours": g["total_hours"],
+                "pto_applied": g["pto_applied"],
+                "personal_applied": g["personal_applied"],
+                "by_subtype": by_sub,
+                "users_detail": users_detail,
+            }
+        )
+    return result
+
+
+def _annotate_group_rows_chart_widths(group_rows: list) -> None:
+    """Set bar_pct_hours and bar_pct_records (0–100) on each row for chart UI."""
+    if not group_rows:
+        return
+    max_h = max(r["total_hours"] for r in group_rows) or 1.0
+    max_c = max(r["occurrence_count"] for r in group_rows) or 1
+    for r in group_rows:
+        r["bar_pct_hours"] = min(100, int(round(100 * r["total_hours"] / max_h)))
+        r["bar_pct_records"] = min(100, int(round(100 * r["occurrence_count"] / max_c)))
+
+
+def _report_logo_data_uri():
+    """Branded header image for PDF reports (same lookup order as other report views)."""
+    static_dirs = getattr(settings, "STATICFILES_DIRS", []) or []
+    static_root = Path(static_dirs[0]) if static_dirs else Path(settings.BASE_DIR) / "static"
+    img_dir = static_root / "img"
+    for name in ("pdfimage.jpg", "logo.webp", "logo.png"):
+        logo_path = img_dir / name
+        if not logo_path.exists():
+            continue
+        try:
+            raw = logo_path.read_bytes()
+            if name.endswith(".webp"):
+                from PIL import Image
+
+                img = Image.open(BytesIO(raw))
+                buf = BytesIO()
+                img.save(buf, format="PNG")
+                raw = buf.getvalue()
+                mime = "image/png"
+            elif name.endswith(".jpg") or name.endswith(".jpeg"):
+                mime = "image/jpeg"
+            else:
+                mime = "image/png"
+            return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+        except Exception:
+            pass
+    return None
 
 
 def user_can_view_payroll(user):
@@ -2140,97 +2308,129 @@ def generate_report_pdf(request):
     if not user_can_view_reports(request.user):
         return redirect("attendance:dashboard")
 
+    visible_users = _users_visible_for_attendance_viewer(request.user)
     form = ReportFilterForm(request.GET)
-    if form.is_valid():
-        user = form.cleaned_data["user"]
-        start_date = form.cleaned_data["start_date"]
-        end_date = form.cleaned_data["end_date"]
-        occurrences = Occurrence.objects.filter(
-            user=user, date__range=(start_date, end_date)
-        ).order_by("date")
+    form.fields["user"].queryset = visible_users
+    if not form.is_valid():
+        return redirect("attendance:dashboard")
 
-        # Ensure current balance reflects any occurrences that became due.
-        apply_past_due_occurrences(user)
-        user.refresh_from_db()
+    start_date = form.cleaned_data["start_date"]
+    end_date = form.cleaned_data["end_date"]
+    subtype_filters = form.cleaned_data.get("subtype_filter") or []
+    report_mode = form.cleaned_data.get("report_mode") or ReportFilterForm.REPORT_MODE_INDIVIDUAL
+    logo_uri = _report_logo_data_uri()
+    _subtype_labels = dict(OccurrenceSubtype.choices)
+    subtype_filter_label = (
+        "All absence types"
+        if not subtype_filters
+        else ", ".join(_subtype_labels.get(s, s) for s in subtype_filters)
+    )
 
-        fmla_st = ABSENCE_REPORT_FMLA_SUBTYPE
-        leave_no_personal = ABSENCE_REPORT_LEAVE_AND_NO_PERSONAL_SUBTYPES
-
-        occurrences_fmla = occurrences.filter(subtype=fmla_st)
-        occurrences_leave_group = occurrences.filter(subtype__in=leave_no_personal)
-        occurrences_main = occurrences.exclude(subtype=fmla_st).exclude(subtype__in=leave_no_personal)
-
-        # PTO/Personal used (headline): main bucket only — excludes FMLA and leave/no-personal subtypes
-        pto_using_main = Occurrence.objects.filter(
-            user=user,
+    if report_mode == ReportFilterForm.REPORT_MODE_GROUP:
+        group_by = form.cleaned_data.get("report_group_by") or "department"
+        group_by_label = dict(ReportFilterForm.REPORT_GROUP_BY_CHOICES).get(group_by, group_by)
+        occ_qs = Occurrence.objects.filter(
+            user__in=visible_users,
             date__range=(start_date, end_date),
-            pto_applied=True,
-        ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID).exclude(subtype=fmla_st).exclude(
-            subtype__in=leave_no_personal
+        ).select_related("user", "user__supervisor")
+        if subtype_filters:
+            occ_qs = occ_qs.filter(subtype__in=subtype_filters)
+        group_rows = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
+        _annotate_group_rows_chart_widths(group_rows)
+        distinct_user_ids = set(occ_qs.values_list("user_id", flat=True))
+        grand = {
+            "occurrence_count": sum(r["occurrence_count"] for r in group_rows),
+            "unique_employees": len(distinct_user_ids),
+            "total_hours": sum(r["total_hours"] for r in group_rows),
+            "pto_applied": sum(r["pto_applied"] for r in group_rows),
+            "personal_applied": sum(r["personal_applied"] for r in group_rows),
+        }
+
+        template = get_template("attendance/report_group_pdf_template.html")
+        html = template.render(
+            {
+                "start": start_date,
+                "end": end_date,
+                "logo_uri": logo_uri,
+                "group_by_label": group_by_label,
+                "subtype_filter_label": subtype_filter_label,
+                "group_rows": group_rows,
+                "grand": grand,
+            }
         )
-        pto_used = sum(o.pto_hours_applied for o in pto_using_main)
-        personal_used = sum(o.personal_hours_applied for o in pto_using_main)
-        legacy_hours = sum(
-            o.duration_hours
-            for o in pto_using_main
-            if o.pto_hours_applied == 0 and o.personal_hours_applied == 0 and o.duration_hours
+        response = HttpResponse(content_type="application/pdf")
+        fname = f"group_absence_{start_date.isoformat()}_{end_date.isoformat()}.pdf"
+        response["Content-Disposition"] = f'attachment; filename="{fname}"'
+        pisa.CreatePDF(html, dest=response)
+        return response
+
+    user = form.cleaned_data["user"]
+    if not visible_users.filter(pk=user.pk).exists():
+        return redirect("attendance:dashboard")
+
+    occurrences = Occurrence.objects.filter(
+        user=user, date__range=(start_date, end_date)
+    ).order_by("date")
+    if subtype_filters:
+        occurrences = occurrences.filter(subtype__in=subtype_filters)
+
+    # Ensure current balance reflects any occurrences that became due.
+    apply_past_due_occurrences(user)
+    user.refresh_from_db()
+
+    fmla_st = ABSENCE_REPORT_FMLA_SUBTYPE
+    leave_no_personal = ABSENCE_REPORT_LEAVE_AND_NO_PERSONAL_SUBTYPES
+
+    occurrences_fmla = occurrences.filter(subtype=fmla_st)
+    occurrences_leave_group = occurrences.filter(subtype__in=leave_no_personal)
+    occurrences_main = occurrences.exclude(subtype=fmla_st).exclude(subtype__in=leave_no_personal)
+
+    # PTO/Personal used (headline): main bucket only — excludes FMLA and leave/no-personal subtypes
+    pto_using_main = Occurrence.objects.filter(
+        user=user,
+        date__range=(start_date, end_date),
+        pto_applied=True,
+    ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID).exclude(subtype=fmla_st).exclude(
+        subtype__in=leave_no_personal
+    )
+    if subtype_filters:
+        pto_using_main = pto_using_main.filter(subtype__in=subtype_filters)
+    pto_used = sum(o.pto_hours_applied for o in pto_using_main)
+    personal_used = sum(o.personal_hours_applied for o in pto_using_main)
+    legacy_hours = sum(
+        o.duration_hours
+        for o in pto_using_main
+        if o.pto_hours_applied == 0 and o.personal_hours_applied == 0 and o.duration_hours
+    )
+    if legacy_hours and pto_used == 0 and personal_used == 0:
+        pto_used = legacy_hours
+
+    grace_pg = occurrences_main.aggregate(t=Sum("probation_grace_hours_applied"))["t"] or 0
+    if grace_pg:
+        grace_time_used = float(grace_pg)
+    else:
+        grace_time_used = float(
+            occurrences_main.filter(subtype=OccurrenceSubtype.GRACE_TIME).aggregate(
+                t=Sum("duration_hours")
+            )["t"]
+            or 0
         )
-        if legacy_hours and pto_used == 0 and personal_used == 0:
-            pto_used = legacy_hours
 
-        grace_pg = occurrences_main.aggregate(t=Sum("probation_grace_hours_applied"))["t"] or 0
-        if grace_pg:
-            grace_time_used = float(grace_pg)
-        else:
-            grace_time_used = float(
-                occurrences_main.filter(subtype=OccurrenceSubtype.GRACE_TIME).aggregate(
-                    t=Sum("duration_hours")
-                )["t"]
-                or 0
-            )
+    fmla_hours_agg = occurrences_fmla.aggregate(t=Sum("duration_hours"))
+    fmla_used_hours = float(fmla_hours_agg["t"] or 0)
+    fmla_pto_agg = occurrences_fmla.filter(pto_applied=True).aggregate(t=Sum("pto_hours_applied"))
+    fmla_pto_applied_total = float(fmla_pto_agg["t"] or 0)
 
-        fmla_hours_agg = occurrences_fmla.aggregate(t=Sum("duration_hours"))
-        fmla_used_hours = float(fmla_hours_agg["t"] or 0)
-        fmla_pto_agg = occurrences_fmla.filter(pto_applied=True).aggregate(t=Sum("pto_hours_applied"))
-        fmla_pto_applied_total = float(fmla_pto_agg["t"] or 0)
+    leave_group_hours_agg = occurrences_leave_group.aggregate(t=Sum("duration_hours"))
+    leave_group_total_hours = float(leave_group_hours_agg["t"] or 0)
+    leave_group_pto_agg = occurrences_leave_group.filter(pto_applied=True).aggregate(
+        t=Sum("pto_hours_applied")
+    )
+    leave_group_pto_applied_total = float(leave_group_pto_agg["t"] or 0)
 
-        leave_group_hours_agg = occurrences_leave_group.aggregate(t=Sum("duration_hours"))
-        leave_group_total_hours = float(leave_group_hours_agg["t"] or 0)
-        leave_group_pto_agg = occurrences_leave_group.filter(pto_applied=True).aggregate(
-            t=Sum("pto_hours_applied")
-        )
-        leave_group_pto_applied_total = float(leave_group_pto_agg["t"] or 0)
-
-        static_dirs = getattr(settings, "STATICFILES_DIRS", []) or []
-        static_root = Path(static_dirs[0]) if static_dirs else Path(settings.BASE_DIR) / "static"
-        img_dir = static_root / "img"
-        logo_uri = None
-        # Prefer pdfimage.jpg for report branding, then logo.webp / logo.png
-        for name in ("pdfimage.jpg", "logo.webp", "logo.png"):
-            logo_path = img_dir / name
-            if not logo_path.exists():
-                continue
-            try:
-                raw = logo_path.read_bytes()
-                if name.endswith(".webp"):
-                    from PIL import Image
-                    img = Image.open(BytesIO(raw))
-                    buf = BytesIO()
-                    img.save(buf, format="PNG")
-                    raw = buf.getvalue()
-                    mime = "image/png"
-                elif name.endswith(".jpg") or name.endswith(".jpeg"):
-                    mime = "image/jpeg"
-                else:
-                    mime = "image/png"
-                b64 = base64.b64encode(raw).decode("ascii")
-                logo_uri = f"data:{mime};base64,{b64}"
-            except Exception:
-                logo_uri = None
-            break
-
-        template = get_template("attendance/report_pdf_template.html")
-        html = template.render({
+    template = get_template("attendance/report_pdf_template.html")
+    html = template.render(
+        {
             "user": user,
             "occurrences_main": occurrences_main,
             "occurrences_fmla": occurrences_fmla,
@@ -2248,12 +2448,17 @@ def generate_report_pdf(request):
             "leave_group_pto_applied_total": leave_group_pto_applied_total,
             "has_fmla_rows": occurrences_fmla.exists(),
             "has_leave_group_rows": occurrences_leave_group.exists(),
-        })
-        response = HttpResponse(content_type="application/pdf")
-        response["Content-Disposition"] = f'attachment; filename="{user.username}_report.pdf"'
-        pisa.CreatePDF(html, dest=response)
-        return response
-    return redirect("attendance:dashboard")
+            "subtype_filter_note": (
+                None
+                if not subtype_filters
+                else f"Filtered to subtype(s): {subtype_filter_label}"
+            ),
+        }
+    )
+    response = HttpResponse(content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="{user.username}_report.pdf"'
+    pisa.CreatePDF(html, dest=response)
+    return response
 
 
 @login_required

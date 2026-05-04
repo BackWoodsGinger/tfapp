@@ -25,6 +25,9 @@
         <h3>Attendance</h3>
         <p><strong>Employee:</strong> {{ user.payroll_display_name }}</p>
         <p><strong>Period:</strong> {{ start }} to {{ end }}</p>
+        {% if subtype_filter_note %}
+        <p class="small"><em>{{ subtype_filter_note }}</em></p>
+        {% endif %}
         <p>
             <strong>PTO used:</strong> {{ pto_used|floatformat:1 }} hours
             &nbsp; <strong>Personal used:</strong> {{ personal_used|floatformat:1 }} hours

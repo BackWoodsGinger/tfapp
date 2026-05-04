@@ -6,6 +6,9 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+# Fixed Monday used only to read a representative weekday schedule (JSON or WorkSchedule).
+_REFERENCE_MONDAY = date(2020, 1, 6)
+
 from django.utils import timezone
 
 TIME_FMT = "%H:%M"
@@ -167,6 +170,18 @@ def get_scheduled_shift_end_datetime(user, d: date) -> datetime | None:
     cm = crosses_midnight_for_day(user, d)
     end_date = d + timedelta(days=1) if cm else d
     return _combine_local(end_date, end_t)
+
+
+def monday_typical_shift_label(user) -> str:
+    """
+    Human-readable start–end for the user's scheduled Monday (JSON or WorkSchedule).
+    Used for grouping employees by typical shift pattern.
+    """
+    st = get_scheduled_start_for_day(user, _REFERENCE_MONDAY)
+    et = get_scheduled_end_time_for_day(user, _REFERENCE_MONDAY)
+    if st and et:
+        return f"{st.strftime(TIME_FMT)}–{et.strftime(TIME_FMT)}"
+    return "(No Monday schedule)"
 
 
 def scheduled_duration_hours_for_day(user, d: date) -> float:

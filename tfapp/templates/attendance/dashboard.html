@@ -92,46 +92,6 @@
           </div>
           {% endif %}
 
-          {% if is_lead_role_or_above %}
-          <h5 class="mt-4">Absences for Selected Day</h5>
-          <form method="get" class="row g-2 mb-3 align-items-end">
-            {% if user_list|length > 1 %}
-            <input type="hidden" name="user_slug" value="{{ selected_user.public_slug }}">
-            {% endif %}
-            <div class="col-auto">
-              <label for="id_date" class="form-label small text-muted mb-0">Date</label>
-              <input type="date" name="date" id="id_date" class="form-control" value="{{ selected_date|date:'Y-m-d' }}" style="min-width: 11rem;">
-            </div>
-            <div class="col-auto">
-              <button class="btn btn-sm btn-primary" type="submit">Filter</button>
-            </div>
-          </form>
-
-          <div class="table-responsive">
-            <table class="table table-sm table-bordered mb-0">
-              <thead>
-                <tr>
-                  <th>User</th>
-                  <th>Type</th>
-                  <th>Subtype</th>
-                  <th>Hours</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for occ in daily_occurrences %}
-                <tr>
-                  <td>{{ occ.user.payroll_display_name }}</td>
-                  <td>{{ occ.get_occurrence_type_display }}</td>
-                  <td>{{ occ.get_subtype_display }}</td>
-                  <td>{{ occ.duration_hours }}</td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="4">No absences on this day.</td></tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          {% endif %}
         </div>
       </div>
 
@@ -229,19 +189,55 @@
       </div>
       {% endif %}
 
+      {% if can_view_attendance_reports %}
       <!-- Absence report card (moved from Payroll) -->
       <div class="card mb-4">
         <div class="card-body">
-          <h3 class="mb-4">Generate Absence Report</h3>
+          <h3 class="mb-2">Generate Attendance Report</h3>
+          <p class="text-muted small mb-3">
+            Choose an individual employee PDF (same layout as before) or a group analytics PDF
+            summarized by department, typical Monday shift, or supervisor. Optional subtype filter
+            limits rows to one absence type or all types.
+          </p>
           <form method="get" action="{% url 'attendance:generate_report_pdf' %}" id="absence-report-form" class="mb-0">
-            <div class="mb-2">
-              <label for="id_user" class="form-label">User</label>
+            {% if user_list|length > 1 %}
+            <input type="hidden" name="user_slug" value="{{ selected_user.public_slug }}">
+            {% endif %}
+            <input type="hidden" name="date" value="{{ selected_date|date:'Y-m-d' }}">
+            {% if pa_period_end %}
+            <input type="hidden" name="pa_year" value="{{ pa_year }}">
+            <input type="hidden" name="pa_month" value="{{ pa_month }}">
+            {% endif %}
+
+            <fieldset class="mb-3">
+              <legend class="form-label fw-semibold mb-2">Report scope</legend>
+              <div class="d-flex flex-column gap-2">
+                {% for radio in report_form.report_mode %}
+                <div class="form-check">
+                  {{ radio }}
+                </div>
+                {% endfor %}
+              </div>
+            </fieldset>
+
+            <div id="report-individual-panel" class="mb-3">
+              <label for="id_user" class="form-label">Employee</label>
               {{ report_form.user }}
+              <div class="mt-2">
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="current-service-year-btn">Current service year</button>
+              </div>
             </div>
-            <div class="mb-2">
-              <button type="button" class="btn btn-outline-secondary" id="current-service-year-btn">Current Service Year</button>
+
+            <div id="report-group-panel" class="mb-3 d-none">
+              <label for="id_report_group_by" class="form-label">Group by</label>
+              {{ report_form.report_group_by }}
+              <p class="text-muted small mt-2 mb-0">
+                <strong>Department</strong> groups by each employee’s department field.
+                <strong>Supervisor / reporting line</strong> groups by assigned supervisor.
+              </p>
             </div>
-            <div class="row g-2 mb-2">
+
+            <div class="row g-2 mb-3">
               <div class="col-auto">
                 <label for="id_start_date" class="form-label">Start date</label>
                 {{ report_form.start_date }}
@@ -251,7 +247,31 @@
                 {{ report_form.end_date }}
               </div>
             </div>
-            <button type="submit" class="btn btn-primary">Download Report</button>
+
+            <div class="mb-3">
+              <label for="id_subtype_filter" class="form-label fw-semibold">Absence subtypes</label>
+              <p class="text-muted small mb-1">
+                With <strong>none</strong> selected, every subtype is included. Hold <kbd class="text-secondary">Ctrl</kbd> (Windows) or <kbd class="text-secondary">⌘</kbd> (Mac) while clicking to select multiple rows.
+              </p>
+              {{ report_form.subtype_filter }}
+              <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="subtype-filter-clear">Clear selection (all types)</button>
+            </div>
+            <script>
+              (function () {
+                var sel = document.getElementById("id_subtype_filter");
+                var clearBtn = document.getElementById("subtype-filter-clear");
+                if (!sel || !clearBtn) return;
+                clearBtn.addEventListener("click", function () {
+                  for (var i = 0; i < sel.options.length; i++) {
+                    sel.options[i].selected = false;
+                  }
+                  sel.dispatchEvent(new Event("change", { bubbles: true }));
+                });
+              })();
+            </script>
+
+            <button type="submit" class="btn btn-primary" id="absence-report-submit">Download PDF</button>
+            <button type="submit" class="btn btn-outline-primary ms-1" name="preview" value="1" formaction="{% url 'attendance:dashboard' %}" id="absence-report-preview">Preview on dashboard</button>
           </form>
           {{ user_service_dates|json_script:"dashboard-user-service-dates" }}
           <script>
@@ -270,40 +290,145 @@
               var userSelect = document.getElementById("id_user");
               var startInput = document.getElementById("id_start_date");
               var endInput = document.getElementById("id_end_date");
-              if (!btn || !userSelect || !startInput || !endInput) return;
+              var indPanel = document.getElementById("report-individual-panel");
+              var grpPanel = document.getElementById("report-group-panel");
+              var modeInputs = document.querySelectorAll("#absence-report-form input[name=\"report_mode\"]");
+
+              function getMode() {
+                var v = "individual";
+                modeInputs.forEach(function (inp) {
+                  if (inp.checked) v = inp.value;
+                });
+                return v;
+              }
+
+              function syncModeUI() {
+                var mode = getMode();
+                var group = mode === "group";
+                if (indPanel) indPanel.classList.toggle("d-none", group);
+                if (grpPanel) grpPanel.classList.toggle("d-none", !group);
+                if (userSelect) userSelect.disabled = group;
+                if (btn) btn.disabled = group || !userSelect || !userSelect.value || !userServiceDates[userSelect.value];
+              }
+
               function formatDate(d) {
                 var y = d.getFullYear(), m = (d.getMonth() + 1), day = d.getDate();
                 return y + "-" + (m < 10 ? "0" + m : m) + "-" + (day < 10 ? "0" + day : day);
               }
+
               function updateButtonState() {
+                if (!userSelect || !btn) return;
                 var userId = userSelect.value;
-                btn.disabled = !userId || !userServiceDates[userId];
+                btn.disabled = getMode() === "group" || !userId || !userServiceDates[userId];
               }
-              userSelect.addEventListener("change", updateButtonState);
+
+              if (userSelect) userSelect.addEventListener("change", updateButtonState);
+              modeInputs.forEach(function (inp) {
+                inp.addEventListener("change", function () {
+                  syncModeUI();
+                  updateButtonState();
+                });
+              });
+              syncModeUI();
               updateButtonState();
 
-              btn.addEventListener("click", function() {
-                var userId = userSelect.value;
-                var serviceDateIso = userServiceDates[userId];
-                if (!serviceDateIso) return;
-                var today = new Date(todayIso + "T12:00:00");
-                var parts = serviceDateIso.split("-");
-                var annivThisYear = new Date(today.getFullYear(), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-                var end = today;
-                var start;
-                if (annivThisYear > today) {
-                  start = new Date(today.getFullYear() - 1, parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-                } else {
-                  start = annivThisYear;
-                }
-                startInput.value = formatDate(start);
-                endInput.value = formatDate(end);
-              });
+              if (btn && userSelect && startInput && endInput) {
+                btn.addEventListener("click", function() {
+                  var userId = userSelect.value;
+                  var serviceDateIso = userServiceDates[userId];
+                  if (!serviceDateIso) return;
+                  var today = new Date(todayIso + "T12:00:00");
+                  var parts = serviceDateIso.split("-");
+                  var annivThisYear = new Date(today.getFullYear(), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+                  var end = today;
+                  var start;
+                  if (annivThisYear > today) {
+                    start = new Date(today.getFullYear() - 1, parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+                  } else {
+                    start = annivThisYear;
+                  }
+                  startInput.value = formatDate(start);
+                  endInput.value = formatDate(end);
+                });
+              }
             })();
           </script>
 
+          {% if report_group_summary %}
+          <h5 class="mt-4">Group preview ({{ report_group_by_label }})</h5>
+          <p class="text-muted small mb-3">Charts scale to the largest group in this preview. Tables list every employee with absences in range.</p>
+
+          <h6 class="text-secondary small text-uppercase mb-2">Total hours by group</h6>
+          {% for row in report_group_summary %}
+          <div class="mb-3">
+            <div class="d-flex justify-content-between small mb-1">
+              <span class="fw-medium">{{ row.group_label }}</span>
+              <span>{{ row.total_hours|floatformat:2 }} hrs <span class="text-muted">({{ row.unique_employees }} staff, {{ row.occurrence_count }} records)</span></span>
+            </div>
+            <div class="progress" style="height: 1.35rem;" role="progressbar" aria-valuenow="{{ row.bar_pct_hours }}" aria-valuemin="0" aria-valuemax="100" aria-label="Hours share for {{ row.group_label }}">
+              <div class="progress-bar bg-primary" style="width: {{ row.bar_pct_hours }}%;" title="{{ row.bar_pct_hours }}% of max group hours"></div>
+            </div>
+            <div class="small text-muted">{{ row.bar_pct_hours }}% of largest group’s hours</div>
+          </div>
+          {% endfor %}
+
+          <h6 class="text-secondary small text-uppercase mt-4 mb-2">Absence records by group</h6>
+          {% for row in report_group_summary %}
+          <div class="mb-3">
+            <div class="d-flex justify-content-between small mb-1">
+              <span class="fw-medium">{{ row.group_label }}</span>
+              <span>{{ row.occurrence_count }} records</span>
+            </div>
+            <div class="progress" style="height: 1.1rem;">
+              <div class="progress-bar bg-info text-dark" style="width: {{ row.bar_pct_records }}%;" title="{{ row.bar_pct_records }}% of max group records"></div>
+            </div>
+            <div class="small text-muted">{{ row.bar_pct_records }}% of largest group’s record count</div>
+          </div>
+          {% endfor %}
+
+          <h6 class="text-secondary small text-uppercase mt-4 mb-2">Detail by employee</h6>
+          {% for row in report_group_summary %}
+          <div class="mb-4 border border-secondary rounded p-3">
+            <h6 class="mb-2">{{ row.group_label }}</h6>
+            <p class="text-muted small mb-2">PTO and personal reflect applied amounts on each absence in this period.</p>
+            <div class="table-responsive">
+              <table class="table table-bordered table-sm mb-0 align-middle">
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th>Username</th>
+                    <th>Department</th>
+                    <th>Supervisor</th>
+                    <th class="text-end">Records</th>
+                    <th class="text-end">Hours</th>
+                    <th class="text-end">PTO</th>
+                    <th class="text-end">Personal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for u in row.users_detail %}
+                  <tr>
+                    <td>{{ u.payroll_name }}</td>
+                    <td>{{ u.username }}</td>
+                    <td>{{ u.department }}</td>
+                    <td>{{ u.supervisor }}</td>
+                    <td class="text-end">{{ u.occurrence_count }}</td>
+                    <td class="text-end">{{ u.total_hours|floatformat:2 }}</td>
+                    <td class="text-end">{{ u.pto_applied|floatformat:2 }}</td>
+                    <td class="text-end">{{ u.personal_applied|floatformat:2 }}</td>
+                  </tr>
+                  {% empty %}
+                  <tr><td colspan="8" class="text-muted">No employees in this group for the filter.</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {% endfor %}
+          {% endif %}
+
           {% if report_occurrences %}
-          <h5 class="mt-4">Absences for {{ report_selected_user.payroll_display_name }}</h5>
+          <h5 class="mt-4">Individual preview — {{ report_selected_user.payroll_display_name }}</h5>
           <div class="table-responsive">
             <table class="table table-bordered table-sm mb-0">
               <thead>
@@ -329,6 +454,7 @@
           {% endif %}
         </div>
       </div>
+      {% endif %}
 
       <div class="card mb-4">
         <div class="card-body">

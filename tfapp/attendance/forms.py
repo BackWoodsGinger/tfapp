@@ -41,17 +41,67 @@ class OccurrenceForm(forms.ModelForm):
 
 
 class ReportFilterForm(forms.Form):
+    REPORT_MODE_INDIVIDUAL = "individual"
+    REPORT_MODE_GROUP = "group"
+    REPORT_MODE_CHOICES = [
+        (REPORT_MODE_INDIVIDUAL, "Individual employee"),
+        (REPORT_MODE_GROUP, "Multiple employees (group analytics)"),
+    ]
+    REPORT_GROUP_BY_CHOICES = [
+        ("department", "Department"),
+        ("supervisor", "Supervisor / reporting line"),
+    ]
+
+    report_mode = forms.ChoiceField(
+        choices=REPORT_MODE_CHOICES,
+        initial=REPORT_MODE_INDIVIDUAL,
+        required=False,
+        widget=forms.RadioSelect,
+    )
+    report_group_by = forms.ChoiceField(
+        choices=REPORT_GROUP_BY_CHOICES,
+        initial="department",
+        required=False,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    subtype_filter = forms.MultipleChoiceField(
+        label="Absence subtypes",
+        required=False,
+        choices=[],  # set in __init__
+        widget=forms.SelectMultiple(
+            attrs={
+                "class": "form-select",
+                "style": "max-width: 28rem;",
+                "size": "10",
+            }
+        ),
+    )
     user = forms.ModelChoiceField(
         queryset=CustomUser.objects.all(),
         to_field_name="public_slug",
         label="User",
+        required=False,
         widget=forms.Select(attrs={"class": "form-select"}),
     )
     start_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date", "class": "form-control"}))
     end_date = forms.DateField(widget=forms.DateInput(attrs={"type": "date", "class": "form-control"}))
 
     def __init__(self, *args, **kwargs):
+        if args and args[0] is not None:
+            data = args[0].copy()
+            if not data.get("report_mode"):
+                data["report_mode"] = self.REPORT_MODE_INDIVIDUAL
+            # Legacy ?subtype_filter=all (bookmarks) — empty multiselect = all types
+            if hasattr(data, "getlist") and data.getlist("subtype_filter") == ["all"]:
+                data.setlist("subtype_filter", [])
+            if not data.get("report_group_by"):
+                data["report_group_by"] = "department"
+            # Legacy "shift" grouping removed — map to department
+            if data.get("report_group_by") == "shift":
+                data["report_group_by"] = "department"
+            args = (data,) + tuple(args[1:])
         super().__init__(*args, **kwargs)
+        self.fields["subtype_filter"].choices = list(OccurrenceSubtype.choices)
         self.helper = FormHelper()
         self.helper.form_method = "get"
         self.helper.form_tag = False  # template wraps with form action for PDF
@@ -64,6 +114,34 @@ class ReportFilterForm(forms.Form):
             ),
             Submit("submit", "Download Report", css_class="btn btn-primary"),
         )
+
+    def clean_subtype_filter(self):
+        vals = self.cleaned_data.get("subtype_filter")
+        if vals is None:
+            return []
+        if not isinstance(vals, (list, tuple)):
+            vals = [vals] if vals else []
+        valid = {c[0] for c in OccurrenceSubtype.choices}
+        out = []
+        for v in vals:
+            if v in (None, "", "all"):
+                continue
+            if v in valid and v not in out:
+                out.append(v)
+        return out
+
+    def clean(self):
+        cleaned = super().clean()
+        mode = cleaned.get("report_mode") or self.REPORT_MODE_INDIVIDUAL
+        if mode not in (self.REPORT_MODE_INDIVIDUAL, self.REPORT_MODE_GROUP):
+            mode = self.REPORT_MODE_INDIVIDUAL
+        cleaned["report_mode"] = mode
+        if mode == self.REPORT_MODE_INDIVIDUAL:
+            if not cleaned.get("user"):
+                raise forms.ValidationError(
+                    {"user": "Select an employee for an individual report."}
+                )
+        return cleaned
 
 
 class TimeOffRequestForm(forms.ModelForm):
