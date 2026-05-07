@@ -133,3 +133,66 @@ class ProfileCredentialDocument(models.Model):
     def __str__(self):
         label = self.title or self.file.name
         return f"{self.user_id}: {label}"
+
+
+class ProfileUpdateReviewItem(models.Model):
+    """Executive review queue for user profile content updates."""
+
+    class UpdateType(models.TextChoices):
+        PROFILE_PHOTO = "profile_photo", "Profile photo updated"
+        CREDENTIAL_UPLOAD = "credential_upload", "Credential uploaded"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        REVIEWED = "reviewed", "Reviewed"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="profile_update_review_items",
+    )
+    update_type = models.CharField(max_length=40, choices=UpdateType.choices, db_index=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    # Optional links to the current objects (if still present when reviewed).
+    profile = models.ForeignKey(
+        "accounts.UserProfile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="review_items",
+    )
+    credential_document = models.ForeignKey(
+        "accounts.ProfileCredentialDocument",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="review_items",
+    )
+    # Snapshot fields preserve what was submitted even if content changes later.
+    photo_name_snapshot = models.CharField(max_length=300, blank=True)
+    credential_title_snapshot = models.CharField(max_length=200, blank=True)
+    credential_name_snapshot = models.CharField(max_length=300, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="profile_updates_reviewed",
+    )
+    review_notes = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id} {self.update_type} ({self.status})"

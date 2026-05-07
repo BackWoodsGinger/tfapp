@@ -147,6 +147,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'attendance.context_processors.pending_approvals',
+                'accounts.context_processors.executive_user_updates',
             ],
         },
     },

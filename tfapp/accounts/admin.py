@@ -1,6 +1,12 @@
 from django.contrib import admin
 
-from .models import CareerRole, ProfileCredentialDocument, UserCareerRoleInterest, UserProfile
+from .models import (
+    CareerRole,
+    ProfileCredentialDocument,
+    ProfileUpdateReviewItem,
+    UserCareerRoleInterest,
+    UserProfile,
+)
 
 
 @admin.register(CareerRole)
@@ -39,3 +45,18 @@ class ProfileCredentialDocumentAdmin(admin.ModelAdmin):
     search_fields = ("user__username", "title")
     raw_id_fields = ("user",)
     readonly_fields = ("uploaded_at",)
+
+
+@admin.register(ProfileUpdateReviewItem)
+class ProfileUpdateReviewItemAdmin(admin.ModelAdmin):
+    list_display = ("user", "update_type", "status", "created_at", "reviewed_at", "reviewed_by")
+    list_filter = ("status", "update_type")
+    search_fields = (
+        "user__username",
+        "photo_name_snapshot",
+        "credential_title_snapshot",
+        "credential_name_snapshot",
+        "review_notes",
+    )
+    raw_id_fields = ("user", "profile", "credential_document", "reviewed_by")
+    readonly_fields = ("created_at", "reviewed_at")

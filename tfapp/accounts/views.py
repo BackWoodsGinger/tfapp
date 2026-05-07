@@ -8,10 +8,17 @@ from django.db import transaction
 from django.db.models import Max
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse, reverse_lazy
+from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 
 from .forms import ProfileCredentialDocumentForm, UserProfileForm
-from .models import CareerRole, ProfileCredentialDocument, UserCareerRoleInterest, UserProfile
+from .models import (
+    CareerRole,
+    ProfileCredentialDocument,
+    ProfileUpdateReviewItem,
+    UserCareerRoleInterest,
+    UserProfile,
+)
 from .session_utils import register_user_session
 
 def _credential_display_context(documents_ordered_newest_first):
@@ -39,6 +46,31 @@ def _safe_next_redirect_url(request):
     ):
         return next_url
     return settings.LOGIN_REDIRECT_URL
+
+
+def _is_executive(user):
+    return user.is_authenticated and getattr(user, "role", None) == "executive"
+
+
+def _queue_profile_photo_review_item(user, profile_obj):
+    if not profile_obj.photo:
+        return
+    ProfileUpdateReviewItem.objects.create(
+        user=user,
+        update_type=ProfileUpdateReviewItem.UpdateType.PROFILE_PHOTO,
+        profile=profile_obj,
+        photo_name_snapshot=profile_obj.photo.name or "",
+    )
+
+
+def _queue_credential_review_item(user, document):
+    ProfileUpdateReviewItem.objects.create(
+        user=user,
+        update_type=ProfileUpdateReviewItem.UpdateType.CREDENTIAL_UPLOAD,
+        credential_document=document,
+        credential_title_snapshot=document.title or "",
+        credential_name_snapshot=document.file.name or "",
+    )
 
 
 def login(request):
@@ -91,9 +123,17 @@ def profile(request):
             if profile_obj.bio and "bio" not in request.POST:
                 post_data = request.POST.copy()
                 post_data["bio"] = profile_obj.bio
+            previous_photo_name = ""
+            if profile_obj.photo:
+                previous_photo_name = profile_obj.photo.name or ""
             form = UserProfileForm(post_data, request.FILES, instance=profile_obj)
             if form.is_valid():
-                form.save()
+                saved_profile = form.save()
+                updated_photo_name = ""
+                if saved_profile.photo:
+                    updated_photo_name = saved_profile.photo.name or ""
+                if updated_photo_name and updated_photo_name != previous_photo_name:
+                    _queue_profile_photo_review_item(request.user, saved_profile)
                 messages.success(request, "Profile updated.")
                 return redirect("profile")
             messages.error(request, "Please correct the errors below.")
@@ -127,6 +167,7 @@ def profile(request):
                 max_ord = agg["m"]
                 doc.display_order = (max_ord + 1) if max_ord is not None else 0
                 doc.save()
+                _queue_credential_review_item(request.user, doc)
                 messages.success(request, "Document uploaded.")
                 return redirect("profile")
             messages.error(request, "Upload failed; check the form.")
@@ -213,6 +254,83 @@ def profile(request):
             "career_roles": career_roles,
             "career_interests": career_interests,
             **doc_display_ctx,
+        },
+    )
+
+
+@login_required
+def profile_updates_review(request):
+    if not _is_executive(request.user):
+        messages.error(request, "Only executives can review profile updates.")
+        return redirect("attendance:dashboard")
+
+    if request.method == "POST":
+        item_id = request.POST.get("item_id")
+        action = (request.POST.get("action") or "").strip()
+        notes = (request.POST.get("review_notes") or "").strip()
+        if not item_id:
+            messages.error(request, "Missing review item.")
+            return redirect("profile_updates_review")
+        try:
+            item_id = int(item_id)
+        except (TypeError, ValueError):
+            messages.error(request, "Invalid review item.")
+            return redirect("profile_updates_review")
+
+        with transaction.atomic():
+            item = (
+                ProfileUpdateReviewItem.objects.select_for_update()
+                .select_related("profile", "credential_document")
+                .filter(pk=item_id, status=ProfileUpdateReviewItem.Status.PENDING)
+                .first()
+            )
+            if not item:
+                messages.error(request, "That update is no longer pending.")
+                return redirect("profile_updates_review")
+
+            if action == "remove_photo":
+                prof = item.profile
+                if prof and prof.photo:
+                    prof.photo.delete(save=False)
+                    prof.photo = None
+                    prof.save(update_fields=["photo"])
+                item.review_notes = notes or "Removed profile photo during review."
+            elif action == "remove_document":
+                doc = item.credential_document
+                if doc:
+                    doc.file.delete(save=False)
+                    doc.delete()
+                item.review_notes = notes or "Removed uploaded document during review."
+            elif action == "approve":
+                item.review_notes = notes
+            else:
+                messages.error(request, "Invalid review action.")
+                return redirect("profile_updates_review")
+
+            item.status = ProfileUpdateReviewItem.Status.REVIEWED
+            item.reviewed_by = request.user
+            item.reviewed_at = timezone.now()
+            item.save(update_fields=["status", "reviewed_by", "reviewed_at", "review_notes"])
+
+        messages.success(request, "Profile update reviewed.")
+        return redirect("profile_updates_review")
+
+    pending_items = (
+        ProfileUpdateReviewItem.objects.filter(status=ProfileUpdateReviewItem.Status.PENDING)
+        .select_related("user", "profile", "credential_document")
+        .order_by("created_at")
+    )
+    recent_items = (
+        ProfileUpdateReviewItem.objects.exclude(status=ProfileUpdateReviewItem.Status.PENDING)
+        .select_related("user", "reviewed_by")
+        .order_by("-reviewed_at", "-created_at")[:25]
+    )
+    return render(
+        request,
+        "accounts/profile_updates_review.html",
+        {
+            "pending_items": pending_items,
+            "recent_items": recent_items,
         },
     )
 
