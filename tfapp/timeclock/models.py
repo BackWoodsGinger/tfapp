@@ -170,17 +170,18 @@ class TimeEntry(models.Model):
             # Unscheduled day: only credit early time when an approver override exists.
             fallback_start = self._fallback_scheduled_start_time_for_unscheduled_day()
             clock_in_local = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
+            anchor_date = clock_in_local.date()
             if not fallback_start:
                 adjusted_in = clock_in_local
             elif self.clock_in_authorized_by and self.clock_in_early_authorized_by:
                 adjusted_in = clock_in_local
             elif self.clock_in_authorized_by:
                 _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
-                    self.clock_in, fallback_start
+                    self.clock_in, fallback_start, anchor_date=anchor_date
                 )
             else:
                 _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
-                    self.clock_in, fallback_start
+                    self.clock_in, fallback_start, anchor_date=anchor_date
                 )
         else:
             # Scheduled day: early clock-ins require override to be credited.
@@ -233,20 +234,23 @@ class TimeEntry(models.Model):
         hours, minutes = divmod(rounded_minutes, 60)
         return dt.replace(hour=hours % 24, minute=minutes)
 
-    def _scheduled_local_datetime(self, scheduled_time):
+    def _scheduled_local_datetime(self, scheduled_time, anchor_date=None):
         """
         Build an aware local datetime for this entry date + scheduled clock time.
+        ``anchor_date`` can override the date component when punches are
+        imported with a date that differs from the clock-in calendar date.
         """
-        naive_dt = datetime.combine(self.date, scheduled_time)
+        target_date = anchor_date or self.date
+        naive_dt = datetime.combine(target_date, scheduled_time)
         return timezone.make_aware(naive_dt, timezone.get_current_timezone())
 
-    def _tardy_minutes_and_adjusted_start(self, punch_dt, scheduled_time):
+    def _tardy_minutes_and_adjusted_start(self, punch_dt, scheduled_time, anchor_date=None):
         """
         Return (minutes_late, adjusted_start_local) using local-time comparison.
         adjusted_start_local equals schedule start for <=4 min late, otherwise
         rounds lateness up to the next 15-minute increment from scheduled start.
         """
-        scheduled_local = self._scheduled_local_datetime(scheduled_time)
+        scheduled_local = self._scheduled_local_datetime(scheduled_time, anchor_date=anchor_date)
         punch_local = timezone.localtime(punch_dt)
         delta_seconds = (punch_local - scheduled_local).total_seconds()
         if delta_seconds <= 0:

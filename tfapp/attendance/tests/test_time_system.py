@@ -751,6 +751,62 @@ class TestPayrollCloseAccrualAndExchange(TestCase):
         self.assertAlmostEqual(occ.pto_hours_applied, 4.0, places=2)
         self.assertAlmostEqual(occ.personal_hours_applied, 0.0, places=2)
 
+    def test_exchange_overnight_unscheduled_makeup_counts_when_entry_date_is_next_day(self):
+        user = CustomUser.objects.create_user(
+            username="exchangeovernight",
+            password="x",
+            pto_balance=10.0,
+            personal_time_balance=0.0,
+        )
+        # Mon-Wed overnight schedule: 3:30pm-2:00am with a 30-minute lunch.
+        for day in [0, 1, 2]:
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(15, 30),
+                lunch_out=time(21, 0),
+                lunch_in=time(21, 30),
+                end_time=time(2, 0),
+                crosses_midnight=True,
+            )
+
+        def overnight_entry(entry_date, in_date, out_date):
+            return TimeEntry.objects.create(
+                user=user,
+                date=entry_date,
+                clock_in=timezone.make_aware(datetime(in_date.year, in_date.month, in_date.day, 15, 30, 0), self.tz),
+                lunch_out=timezone.make_aware(datetime(in_date.year, in_date.month, in_date.day, 21, 0, 0), self.tz),
+                lunch_in=timezone.make_aware(datetime(in_date.year, in_date.month, in_date.day, 21, 30, 0), self.tz),
+                clock_out=timezone.make_aware(datetime(out_date.year, out_date.month, out_date.day, 2, 0, 0), self.tz),
+            )
+
+        # Work Monday and Tuesday scheduled shifts.
+        overnight_entry(date(2025, 3, 3), date(2025, 3, 3), date(2025, 3, 4))
+        overnight_entry(date(2025, 3, 4), date(2025, 3, 4), date(2025, 3, 5))
+        # Miss Wednesday scheduled shift, then make up on Thursday.
+        # Import quirk: shift is keyed by Friday date even though clock-in is Thursday.
+        make_up = overnight_entry(date(2025, 3, 7), date(2025, 3, 6), date(2025, 3, 7))
+
+        response = self.client.post(
+            self.close_url,
+            {
+                "week_ending": "2025-03-08",
+                "approved_override_entry_ids": [f"{make_up.id}:unscheduled", f"{make_up.id}:early"],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+        occ = Occurrence.objects.get(
+            user=user,
+            date=date(2025, 3, 5),  # missed scheduled Wednesday
+            is_variance_to_schedule=True,
+        )
+        self.assertEqual(occ.subtype, OccurrenceSubtype.EXCHANGE)
+        self.assertAlmostEqual(occ.duration_hours, 0.0, places=2)
+        self.assertFalse(occ.pto_applied)
+        self.assertAlmostEqual(occ.pto_hours_applied, 0.0, places=2)
+        self.assertAlmostEqual(occ.personal_hours_applied, 0.0, places=2)
+
     def test_tardy_out_of_grace_converts_to_zero_exchange_when_weekly_hours_met(self):
         user = CustomUser.objects.create_user(
             username="tardyexchange",
