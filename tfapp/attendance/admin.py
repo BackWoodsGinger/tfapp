@@ -6,6 +6,7 @@ from django.contrib import messages
 from decimal import Decimal
 from .models import (
     CustomUser,
+    DailyAttendanceSummary,
     Occurrence,
     WorkSchedule,
     OccurrenceSubtype,
@@ -203,6 +204,14 @@ class OccurrenceAdmin(admin.ModelAdmin):
             OccurrenceSubtype.GRACE_TIME,
         ]:
             obj.apply_pto()
+
+
+@admin.register(DailyAttendanceSummary)
+class DailyAttendanceSummaryAdmin(admin.ModelAdmin):
+    list_display = ("user", "work_date", "status", "scheduled_hours", "worked_hours", "exchange_eligible")
+    list_filter = ("status", "work_date")
+    search_fields = ("user__username", "user__payroll_lastname")
+    raw_id_fields = ("user", "payroll_period")
 
 
 @admin.register(PTOBalanceHistory)

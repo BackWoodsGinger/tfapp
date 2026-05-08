@@ -35,7 +35,6 @@ from .models import (
     OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL,
     PERFECT_ATTENDANCE_DISQUALIFYING_SUBTYPES,
     PayrollPeriod,
-    PayrollPeriodUserSnapshot,
     RoleChoices,
     TimeOffRequest,
     TimeOffRequestStatus,
@@ -57,8 +56,9 @@ from .payroll_utils import (
     week_ending_for_date as _week_ending_for_date,
     is_payroll_week_finalized as _is_payroll_week_finalized,
 )
+from .services import attendance_engine
+from .services import weekly_reconciliation
 from .schedule_utils import (
-    clock_in_requires_approver,
     crosses_midnight_for_day,
     earliest_clock_in_allowed,
     get_scheduled_shift_end_datetime,
@@ -585,7 +585,7 @@ def dashboard(request):
                 if entry.clock_in and entry.clock_out:
                     total_actual += entry.actual_worked_hours()
                     total_reported += entry.reported_worked_hours()
-            total_scheduled = _scheduled_hours_for_range(u, start_of_week, end_of_week)
+            total_scheduled = scheduled_hours_for_range(u, start_of_week, end_of_week)
             delta = round(total_reported - total_scheduled, 2)
             weekly_totals.append((
                 u,
@@ -1140,7 +1140,7 @@ def payroll_view(request):
                 if entry.clock_in and entry.clock_out:
                     total_actual += entry.actual_worked_hours()
                     total_reported += entry.reported_worked_hours()
-            total_scheduled = _scheduled_hours_for_range(u, start_of_week, end_of_week)
+            total_scheduled = scheduled_hours_for_range(u, start_of_week, end_of_week)
             pto_applied, personal_applied = pto_by_uid.get(u.id, (0.0, 0.0))
             weekly_totals.append((
                 u,
@@ -1198,7 +1198,7 @@ def payroll_view(request):
     }
 
     payroll_finalized = _is_payroll_week_finalized(end_of_week)
-    pending_override_entries = _entries_requiring_clock_in_override(
+    pending_override_entries = attendance_engine.entries_requiring_clock_in_override(
         start_of_week, end_of_week
     )
 
@@ -1624,190 +1624,6 @@ def payroll_schedule_csv_upload(request):
     return _payroll_redirect_after_csv_upload(request, week_ending_ref)
 
 
-def _scheduled_hours_for_range(user, week_start, week_ending):
-    """Total scheduled hours from weekly_schedule or WorkSchedule for [week_start, week_ending]."""
-    return scheduled_hours_for_range(user, week_start, week_ending)
-
-
-def _scheduled_hours_for_day(user, d):
-    """Scheduled hours for a single day from weekly_schedule or WorkSchedule, or 0."""
-    return scheduled_duration_hours_for_day(user, d)
-
-
-def _required_week_hours_for_policy(scheduled_week_hours: float) -> float:
-    """
-    Weekly hours that can require PTO/personal application.
-    Policy cap: once a user reaches 40 worked/covered hours, do not apply additional PTO.
-    """
-    return min(scheduled_week_hours, 40.0)
-
-
-def _entries_requiring_clock_in_override(week_start: date, week_ending: date):
-    """
-    Time entries in week that require clock-in override approval but do not have it yet.
-    """
-    out = []
-    rows = (
-        TimeEntry.objects.filter(
-            date__range=[week_start, week_ending],
-            clock_in__isnull=False,
-        )
-        .select_related("user")
-        .order_by("date", "user__payroll_lastname", "user__payroll_firstname", "user__username")
-    )
-    for e in rows:
-        clock_in_local = django_tz.localtime(e.clock_in)
-        requires, reason = clock_in_requires_approver(e.user, clock_in_local, e.date)
-        if reason == "unscheduled":
-            if not e.clock_in_authorized_by_id and not e.clock_in_override_denied:
-                out.append(
-                    {
-                        "entry": e,
-                        "reason": "unscheduled",
-                        "key": f"{e.id}:unscheduled",
-                    }
-                )
-            fallback_start = e._fallback_scheduled_start_time_for_unscheduled_day()
-            if fallback_start:
-                fallback_local = django_tz.make_aware(
-                    datetime.combine(e.date, fallback_start),
-                    django_tz.get_current_timezone(),
-                )
-                if (
-                    clock_in_local <= fallback_local
-                    and not e.clock_in_early_authorized_by_id
-                    and not e.clock_in_early_override_denied
-                ):
-                    out.append(
-                        {
-                            "entry": e,
-                            "reason": "early",
-                            "key": f"{e.id}:early",
-                        }
-                    )
-        elif reason == "early":
-            if not e.clock_in_early_authorized_by_id and not e.clock_in_early_override_denied:
-                out.append(
-                    {
-                        "entry": e,
-                        "reason": "early",
-                        "key": f"{e.id}:early",
-                    }
-                )
-    return out
-
-
-def _revert_and_delete_orphan_time_off_for_exchange_week(
-    users,
-    week_start: date,
-    week_ending: date,
-):
-    """
-    Remove legacy/orphan TIME_OFF rows when an Exchange variance exists for the same user/date.
-    Keeps a single source of truth for schedule variance so PTO/personal isn't double-applied.
-    """
-    exchange_days = set(
-        Occurrence.objects.filter(
-            user__in=users,
-            date__range=[week_start, week_ending],
-            subtype=OccurrenceSubtype.EXCHANGE,
-            is_variance_to_schedule=True,
-        ).values_list("user_id", "date")
-    )
-    if not exchange_days:
-        return
-
-    for user_id, occ_date in exchange_days:
-        orphan_rows = Occurrence.objects.filter(
-            user_id=user_id,
-            date=occ_date,
-            subtype=OccurrenceSubtype.TIME_OFF,
-            is_variance_to_schedule=False,
-            time_off_request__isnull=True,
-        )
-        if not orphan_rows.exists():
-            continue
-        user = CustomUser.objects.get(pk=user_id)
-        pto_refund = 0.0
-        personal_refund = 0.0
-        for occ in orphan_rows:
-            if occ.pto_applied:
-                pto_refund += float(occ.pto_hours_applied or 0.0)
-                personal_refund += float(occ.personal_hours_applied or 0.0)
-            occ.delete()
-        if pto_refund or personal_refund:
-            user.pto_balance = round(user.pto_balance + pto_refund, 2)
-            user.personal_time_balance = round(
-                max(0.0, user.personal_time_balance - personal_refund),
-                2,
-            )
-            user.save(update_fields=["pto_balance", "personal_time_balance"])
-
-
-def _get_scheduled_start_time(user, d):
-    """Return scheduled start time for user on date d from weekly_schedule or WorkSchedule, or None."""
-    return get_scheduled_start_for_day(user, d)
-
-
-def _create_tardy_occurrences_for_week(week_start, week_ending, period=None):
-    """
-    For each time entry in the week with clock_in and a schedule that day:
-    if clock_in is later than scheduled start, create TARDY_IN_GRACE (<=4 min) or
-    TARDY_OUT_OF_GRACE (5+ min late, duration = rounded loss). Skip if occurrence already exists.
-    If period is given, set payroll_period on created occurrences so they can be reverted on unfinalize.
-    Clock-in is compared in local time (schedule is stored as local); avoid UTC vs local mismatch.
-    """
-    entries = TimeEntry.objects.filter(
-        date__range=[week_start, week_ending],
-        clock_in__isnull=False,
-    ).select_related("user")
-    for e in entries:
-        scheduled_start = _get_scheduled_start_time(e.user, e.date)
-        if not scheduled_start:
-            continue
-        if not e.clock_in:
-            continue
-        # Compare in local time: clock_in is stored UTC when USE_TZ=True
-        clock_in_local = django_tz.localtime(e.clock_in)
-        clock_in_time = clock_in_local.time()
-        if clock_in_time <= scheduled_start:
-            continue
-        delta_minutes = (clock_in_time.hour * 60 + clock_in_time.minute) - (
-            scheduled_start.hour * 60 + scheduled_start.minute
-        )
-        if delta_minutes <= 0:
-            continue
-        already = Occurrence.objects.filter(
-            user=e.user,
-            date=e.date,
-            subtype__in=[OccurrenceSubtype.TARDY_IN_GRACE, OccurrenceSubtype.TARDY_OUT_OF_GRACE],
-        ).exists()
-        if already:
-            continue
-        if delta_minutes <= 4:
-            Occurrence.objects.create(
-                user=e.user,
-                occurrence_type=OccurrenceType.UNPLANNED,
-                subtype=OccurrenceSubtype.TARDY_IN_GRACE,
-                date=e.date,
-                duration_hours=0,
-                payroll_period=period,
-            )
-        else:
-            loss_hours = round((delta_minutes / 60.0) * 4) / 4  # round to nearest quarter hour
-            if loss_hours <= 0:
-                loss_hours = 0.25
-            occ = Occurrence.objects.create(
-                user=e.user,
-                occurrence_type=OccurrenceType.UNPLANNED,
-                subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
-                date=e.date,
-                duration_hours=loss_hours,
-                payroll_period=period,
-            )
-            occ.save()
-
-
 @require_POST
 @login_required
 def close_payroll(request):
@@ -1822,7 +1638,7 @@ def close_payroll(request):
 
     week_start = week_ending - timedelta(days=6)
 
-    pending_override_entries = _entries_requiring_clock_in_override(week_start, week_ending)
+    pending_override_entries = attendance_engine.entries_requiring_clock_in_override(week_start, week_ending)
     if pending_override_entries:
         approve_all = (request.POST.get("approve_missing_overrides") or "").lower() in {
             "1",
@@ -1896,7 +1712,7 @@ def close_payroll(request):
                 clock_in_early_authorized_by=None,
                 clock_in_early_override_denied=True,
             )
-        remaining = _entries_requiring_clock_in_override(week_start, week_ending)
+        remaining = attendance_engine.entries_requiring_clock_in_override(week_start, week_ending)
         if remaining:
             messages.error(
                 request,
@@ -1921,222 +1737,17 @@ def close_payroll(request):
     period, _ = PayrollPeriod.objects.get_or_create(week_ending=week_ending, defaults={"is_finalized": False})
 
     if not period.is_finalized:
-        # High level: compare each user's schedule to (time entries + approved time off). Shortfall not covered
-        # by approved time off gets an auto-generated occurrence; PTO/personal applied per policy; then accrue
-        # PTO for 0-2 yr / part-time on time-entry hours only (1 hr per 30 worked, cap 72 for part-time).
         users = sorted(
             CustomUser.objects.filter(is_active=True, is_exempt=False),
             key=_payroll_sort_key,
         )
-
-        # Build total worked (time entries only) and total scheduled per user for the week
-        user_total_worked = {}
-        user_total_scheduled = {}
-        for user in users:
-            entries = TimeEntry.objects.filter(user=user, date__range=[week_start, week_ending])
-            total_worked_hours = 0
-            for e in entries:
-                if e.clock_in and e.clock_out:
-                    total_worked_hours += e.reported_worked_hours()
-            user_total_worked[user.id] = total_worked_hours
-            user_total_scheduled[user.id] = _scheduled_hours_for_range(user, week_start, week_ending)
-
-        _create_tardy_occurrences_for_week(week_start, week_ending, period=period)
-
-        # Variance occurrences: only when user has a schedule and reported total falls short.
-        # Reported = time entries (punches/manual) + approved time off for the week. No default hours.
-        approved_time_off_by_user_date = {}
-        for user in users:
-            approved_time_off_by_user_date[user.id] = {}
-            qs = Occurrence.objects.filter(
-                user=user,
-                date__range=[week_start, week_ending],
-                time_off_request__status=TimeOffRequestStatus.APPROVED,
-            )
-            for occ in qs.values("date", "duration_hours"):
-                d = occ["date"]
-                approved_time_off_by_user_date[user.id][d] = (
-                    approved_time_off_by_user_date[user.id].get(d, 0) + occ["duration_hours"]
-                )
-
-        for user in users:
-            total_worked_hours = user_total_worked.get(user.id, 0)
-            total_scheduled = _scheduled_hours_for_range(user, week_start, week_ending)
-            if total_scheduled <= 0:
-                continue  # No schedule: do not create any variance
-            current = week_start
-            while current <= week_ending:
-                scheduled_day = _scheduled_hours_for_day(user, current)
-                if scheduled_day <= 0:
-                    current += timedelta(days=1)
-                    continue
-                entries_day = TimeEntry.objects.filter(user=user, date=current)
-                worked_day = 0
-                for e in entries_day:
-                    if e.clock_in and e.clock_out:
-                        worked_day += e.reported_worked_hours()
-                approved_day = approved_time_off_by_user_date.get(user.id, {}).get(current, 0)
-                # Include tardy (and any existing variance) so we don't create duplicate shortfall for same time
-                tardy_or_variance_hours = sum(
-                    Occurrence.objects.filter(
-                        user=user,
-                        date=current,
-                    )
-                    .filter(
-                        Q(subtype__in=[OccurrenceSubtype.TARDY_IN_GRACE, OccurrenceSubtype.TARDY_OUT_OF_GRACE])
-                        | Q(is_variance_to_schedule=True)
-                    )
-                    .values_list("duration_hours", flat=True)
-                )
-                reported_day = worked_day + approved_day + tardy_or_variance_hours
-                shortfall_day = max(0, round(scheduled_day - reported_day, 2))
-                # Create variance only when shortfall exists and not already covered by approved time off
-                # (approved_day is in reported_day, so shortfall is the gap; no occurrence if shortfall is 0)
-                if shortfall_day > 0:
-                    has_variance = Occurrence.objects.filter(
-                        user=user,
-                        date=current,
-                        is_variance_to_schedule=True,
-                    ).exists()
-                    if not has_variance:
-                        # Variance-to-schedule rows are always marked Exchange; PTO/personal
-                        # application is decided later from weekly totals.
-                        subtype = OccurrenceSubtype.EXCHANGE
-                        Occurrence.objects.create(
-                            user=user,
-                            occurrence_type=OccurrenceType.UNPLANNED,
-                            subtype=subtype,
-                            date=current,
-                            duration_hours=round(shortfall_day, 2),
-                            pto_applied=False,
-                            is_variance_to_schedule=True,
-                            payroll_period=period,
-                        )
-                current += timedelta(days=1)
-
-        # Exchange occurrences should represent only the remaining weekly shortfall
-        # after make-up time and approved time off are counted.
-        for user in users:
-            expected = user_total_scheduled.get(user.id, 0)
-            if expected <= 0:
-                continue
-            required_week_hours = _required_week_hours_for_policy(expected)
-            worked = user_total_worked.get(user.id, 0)
-            approved_week = sum(approved_time_off_by_user_date.get(user.id, {}).values())
-            weekly_shortfall = max(0.0, round(required_week_hours - (worked + approved_week), 2))
-            remaining = weekly_shortfall
-            exchange_variances = list(
-                Occurrence.objects.filter(
-                    user=user,
-                    date__range=[week_start, week_ending],
-                    is_variance_to_schedule=True,
-                    subtype=OccurrenceSubtype.EXCHANGE,
-                ).order_by("date", "id")
-            )
-            for occ in exchange_variances:
-                new_duration = min(occ.duration_hours, remaining)
-                if round(occ.duration_hours, 2) != round(new_duration, 2):
-                    occ.duration_hours = round(new_duration, 2)
-                    occ.save(update_fields=["duration_hours"])
-                remaining = max(0.0, round(remaining - new_duration, 2))
-
-        _revert_and_delete_orphan_time_off_for_exchange_week(
-            users,
-            week_start,
-            week_ending,
+        weekly_reconciliation.finalize_payroll_week(
+            period=period,
+            week_start=week_start,
+            week_ending=week_ending,
+            finalized_by=request.user,
+            users=users,
         )
-
-        # If the user met or exceeded weekly scheduled hours, convert out-of-grace tardies
-        # to zero-hour Exchange rows so no PTO/personal is deducted.
-        for user in users:
-            expected = user_total_scheduled.get(user.id, 0)
-            if expected <= 0:
-                continue
-            required_week_hours = _required_week_hours_for_policy(expected)
-            worked = user_total_worked.get(user.id, 0)
-            approved_week = sum(approved_time_off_by_user_date.get(user.id, {}).values())
-            if (worked + approved_week) < required_week_hours:
-                continue
-            tardy_out_rows = Occurrence.objects.filter(
-                user=user,
-                date__range=[week_start, week_ending],
-                subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
-            )
-            for occ in tardy_out_rows:
-                occ.subtype = OccurrenceSubtype.EXCHANGE
-                occ.duration_hours = 0.0
-                occ.is_variance_to_schedule = True
-                occ.pto_applied = False
-                occ.pto_hours_applied = 0.0
-                occ.personal_hours_applied = 0.0
-                occ.save(
-                    update_fields=[
-                        "subtype",
-                        "duration_hours",
-                        "is_variance_to_schedule",
-                        "pto_applied",
-                        "pto_hours_applied",
-                        "personal_hours_applied",
-                    ]
-                )
-
-        # Apply PTO before accrual (use current balance, not hours earned this week).
-        # EXCHANGE uses PTO/personal only when the user is still short of weekly schedule.
-        week_occurrences = list(
-            Occurrence.objects.filter(
-                date__range=[week_start, week_ending],
-                subtype__in=OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL,
-                pto_applied=False,
-            )
-            .exclude(subtype=OccurrenceSubtype.EXCHANGE)
-            .select_related("user")
-            .order_by("user_id", "date")
-        )
-        # Include EXCHANGE occurrences only when the user is still below weekly schedule.
-        exchange_occurrences = list(
-            Occurrence.objects.filter(
-                date__range=[week_start, week_ending],
-                subtype=OccurrenceSubtype.EXCHANGE,
-                pto_applied=False,
-            ).select_related("user").order_by("user_id", "date")
-        )
-        for occ in exchange_occurrences:
-            worked = user_total_worked.get(occ.user_id, 0)
-            expected = user_total_scheduled.get(occ.user_id)
-            if expected is None:
-                expected = _scheduled_hours_for_range(occ.user, week_start, week_ending)
-                user_total_scheduled[occ.user_id] = expected
-            required_week_hours = _required_week_hours_for_policy(expected)
-            approved_week = sum(approved_time_off_by_user_date.get(occ.user_id, {}).values())
-            # Only apply PTO/personal to EXCHANGE when the user did not meet their
-            # scheduled hours for the week.
-            if (worked + approved_week) < required_week_hours and occ.duration_hours > 0:
-                week_occurrences.append(occ)
-        week_occurrences.sort(key=lambda o: (o.user_id, o.date))
-
-        # Apply PTO first (then personal) to all occurrences per policy; no cap so full shortfall is covered
-        for occ in week_occurrences:
-            occ.apply_pto()
-
-        # Accrue PTO for the week (after applying so balance used is pre-accrual).
-        # Policy: FT under 2 yr and part-time accrue 1 hr PTO per 30 hrs worked
-        # from all reported time-entry hours (including overtime).
-        for user in users:
-            total_worked_hours = user_total_worked.get(user.id, 0)  # reported time-entry hours only
-            if total_worked_hours and (user.years_of_service() <= 2 or user.is_part_time):
-                user.refresh_from_db()  # use balance after apply_pto so accrual doesn't overwrite
-                accrued = user.accrue_pto(total_worked_hours)
-                if accrued:
-                    PayrollPeriodUserSnapshot.objects.update_or_create(
-                        period=period,
-                        user=user,
-                        defaults={"pto_accrued_hours": round(accrued, 2)},
-                    )
-
-        period.is_finalized = True
-        period.finalized_at = django_tz.now()
-        period.finalized_by = request.user
-        period.save()
         messages.success(request, f"Payroll for week ending {week_ending} has been finalized and CSV exported.")
     else:
         messages.info(request, "This payroll period is already finalized. CSV exported for records.")
@@ -2207,43 +1818,6 @@ def close_payroll(request):
     return response
 
 
-def _unfinalize_payroll_revert(period):
-    """
-    Revert all effects of finalizing this payroll period: PTO accrued, occurrence PTO applied,
-    and delete occurrences created at finalize (variance + tardy).
-    """
-    week_start = period.week_ending - timedelta(days=6)
-
-    # 1. Revert PTO accrued for this period (round so add/subtract cancel exactly)
-    for snapshot in period.user_snapshots.select_related("user"):
-        u = snapshot.user
-        accrued = round(snapshot.pto_accrued_hours, 2)
-        u.pto_balance = round(max(0.0, u.pto_balance - accrued), 2)
-        u.save()
-    period.user_snapshots.all().delete()
-
-    # 2. Refund PTO/personal only for occurrences created at finalize (this period), then delete them
-    period_occurrences = Occurrence.objects.filter(
-        payroll_period=period,
-        pto_applied=True,
-    ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID).select_related("user")
-    # Aggregate refunds by user so we apply correct totals (same user can have variance + tardy)
-    refunds = (
-        period_occurrences.values("user")
-        .annotate(
-            pto_refund=Sum("pto_hours_applied"),
-            personal_refund=Sum("personal_hours_applied"),
-        )
-    )
-    for r in refunds:
-        u = CustomUser.objects.get(pk=r["user"])
-        u.pto_balance = round(u.pto_balance + (r["pto_refund"] or 0), 2)
-        u.personal_time_balance = round(max(0.0, u.personal_time_balance - (r["personal_refund"] or 0)), 2)
-        u.save()
-    # Delete occurrences created at finalize so they can be re-created on refinalize
-    Occurrence.objects.filter(payroll_period=period).delete()
-
-
 @require_POST
 @login_required
 def unfinalize_payroll(request):
@@ -2258,7 +1832,7 @@ def unfinalize_payroll(request):
     if not period.is_finalized:
         messages.info(request, "That payroll period is not finalized.")
         return redirect("attendance:payroll")
-    _unfinalize_payroll_revert(period)
+    weekly_reconciliation.unfinalize_payroll_period(period)
     period.is_finalized = False
     period.finalized_at = None
     period.finalized_by = None

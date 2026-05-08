@@ -1,5 +1,5 @@
 import math
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal
 from django.db import models
 from django.db.models import JSONField, Q, Sum, UniqueConstraint
 from django.conf import settings
@@ -7,6 +7,7 @@ from django.contrib.auth.models import AbstractUser
 from datetime import date, timedelta, datetime
 
 from .slug_utils import ensure_unique_slug
+from .services.balance_service import floor_hours_to_quarter_increment
 
 DAYS_OF_WEEK = [
     (0, "Monday"), (1, "Tuesday"), (2, "Wednesday"), (3, "Thursday"),
@@ -255,21 +256,6 @@ class OccurrenceType(models.TextChoices):
     PLANNED = "Planned", "Planned"
     UNPLANNED = "Unplanned", "Unplanned"
 
-QUARTER_HOUR = Decimal("0.25")
-
-
-def floor_hours_to_quarter_increment(hours: Decimal) -> Decimal:
-    """
-    Floor hours to payroll quarter-hour increments (0.25).
-    PTO balance may accrue in hundredths (e.g. 1.33 from 40/30 accrual), but only
-    whole quarter-hours may be applied toward an absence; the fractional balance remains.
-    """
-    if hours <= 0:
-        return Decimal("0")
-    quarters = (hours / QUARTER_HOUR).to_integral_value(rounding=ROUND_DOWN)
-    return quarters * QUARTER_HOUR
-
-
 class OccurrenceSubtype(models.TextChoices):
     TIME_OFF = "Time Off", "Time Off"
     TARDY_IN_GRACE = "Tardy In Grace", "Tardy In Grace"
@@ -373,21 +359,6 @@ def user_eligible_for_perfect_attendance_new_hire_month(anchor: date | None, per
     period_key = (period_first.year, period_first.month)
     first_full_key = (fms.year, fms.month)
     return period_key >= first_full_key
-
-
-def _probation_grace_hours_used_before(occ: "Occurrence", anchor: date, probation_end: date) -> Decimal:
-    """Probation grace bank hours already allocated to earlier applied occurrences (same user, same window)."""
-    total = (
-        Occurrence.objects.filter(
-            user_id=occ.user_id,
-            date__gte=anchor,
-            date__lt=probation_end,
-            pto_applied=True,
-        )
-        .filter(Q(date__lt=occ.date) | Q(date=occ.date, pk__lt=occ.pk))
-        .aggregate(s=Sum("probation_grace_hours_applied"))
-    )["s"]
-    return Decimal(str(total or 0)).quantize(Decimal("0.01"))
 
 
 class PTOBalanceHistory(models.Model):
@@ -507,148 +478,9 @@ class Occurrence(models.Model):
         Returns the number of PTO hours deducted.
         Uses Decimal for calculations to avoid float drift; runs in a transaction with row lock.
         """
-        from django.db import transaction
+        from attendance.services.balance_service import apply_occurrence_pto
 
-        # ``Occurrence.save()`` already calls ``apply_pto`` once; callers that also call
-        # ``apply_pto`` after ``create``/``get_or_create`` must not deduct twice.
-        if self.pto_applied:
-            return float(self.pto_hours_applied or 0.0)
-
-        if self.date > date.today():
-            return 0.0
-
-        # Subtypes that do NOT affect balances (company-paid or fully unpaid/ excused)
-        if self.subtype in [
-            OccurrenceSubtype.LAYOFF,
-            OccurrenceSubtype.DISCIPLINE,
-            OccurrenceSubtype.WORK_COMP,
-            OccurrenceSubtype.DISABILITY,
-            OccurrenceSubtype.TARDY_IN_GRACE,
-            OccurrenceSubtype.BEREAVEMENT_UNPAID,
-            OccurrenceSubtype.JURY_DUTY_UNPAID,
-            OccurrenceSubtype.WEATHER_UNPAID,
-            OccurrenceSubtype.HOLIDAY_PAID,
-        ]:
-            return 0.0
-
-        # Subtypes that affect PTO and possibly personal time
-        if self.subtype not in [
-            OccurrenceSubtype.TIME_OFF,
-            OccurrenceSubtype.TARDY_OUT_OF_GRACE,
-            OccurrenceSubtype.EXCHANGE,
-            OccurrenceSubtype.FMLA,
-            OccurrenceSubtype.LEAVE_OF_ABSENCE,
-            OccurrenceSubtype.WEATHER_PAID,
-            OccurrenceSubtype.BEREAVEMENT_PAID,
-            OccurrenceSubtype.JURY_DUTY_PAID,
-            OccurrenceSubtype.GRACE_TIME,
-        ]:
-            return 0.0
-
-        used = Decimal(str(self.duration_hours))
-        with transaction.atomic():
-            u = CustomUser.objects.select_for_update().get(pk=self.user_id)
-            pto_bal = Decimal(str(u.pto_balance)).quantize(Decimal("0.01"))
-            personal_bal = Decimal(str(u.personal_time_balance)).quantize(Decimal("0.01"))
-
-            # For FMLA and Leave of Absence: use PTO when available, but do NOT
-            # convert any remaining hours into personal/unpaid time. Remaining
-            # hours are treated as leave for tracking only.
-            if self.subtype in [OccurrenceSubtype.FMLA, OccurrenceSubtype.LEAVE_OF_ABSENCE]:
-                pto_usable = floor_hours_to_quarter_increment(pto_bal)
-                pto_deducted = min(used, pto_usable)
-                if max_pto_to_apply is not None:
-                    cap = floor_hours_to_quarter_increment(Decimal(str(max_pto_to_apply)))
-                    pto_deducted = min(pto_deducted, cap)
-                new_pto = max(Decimal("0"), pto_bal - pto_deducted)
-                u.pto_balance = float(new_pto.quantize(Decimal("0.01")))
-                u.save()
-                if pto_deducted > 0:
-                    PTOBalanceHistory.record(
-                        user=u,
-                        change=float(-pto_deducted.quantize(Decimal("0.01"))),
-                        reason=f"Occurrence apply_pto: {self.get_subtype_display()} ({self.date})",
-                        balance_after=u.pto_balance,
-                    )
-                self.pto_hours_applied = float(pto_deducted.quantize(Decimal("0.01")))
-                self.personal_hours_applied = 0.0
-                self.pto_applied = True
-                self.save()
-                return float(pto_deducted.quantize(Decimal("0.01")))
-
-            anchor = u.employment_anchor_date()
-            probation_end = anchor + timedelta(days=90) if anchor else None
-            uses_probation_grace = (
-                anchor
-                and probation_end
-                and u.is_date_in_probation_period(self.date)
-                and (
-                    self.subtype in PROBATION_GRACE_ELIGIBLE_SUBTYPES
-                    or self.subtype == OccurrenceSubtype.GRACE_TIME
-                )
-            )
-            if uses_probation_grace:
-                grace_used_prior = _probation_grace_hours_used_before(self, anchor, probation_end)
-                grace_remaining = max(Decimal("0"), PROBATION_GRACE_HOURS_CAP - grace_used_prior)
-                grace_portion = min(used, grace_remaining)
-                personal_portion = used - grace_portion
-                new_personal = personal_bal + personal_portion
-                u.personal_time_balance = float(new_personal.quantize(Decimal("0.01")))
-                u.save()
-                if personal_portion > 0:
-                    PTOBalanceHistory.record(
-                        user=u,
-                        change=float(personal_portion.quantize(Decimal("0.01"))),
-                        reason=f"Personal time (probation): {self.get_subtype_display()} ({self.date})",
-                        balance_after=u.personal_time_balance,
-                        balance_type=PTOBalanceHistory.BALANCE_TYPE_PERSONAL,
-                    )
-                self.pto_hours_applied = 0.0
-                self.personal_hours_applied = float(personal_portion.quantize(Decimal("0.01")))
-                self.probation_grace_hours_applied = float(grace_portion.quantize(Decimal("0.01")))
-                self.pto_applied = True
-                if (
-                    grace_portion == used
-                    and used > 0
-                    and personal_portion == 0
-                    and self.subtype != OccurrenceSubtype.GRACE_TIME
-                ):
-                    self.subtype = OccurrenceSubtype.GRACE_TIME
-                self.save()
-                return 0.0
-
-            # Default behavior: PTO first (quarter-hour increments from balance only), then
-            # remaining hours to personal time.
-            pto_usable = floor_hours_to_quarter_increment(pto_bal)
-            pto_deducted = min(used, pto_usable)
-            if max_pto_to_apply is not None:
-                cap = floor_hours_to_quarter_increment(Decimal(str(max_pto_to_apply)))
-                pto_deducted = min(pto_deducted, cap)
-            personal_deducted = used - pto_deducted
-            new_pto = max(Decimal("0"), pto_bal - pto_deducted)
-            new_personal = personal_bal + personal_deducted
-            u.pto_balance = float(new_pto.quantize(Decimal("0.01")))
-            u.personal_time_balance = float(new_personal.quantize(Decimal("0.01")))
-            u.save()
-            PTOBalanceHistory.record(
-                user=u,
-                change=float(-pto_deducted.quantize(Decimal("0.01"))),
-                reason=f"Occurrence apply_pto: {self.get_subtype_display()} ({self.date})",
-                balance_after=u.pto_balance,
-            )
-            if personal_deducted > 0:
-                PTOBalanceHistory.record(
-                    user=u,
-                    change=float(personal_deducted.quantize(Decimal("0.01"))),
-                    reason=f"Personal time: {self.get_subtype_display()} ({self.date})",
-                    balance_after=u.personal_time_balance,
-                    balance_type=PTOBalanceHistory.BALANCE_TYPE_PERSONAL,
-                )
-            self.pto_hours_applied = float(pto_deducted.quantize(Decimal("0.01")))
-            self.personal_hours_applied = float(personal_deducted.quantize(Decimal("0.01")))
-            self.pto_applied = True
-            self.save()
-        return float(pto_deducted.quantize(Decimal("0.01")))
+        return apply_occurrence_pto(self, max_pto_to_apply=max_pto_to_apply)
 
 
 def revert_tardy_occurrences_for_adjust_punch(user, occ_date):
@@ -657,30 +489,9 @@ def revert_tardy_occurrences_for_adjust_punch(user, occ_date):
     refunding any PTO/personal that was applied for them (same idea as cancelling time off).
     Call inside transaction.atomic(); ``user`` must be the locked CustomUser instance (select_for_update).
     """
-    qs = Occurrence.objects.filter(
-        user=user,
-        date=occ_date,
-        subtype__in=[
-            OccurrenceSubtype.TARDY_IN_GRACE,
-            OccurrenceSubtype.TARDY_OUT_OF_GRACE,
-        ],
-    )
-    if not qs.exists():
-        return
-    for occ in qs:
-        if occ.pto_applied:
-            user.pto_balance = round(user.pto_balance + occ.pto_hours_applied, 2)
-            user.personal_time_balance = round(
-                max(0.0, user.personal_time_balance - occ.personal_hours_applied), 2
-            )
-            PTOBalanceHistory.record(
-                user=user,
-                change=float(occ.pto_hours_applied),
-                reason=f"Adjust punch: revert {occ.get_subtype_display()} ({occ.date})",
-                balance_after=user.pto_balance,
-            )
-        occ.delete()
-    user.save()
+    from attendance.services.attendance_engine import revert_tardy_occurrences_for_adjust_punch as _revert_tardy
+
+    return _revert_tardy(user, occ_date)
 
 
 def apply_past_due_occurrences(user):
@@ -689,15 +500,9 @@ def apply_past_due_occurrences(user):
     Call from dashboard or when loading user balance so that when a future approved date passes,
     the balance is updated on next view.
     """
-    today = date.today()
-    past_due = Occurrence.objects.filter(
-        user=user,
-        date__lte=today,
-        pto_applied=False,
-        subtype__in=OCCURRENCE_SUBTYPES_USING_PTO_OR_PERSONAL,
-    )
-    for occ in past_due:
-        occ.apply_pto()
+    from attendance.services.attendance_engine import apply_past_due_occurrences as _apply_past_due
+
+    return _apply_past_due(user)
 
 
 class TimeOffRequestStatus(models.TextChoices):
@@ -1039,6 +844,62 @@ class PayrollPeriodUserSnapshot(models.Model):
 
     def __str__(self):
         return f"{self.period.week_ending} / {self.user} accrued {self.pto_accrued_hours}"
+
+
+class DailyAttendanceSummary(models.Model):
+    """
+    Interpreted workday state (provisional or finalized). Populated at payroll finalize;
+    may be extended for live projection workflows.
+    """
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        PROVISIONAL = "provisional", "Provisional"
+        APPROVED = "approved", "Approved"
+        FINALIZED = "finalized", "Finalized"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="daily_attendance_summaries",
+    )
+    work_date = models.DateField(db_index=True)
+    scheduled_hours = models.FloatField(default=0.0)
+    worked_hours = models.FloatField(default=0.0)
+    rounded_hours = models.FloatField(default=0.0)
+    lunch_deducted_hours = models.FloatField(default=0.0)
+    tardy_minutes = models.IntegerField(default=0)
+    early_out_minutes = models.IntegerField(default=0)
+    regular_hours = models.FloatField(default=0.0)
+    overtime_hours = models.FloatField(default=0.0)
+    exchange_eligible = models.BooleanField(default=False)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.OPEN,
+    )
+    payroll_period = models.ForeignKey(
+        PayrollPeriod,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="daily_attendance_summaries",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "work_date"],
+                name="unique_daily_attendance_summary_user_work_date",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["user", "work_date"]),
+        ]
+        ordering = ["work_date", "user_id"]
+
+    def __str__(self):
+        return f"{self.user_id} {self.work_date} ({self.status})"
 
 
 def get_company_holidays(year: int):

@@ -48,16 +48,24 @@ class TestTimeEntryModel(TestCase):
         self.assertFalse(entry.is_incomplete())
 
     def test_is_incomplete_partial(self):
-        """Entry with only some punches is incomplete."""
+        """Clock-in only is incomplete; clock-out triggers scheduled lunch auto-fill and completes entry."""
         now = timezone.now()
-        entry = TimeEntry.objects.create(user=self.user, date=now.date(), clock_in=now)
+        d = now.date()
+        WorkSchedule.objects.create(
+            user=self.user,
+            day=d.weekday(),
+            start_time=time(8, 0),
+            lunch_out=time(12, 0),
+            lunch_in=time(12, 30),
+            end_time=time(17, 0),
+        )
+        entry = TimeEntry.objects.create(user=self.user, date=d, clock_in=now)
         self.assertTrue(entry.is_incomplete())
         entry.clock_out = now + timedelta(hours=8)
         entry.save()
-        self.assertTrue(entry.is_incomplete())
-        entry.lunch_out = now + timedelta(hours=4)
-        entry.lunch_in = entry.lunch_out + timedelta(minutes=30)
-        entry.save()
+        entry.refresh_from_db()
+        self.assertIsNotNone(entry.lunch_out)
+        self.assertIsNotNone(entry.lunch_in)
         self.assertFalse(entry.is_incomplete())
 
     def test_total_worked_time_no_clock_out(self):
@@ -153,6 +161,17 @@ class TestTimeClockPunchView(TestCase):
             password="testpass",
             timeclock_login="2000",
             timeclock_pin="5678",
+        )
+        # Scheduled today so clock-in does not require manager override in tests
+        today = timezone.now().date()
+        # Start at midnight so tests pass regardless of wall-clock time (avoids "early" override).
+        WorkSchedule.objects.create(
+            user=self.user,
+            day=today.weekday(),
+            start_time=time(0, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(23, 59),
         )
         self.punch_url = reverse("timeclock:timeclock_home")
 
