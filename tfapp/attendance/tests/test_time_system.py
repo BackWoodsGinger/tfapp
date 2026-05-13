@@ -49,8 +49,8 @@ class TestTimeEntryModel(TestCase):
 
     def test_is_incomplete_partial(self):
         """Clock-in only is incomplete; clock-out triggers scheduled lunch auto-fill and completes entry."""
-        now = timezone.now()
-        d = now.date()
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)  # Monday
         WorkSchedule.objects.create(
             user=self.user,
             day=d.weekday(),
@@ -59,9 +59,10 @@ class TestTimeEntryModel(TestCase):
             lunch_in=time(12, 30),
             end_time=time(17, 0),
         )
-        entry = TimeEntry.objects.create(user=self.user, date=d, clock_in=now)
+        clock_in = timezone.make_aware(datetime(2025, 3, 3, 8, 0, 0), tz)
+        entry = TimeEntry.objects.create(user=self.user, date=d, clock_in=clock_in)
         self.assertTrue(entry.is_incomplete())
-        entry.clock_out = now + timedelta(hours=8)
+        entry.clock_out = clock_in + timedelta(hours=8)
         entry.save()
         entry.refresh_from_db()
         self.assertIsNotNone(entry.lunch_out)
@@ -1307,6 +1308,47 @@ class TestReportedHoursOverridesAndLunchRounding(TestCase):
         # Reported uses schedule start (no early override), floors out, and rounds lunch edges:
         # lunch_out 9:25 -> 9:15, lunch_in 12:26 -> 12:30 => 3h15m deduction.
         self.assertAlmostEqual(entry.reported_worked_hours(), 7.25, places=2)
+
+
+class TestPayrollCreditedHours(TestCase):
+    """payroll_credited_hours prefers reported but falls back to actual when reported is 0."""
+
+    def setUp(self):
+        self.user = CustomUser.objects.create_user(username="pcred", password="testpass")
+        WorkSchedule.objects.create(
+            user=self.user,
+            day=0,
+            start_time=time(8, 0),
+            lunch_out=time(12, 0),
+            lunch_in=time(12, 30),
+            end_time=time(17, 0),
+        )
+
+    def test_fallback_to_actual_when_reported_collapses_to_zero(self):
+        """Rounded clock-out equals adjusted clock-in -> reported 0 but short span has actual > 0."""
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)  # Monday
+        WorkThroughLunchRequest.objects.create(
+            user=self.user,
+            work_date=d,
+            status=TimeOffRequestStatus.APPROVED,
+        )
+        ci = timezone.make_aware(datetime(2025, 3, 3, 8, 0, 0), tz)
+        co = timezone.make_aware(datetime(2025, 3, 3, 8, 10, 0), tz)
+        entry = TimeEntry.objects.create(user=self.user, date=d, clock_in=ci, clock_out=co)
+        self.assertEqual(entry.reported_worked_hours(), 0.0)
+        self.assertGreater(entry.actual_worked_hours(), 0)
+        self.assertAlmostEqual(
+            entry.payroll_credited_hours(), entry.actual_worked_hours(), places=2
+        )
+
+    def test_zero_when_clock_out_not_after_clock_in(self):
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)
+        ci = timezone.make_aware(datetime(2025, 3, 3, 10, 0, 0), tz)
+        co = timezone.make_aware(datetime(2025, 3, 3, 9, 0, 0), tz)
+        entry = TimeEntry.objects.create(user=self.user, date=d, clock_in=ci, clock_out=co)
+        self.assertEqual(entry.payroll_credited_hours(), 0.0)
 
 
 class TestPayrollCsvClockOutCalendarDate(TestCase):

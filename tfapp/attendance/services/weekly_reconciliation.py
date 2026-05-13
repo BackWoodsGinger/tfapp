@@ -88,7 +88,7 @@ def sync_finalized_daily_summaries(users, week_start: date, week_ending: date, p
             worked = 0.0
             for e in entries_day:
                 if e.clock_in and e.clock_out:
-                    worked += e.reported_worked_hours()
+                    worked += e.payroll_credited_hours()
             if scheduled <= 0 and worked <= 0:
                 current += timedelta(days=1)
                 continue
@@ -139,7 +139,7 @@ def finalize_payroll_week(*, period, week_start: date, week_ending: date, finali
         total_worked_hours = 0
         for e in entries:
             if e.clock_in and e.clock_out:
-                total_worked_hours += e.reported_worked_hours()
+                total_worked_hours += e.payroll_credited_hours()
         user_total_worked[user.id] = total_worked_hours
         user_total_scheduled[user.id] = scheduled_hours_for_range(user, week_start, week_ending)
 
@@ -175,7 +175,7 @@ def finalize_payroll_week(*, period, week_start: date, week_ending: date, finali
             worked_day = 0
             for e in entries_day:
                 if e.clock_in and e.clock_out:
-                    worked_day += e.reported_worked_hours()
+                    worked_day += e.payroll_credited_hours()
             approved_day = approved_time_off_by_user_date.get(user.id, {}).get(current, 0)
             tardy_or_variance_hours = sum(
                 Occurrence.objects.filter(

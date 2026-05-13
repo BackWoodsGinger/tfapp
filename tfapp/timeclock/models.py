@@ -153,6 +153,27 @@ class TimeEntry(models.Model):
         seconds = self._worked_seconds()
         return float(Decimal(str(seconds / 3600)).quantize(Decimal("0.01")))
 
+    def payroll_credited_hours(self):
+        """
+        Hours counted toward payroll week totals, finalize, and export CSV.
+
+        Prefer ``reported_worked_hours`` (policy rounding). When that is 0 but clock-out is
+        after clock-in and ``actual_worked_hours`` is positive, return actual — recovers
+        overnight/CSV anchoring cases where rounding or unapproved-early rules zero out reported
+        time even though punches show real work.
+        """
+        if not (self.clock_in and self.clock_out):
+            return 0.0
+        if self.clock_out <= self.clock_in:
+            return 0.0
+        r = self.reported_worked_hours()
+        if r > 0:
+            return r
+        a = self.actual_worked_hours()
+        if a > 0:
+            return a
+        return 0.0
+
     def reported_worked_hours(self):
         """
         Payroll-reported hours:

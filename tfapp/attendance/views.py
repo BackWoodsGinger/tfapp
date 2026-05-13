@@ -205,7 +205,7 @@ def _perfect_attendance_with_hours(visible_users, first: date, period_end: date)
     occurrence subtypes in that range; new hires (hire or service date) only from their first
     full calendar month after hire onward.
 
-    total_hours is the sum of reported_worked_hours on completed time entries in that range
+    total_hours is the sum of payroll_credited_hours on completed time entries in that range
     (0.00 if none); PTO / absence hours are not included.
     """
     rows = []
@@ -237,7 +237,7 @@ def _perfect_attendance_with_hours(visible_users, first: date, period_end: date)
         )
         total_hours = 0.0
         for e in completed:
-            total_hours += e.reported_worked_hours()
+            total_hours += e.payroll_credited_hours()
         rows.append({"user": u, "total_hours": round(total_hours, 2)})
     rows.sort(key=lambda r: _payroll_sort_key(r["user"]))
     return rows
@@ -596,7 +596,7 @@ def dashboard(request):
             for entry in entries_by_user[u.id]:
                 if entry.clock_in and entry.clock_out:
                     total_actual += entry.actual_worked_hours()
-                    total_reported += entry.reported_worked_hours()
+                    total_reported += entry.payroll_credited_hours()
             total_scheduled = scheduled_hours_for_range(u, start_of_week, end_of_week)
             delta = round(total_reported - total_scheduled, 2)
             weekly_totals.append((
@@ -1151,7 +1151,7 @@ def payroll_view(request):
             for entry in entries_by_uid[u.id]:
                 if entry.clock_in and entry.clock_out:
                     total_actual += entry.actual_worked_hours()
-                    total_reported += entry.reported_worked_hours()
+                    total_reported += entry.payroll_credited_hours()
             total_scheduled = scheduled_hours_for_range(u, start_of_week, end_of_week)
             pto_applied, personal_applied = pto_by_uid.get(u.id, (0.0, 0.0))
             weekly_totals.append((
@@ -1621,6 +1621,9 @@ def payroll_schedule_csv_upload(request):
             li_a = _make_aware_on_date(wd, li) if li else None
             co_date = _clock_out_calendar_date(u, wd, ci, co)
             cout = _make_aware_on_date(co_date, co)
+            # Belt-and-suspenders: if out still not after in (DST / edge / stale schedule), bump one day.
+            if cout <= cin:
+                cout = cout + timedelta(days=1)
 
             entry, _ = TimeEntry.objects.get_or_create(user=u, date=wd, defaults={})
             entry.clock_in = cin
@@ -1792,7 +1795,7 @@ def close_payroll(request):
         total_worked_hours = 0
         for e in entries:
             if e.clock_in and e.clock_out:
-                total_worked_hours += e.reported_worked_hours()
+                total_worked_hours += e.payroll_credited_hours()
 
         pto_occurrences = Occurrence.objects.filter(
             user=user,
