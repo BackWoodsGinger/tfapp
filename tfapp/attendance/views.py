@@ -450,6 +450,18 @@ def _user_ids_signature(user_ids: list[int]) -> str:
     ).hexdigest()[:16]
 
 
+def _invalidate_payroll_weekly_totals_cache(week_ending: date) -> None:
+    """Drop cached payroll table totals so uploads/edits show immediately (see payroll_view wk_key)."""
+    week_start = week_ending - timedelta(days=6)
+    ne_payroll_users = sorted(
+        CustomUser.objects.filter(is_active=True, is_exempt=False),
+        key=_payroll_sort_key,
+    )
+    ne_payroll_ids = [u.id for u in ne_payroll_users]
+    wk_key = f"wt_pay_v1:{week_start}:{week_ending}:{_user_ids_signature(ne_payroll_ids)}"
+    cache.delete(wk_key)
+
+
 @login_required
 def absenteeism_chart_api(request):
     """Heavy chart series for the dashboard; loaded via fetch so the dashboard page returns quickly."""
@@ -1380,9 +1392,18 @@ def _make_aware_on_date(d: date, t: time) -> datetime:
 
 
 def _clock_out_calendar_date(user, work_date: date, clock_in_t: Optional[time], clock_out_t: Optional[time]) -> date:
+    """
+    Calendar date for clock_out when importing HH:MM punches anchored on ``work_date``.
+
+    If the out time is at or before the in time on a 24h clock, the punch is the next calendar
+    morning (overnight shift). This must not depend on ``crosses_midnight`` being set correctly
+    on the user's schedule, or CSV imports store clock_out on the wrong day and both
+    ``actual_worked_hours`` and ``reported_worked_hours`` collapse to zero.
+    """
+    _ = user  # reserved for future schedule-aware import rules
     if clock_out_t is None or clock_in_t is None:
         return work_date
-    if crosses_midnight_for_day(user, work_date) and clock_out_t <= clock_in_t:
+    if clock_out_t <= clock_in_t:
         return work_date + timedelta(days=1)
     return work_date
 
@@ -1621,6 +1642,7 @@ def payroll_schedule_csv_upload(request):
         f"Imported time entries for week ending {week_ending_ref}: {applied} row(s) saved, "
         f"{deleted} day(s) cleared.",
     )
+    _invalidate_payroll_weekly_totals_cache(week_ending_ref)
     return _payroll_redirect_after_csv_upload(request, week_ending_ref)
 
 

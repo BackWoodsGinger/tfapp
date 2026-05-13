@@ -1307,3 +1307,21 @@ class TestReportedHoursOverridesAndLunchRounding(TestCase):
         # Reported uses schedule start (no early override), floors out, and rounds lunch edges:
         # lunch_out 9:25 -> 9:15, lunch_in 12:26 -> 12:30 => 3h15m deduction.
         self.assertAlmostEqual(entry.reported_worked_hours(), 7.25, places=2)
+
+
+class TestPayrollCsvClockOutCalendarDate(TestCase):
+    """CSV import anchors clock_out on the correct calendar day for overnight pairs."""
+
+    def test_out_before_in_on_clock_implies_next_calendar_day(self):
+        from attendance.views import _clock_out_calendar_date
+
+        user = CustomUser.objects.create_user(username="codate", password="x")
+        wd = date(2025, 3, 6)
+        self.assertEqual(
+            _clock_out_calendar_date(user, wd, time(15, 30), time(2, 0)),
+            date(2025, 3, 7),
+        )
+        self.assertEqual(
+            _clock_out_calendar_date(user, wd, time(8, 0), time(17, 0)),
+            wd,
+        )
