@@ -462,13 +462,16 @@ class Occurrence(models.Model):
         if not self.pto_applied and self._subtype_uses_pto() and not self.payroll_period_id:
             self.apply_pto()
 
-    def apply_pto(self, max_pto_to_apply=None):
+    def apply_pto(self, max_pto_to_apply=None, max_occurrence_hours=None):
         """
         Deduct from PTO (then personal) for this occurrence. Only if occurrence date has passed.
         PTO is taken only in quarter-hour increments floored from the user's available balance
         (e.g. balance 1.33 allows at most 1.25 toward this absence; remainder stays in PTO).
         If max_pto_to_apply is set (e.g. 40 - worked for the week), cap PTO deduction so
         regular + PTO does not exceed the cap (cap is also floored to quarter hours).
+
+        If ``max_occurrence_hours`` is set, cap total absence hours (PTO + personal) charged
+        for this row before splitting balances.
 
         Probation (first 90 days from hire_date or service_date): eligible absence types do not
         use PTO; up to 30 hours total across the period may be recorded as Grace Time (no balance
@@ -480,7 +483,11 @@ class Occurrence(models.Model):
         """
         from attendance.services.balance_service import apply_occurrence_pto
 
-        return apply_occurrence_pto(self, max_pto_to_apply=max_pto_to_apply)
+        return apply_occurrence_pto(
+            self,
+            max_pto_to_apply=max_pto_to_apply,
+            max_occurrence_hours=max_occurrence_hours,
+        )
 
 
 def revert_tardy_occurrences_for_adjust_punch(user, occ_date):

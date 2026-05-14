@@ -9,6 +9,7 @@ from attendance.schedule_utils import (
     get_scheduled_lunch_in_for_day,
     get_scheduled_lunch_out_for_day,
     get_scheduled_start_for_day,
+    get_scheduled_shift_end_datetime,
     scheduled_lunch_datetimes_for_entry,
     work_through_lunch_approved_for_day,
 )
@@ -51,6 +52,11 @@ class TimeEntry(models.Model):
     clock_in_early_override_denied = models.BooleanField(
         default=False,
         help_text="Set when payroll review denies early-time credit on an override-required clock-in.",
+    )
+    payroll_lunch_review_required = models.BooleanField(
+        default=False,
+        help_text="Payroll CSV omitted lunch on a scheduled-lunch day; confirm scheduled lunch or "
+        "work-through at finalize before closing payroll.",
     )
 
     class Meta:
@@ -213,9 +219,9 @@ class TimeEntry(models.Model):
                     adjusted_minutes = (clock_in_local.minute // 15) * 15
                     adjusted_in = clock_in_local.replace(minute=adjusted_minutes, second=0, microsecond=0)
                 else:
-                    _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
-                        self.clock_in, scheduled_start
-                    )
+                    # Payroll approved early override: credit from schedule start for reporting.
+                    # Do not use tardy round-up on clock-in (that inflated reported hours vs intent).
+                    adjusted_in = scheduled_local
             else:
                 _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
                     self.clock_in, scheduled_start
@@ -308,6 +314,43 @@ class TimeEntry(models.Model):
                 return start
         return None
 
+    def reported_hours_after_scheduled_shift_end(self) -> float:
+        """
+        Reported-policy hours from scheduled shift end through floored clock-out (>= 0).
+        Offsets start-of-shift tardy when the employee stays late the same shift.
+        """
+        end_dt = get_scheduled_shift_end_datetime(self.user, self.date)
+        if not end_dt or not self.clock_in or not self.clock_out:
+            return 0.0
+        out_local = timezone.localtime(self.clock_out).replace(second=0, microsecond=0)
+        rounded_out_minutes = (out_local.minute // 15) * 15
+        adjusted_out = out_local.replace(minute=rounded_out_minutes, second=0, microsecond=0)
+        delta = (adjusted_out - end_dt).total_seconds() / 3600.0
+        return max(0.0, float(Decimal(str(delta)).quantize(Decimal("0.01"))))
+
+    def gross_scheduled_start_tardy_loss_hours(self) -> float:
+        """
+        Hours lost vs scheduled shift start from late clock-in (same rules as check_tardy),
+        before netting stay-late recovery. 0 if on time, in grace, or unscheduled day.
+        """
+        start_time = get_scheduled_start_for_day(self.user, self.date)
+        if not start_time or not self.clock_in:
+            return 0.0
+        minutes_late, adjusted_start = self._tardy_minutes_and_adjusted_start(
+            self.clock_in, start_time
+        )
+        if minutes_late <= 4:
+            return 0.0
+        scheduled_local = self._scheduled_local_datetime(start_time)
+        loss = (adjusted_start - scheduled_local).total_seconds() / 3600
+        return max(0.0, float(Decimal(str(loss)).quantize(Decimal("0.01"))))
+
+    def net_scheduled_start_tardy_loss_hours(self) -> float:
+        """Tardy dock hours after subtracting same-shift stay-late (reported clock-out past schedule end)."""
+        gross = self.gross_scheduled_start_tardy_loss_hours()
+        recovery = self.reported_hours_after_scheduled_shift_end()
+        return max(0.0, round(gross - recovery, 2))
+
     def check_tardy(self):
         """
         Apply start‑of‑shift tardy rules:
@@ -320,6 +363,15 @@ class TimeEntry(models.Model):
         start_time = get_scheduled_start_for_day(self.user, self.date)
         if not start_time or not self.clock_in:
             return
+
+        if self.clock_in_early_authorized_by_id:
+            return
+
+        lunch_in_sched = get_scheduled_lunch_in_for_day(self.user, self.date)
+        if lunch_in_sched:
+            clock_in_local_t = timezone.localtime(self.clock_in).time()
+            if clock_in_local_t >= lunch_in_sched:
+                return
 
         minutes_late, adjusted_start = self._tardy_minutes_and_adjusted_start(
             self.clock_in, start_time
@@ -338,8 +390,7 @@ class TimeEntry(models.Model):
 
         # 5+ minutes late: round up to next quarter hour and dock time via PTO occurrence
         if minutes_late >= 5:
-            scheduled_local = self._scheduled_local_datetime(start_time)
-            loss = (adjusted_start - scheduled_local).total_seconds() / 3600
+            loss = self.net_scheduled_start_tardy_loss_hours()
             if loss > 0:
                 Occurrence.objects.get_or_create(
                     user=self.user,

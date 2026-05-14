@@ -1351,6 +1351,75 @@ class TestPayrollCreditedHours(TestCase):
         self.assertEqual(entry.payroll_credited_hours(), 0.0)
 
 
+class TestEarlyOverrideReportedHours(TestCase):
+    """Payroll-approved early override: late same-day clock-in uses schedule start for reporting."""
+
+    def setUp(self):
+        self.user = CustomUser.objects.create_user(username="earov", password="testpass")
+        self.approver = CustomUser.objects.create_user(username="mgrEAR", password="testpass")
+        WorkSchedule.objects.create(
+            user=self.user,
+            day=0,
+            start_time=time(13, 0),
+            lunch_out=time(19, 30),
+            lunch_in=time(20, 0),
+            end_time=time(2, 0),
+            crosses_midnight=True,
+        )
+
+    def test_early_authorized_does_not_round_up_late_clock_in(self):
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)  # Monday
+        clock_in = timezone.make_aware(datetime(2025, 3, 3, 13, 14, 0), tz)
+        clock_out = timezone.make_aware(datetime(2025, 3, 4, 2, 0, 0), tz)
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=d,
+            clock_in=clock_in,
+            lunch_out=timezone.make_aware(datetime(2025, 3, 3, 19, 30, 0), tz),
+            lunch_in=timezone.make_aware(datetime(2025, 3, 3, 20, 0, 0), tz),
+            clock_out=clock_out,
+            clock_in_early_authorized_by=self.approver,
+        )
+        # With schedule start (not tardy round-up to 13:15), span matches full shift net (~12.5h here).
+        self.assertAlmostEqual(entry.reported_worked_hours(), 12.5, places=1)
+
+
+class TestNetTardyRecovery(TestCase):
+    """Staying late same shift reduces start-of-shift tardy dock hours."""
+
+    def setUp(self):
+        self.user = CustomUser.objects.create_user(username="tardyrec", password="testpass")
+        WorkSchedule.objects.create(
+            user=self.user,
+            day=0,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+
+    def test_net_tardy_reduced_by_time_past_scheduled_end(self):
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)
+        # 2.5h late -> gross tardy 2.5h before recovery; stay 30 min past 15:30 -> recovery 0.5h -> net 2.0
+        clock_in = timezone.make_aware(datetime(2025, 3, 3, 7, 30, 0), tz)
+        clock_out = timezone.make_aware(datetime(2025, 3, 3, 16, 7, 0), tz)
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=d,
+            clock_in=clock_in,
+            lunch_out=timezone.make_aware(datetime(2025, 3, 3, 11, 0, 0), tz),
+            lunch_in=timezone.make_aware(datetime(2025, 3, 3, 11, 30, 0), tz),
+            clock_out=clock_out,
+        )
+        gross = entry.gross_scheduled_start_tardy_loss_hours()
+        self.assertGreaterEqual(gross, 2.25)
+        recovery = entry.reported_hours_after_scheduled_shift_end()
+        self.assertGreaterEqual(recovery, 0.25)
+        self.assertAlmostEqual(entry.net_scheduled_start_tardy_loss_hours(), 2.0, places=1)
+
+
 class TestPayrollCsvClockOutCalendarDate(TestCase):
     """CSV import anchors clock_out on the correct calendar day for overnight pairs."""
 

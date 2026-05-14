@@ -42,12 +42,16 @@ def probation_grace_hours_used_before(occ, anchor: date, probation_end: date) ->
     return Decimal(str(total or 0)).quantize(Decimal("0.01"))
 
 
-def apply_occurrence_pto(occ, max_pto_to_apply=None):
+def apply_occurrence_pto(occ, max_pto_to_apply=None, max_occurrence_hours=None):
     """
     Deduct from PTO (then personal) for this occurrence. Only if occurrence date has passed.
     Same behavior as Occurrence.apply_pto (delegated from model).
 
-    Returns the number of PTO hours deducted.
+    If ``max_occurrence_hours`` is set, cap the absence hours charged (duration) to that value
+    before splitting PTO vs personal (used at payroll finalize so worked + deductions stay
+    within weekly policy).
+
+    Returns the number of PTO hours deducted (0.0 for subtypes that skip PTO draw).
     """
     from attendance.models import (
         PROBATION_GRACE_ELIGIBLE_SUBTYPES,
@@ -64,6 +68,13 @@ def apply_occurrence_pto(occ, max_pto_to_apply=None):
 
     if occ.date > date.today():
         return 0.0
+
+    used = Decimal(str(occ.duration_hours))
+    if max_occurrence_hours is not None:
+        cap_h = Decimal(str(max_occurrence_hours))
+        if cap_h < 0:
+            cap_h = Decimal("0")
+        used = min(used, cap_h)
 
     # Subtypes that do NOT affect balances (company-paid or fully unpaid/ excused)
     if occ.subtype in [
@@ -93,7 +104,6 @@ def apply_occurrence_pto(occ, max_pto_to_apply=None):
     ]:
         return 0.0
 
-    used = Decimal(str(occ.duration_hours))
     with transaction.atomic():
         u = CustomUser.objects.select_for_update().get(pk=occ.user_id)
         pto_bal = Decimal(str(u.pto_balance)).quantize(Decimal("0.01"))
@@ -121,6 +131,8 @@ def apply_occurrence_pto(occ, max_pto_to_apply=None):
             occ.pto_hours_applied = float(pto_deducted.quantize(Decimal("0.01")))
             occ.personal_hours_applied = 0.0
             occ.pto_applied = True
+            if max_occurrence_hours is not None:
+                occ.duration_hours = float(used.quantize(Decimal("0.01")))
             occ.save()
             return float(pto_deducted.quantize(Decimal("0.01")))
 
@@ -162,6 +174,8 @@ def apply_occurrence_pto(occ, max_pto_to_apply=None):
                 and occ.subtype != OccurrenceSubtype.GRACE_TIME
             ):
                 occ.subtype = OccurrenceSubtype.GRACE_TIME
+            if max_occurrence_hours is not None:
+                occ.duration_hours = float(used.quantize(Decimal("0.01")))
             occ.save()
             return 0.0
 
@@ -195,5 +209,7 @@ def apply_occurrence_pto(occ, max_pto_to_apply=None):
         occ.pto_hours_applied = float(pto_deducted.quantize(Decimal("0.01")))
         occ.personal_hours_applied = float(personal_deducted.quantize(Decimal("0.01")))
         occ.pto_applied = True
+        if max_occurrence_hours is not None:
+            occ.duration_hours = float(used.quantize(Decimal("0.01")))
         occ.save()
     return float(pto_deducted.quantize(Decimal("0.01")))

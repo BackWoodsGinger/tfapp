@@ -305,8 +305,34 @@ def finalize_payroll_week(*, period, week_start: date, week_ending: date, finali
             week_occurrences.append(occ)
     week_occurrences.sort(key=lambda o: (o.user_id, o.date))
 
+    absence_cap_by_user: dict[int, float] = {}
+    for user in users:
+        worked = user_total_worked.get(user.id, 0.0)
+        expected = user_total_scheduled.get(user.id, 0.0)
+        required = required_week_hours_for_policy(expected)
+        absence_cap_by_user[user.id] = max(0.0, round(required - worked, 2))
+
     for occ in week_occurrences:
-        occ.apply_pto()
+        uid = occ.user_id
+        cap_remaining = absence_cap_by_user.get(uid, 0.0)
+        hours_to_charge = min(float(occ.duration_hours or 0.0), cap_remaining)
+        if hours_to_charge < 0.001:
+            occ.duration_hours = 0.0
+            occ.pto_applied = True
+            occ.pto_hours_applied = 0.0
+            occ.personal_hours_applied = 0.0
+            occ.save(
+                update_fields=[
+                    "duration_hours",
+                    "pto_applied",
+                    "pto_hours_applied",
+                    "personal_hours_applied",
+                ]
+            )
+            continue
+        occ.apply_pto(max_occurrence_hours=hours_to_charge)
+        charged = float(occ.pto_hours_applied or 0.0) + float(occ.personal_hours_applied or 0.0)
+        absence_cap_by_user[uid] = max(0.0, round(cap_remaining - charged, 2))
 
     sync_finalized_daily_summaries(users, week_start, week_ending, period)
 
