@@ -1426,7 +1426,7 @@ class TestPayrollCreditedHours(TestCase):
 
 
 class TestEarlyOverrideReportedHours(TestCase):
-    """Payroll-approved early override: late same-day clock-in uses schedule start for reporting."""
+    """Payroll-approved early override must not inflate reported hours above actual."""
 
     def setUp(self):
         self.user = CustomUser.objects.create_user(username="earov", password="testpass")
@@ -1455,8 +1455,59 @@ class TestEarlyOverrideReportedHours(TestCase):
             clock_out=clock_out,
             clock_in_early_authorized_by=self.approver,
         )
-        # With schedule start (not tardy round-up to 13:15), span matches full shift net (~12.5h here).
-        self.assertAlmostEqual(entry.reported_worked_hours(), 12.5, places=1)
+        actual = entry.actual_worked_hours()
+        reported = entry.reported_worked_hours()
+        self.assertLessEqual(reported, actual)
+        self.assertAlmostEqual(reported, 12.25, places=2)
+
+    def test_early_authorized_partial_shift_floors_to_actual_not_quarter_up(self):
+        """Short outside-normal shift: 4.37 actual must not report as 4.5."""
+        user = CustomUser.objects.create_user(username="schmitcase", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=0,  # Monday (2026-04-27)
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        tz = timezone.get_current_timezone()
+        d = date(2026, 4, 27)
+        entry = TimeEntry.objects.create(
+            user=user,
+            date=d,
+            clock_in=timezone.make_aware(datetime(2026, 4, 27, 6, 0, 0), tz),
+            clock_out=timezone.make_aware(datetime(2026, 4, 27, 10, 22, 0), tz),
+            clock_in_early_authorized_by=self.approver,
+        )
+        self.assertAlmostEqual(entry.actual_worked_hours(), 4.37, places=2)
+        self.assertAlmostEqual(entry.reported_worked_hours(), 4.25, places=2)
+        self.assertLess(entry.reported_worked_hours(), entry.actual_worked_hours())
+
+    def test_early_authorized_never_rounds_up_from_ten_ten_actual(self):
+        user = CustomUser.objects.create_user(username="pricecase", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=3,  # Thursday (2026-04-30)
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        tz = timezone.get_current_timezone()
+        d = date(2026, 4, 30)
+        entry = TimeEntry.objects.create(
+            user=user,
+            date=d,
+            clock_in=timezone.make_aware(datetime(2026, 4, 30, 5, 0, 0), tz),
+            lunch_out=timezone.make_aware(datetime(2026, 4, 30, 11, 0, 0), tz),
+            lunch_in=timezone.make_aware(datetime(2026, 4, 30, 11, 30, 0), tz),
+            clock_out=timezone.make_aware(datetime(2026, 4, 30, 15, 36, 0), tz),
+            clock_in_early_authorized_by=self.approver,
+        )
+        self.assertAlmostEqual(entry.actual_worked_hours(), 10.10, places=2)
+        self.assertAlmostEqual(entry.reported_worked_hours(), 10.0, places=2)
+        self.assertLess(entry.reported_worked_hours(), entry.actual_worked_hours())
 
 
 class TestNetTardyRecovery(TestCase):

@@ -159,6 +159,12 @@ class TimeEntry(models.Model):
         seconds = self._worked_seconds()
         return float(Decimal(str(seconds / 3600)).quantize(Decimal("0.01")))
 
+    def _floor_seconds_to_quarter_hours(self, seconds: float) -> float:
+        """Floor worked seconds down to the prior 0.25-hour increment."""
+        hours = Decimal(str(max(seconds, 0) / 3600))
+        quarter_hours = (hours * Decimal("4")).to_integral_value(rounding=ROUND_DOWN)
+        return float((quarter_hours / Decimal("4")).quantize(Decimal("0.01")))
+
     def payroll_credited_hours(self):
         """
         Hours counted toward payroll week totals, finalize, and export CSV.
@@ -187,6 +193,7 @@ class TimeEntry(models.Model):
           5+ min late rounds up from scheduled start to next 15-min mark.
         - clock-out rounds down to prior 15-min mark.
         - lunch uses quarter-hour rounding (out down, in up) with 30-minute minimum.
+        - final total never exceeds actual worked hours floored to a quarter hour.
         Keeps actual punches untouched while reporting payroll-compliant hours.
         """
         if not (self.clock_in and self.clock_out):
@@ -212,14 +219,10 @@ class TimeEntry(models.Model):
             # Scheduled day: early clock-ins require override to be credited.
             if self.clock_in_early_authorized_by:
                 clock_in_local = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
-                scheduled_local = self._scheduled_local_datetime(scheduled_start)
-                if clock_in_local < scheduled_local:
-                    adjusted_minutes = (clock_in_local.minute // 15) * 15
-                    adjusted_in = clock_in_local.replace(minute=adjusted_minutes, second=0, microsecond=0)
-                else:
-                    # Payroll approved early override: credit from schedule start for reporting.
-                    # Do not use tardy round-up on clock-in (that inflated reported hours vs intent).
-                    adjusted_in = scheduled_local
+                adjusted_minutes = (clock_in_local.minute // 15) * 15
+                adjusted_in = clock_in_local.replace(
+                    minute=adjusted_minutes, second=0, microsecond=0
+                )
             else:
                 _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
                     self.clock_in, scheduled_start
@@ -236,10 +239,9 @@ class TimeEntry(models.Model):
         lunch = self._reported_lunch_deduction_timedelta()
 
         seconds = max((worked - lunch).total_seconds(), 0)
-        hours = Decimal(str(seconds / 3600))
-        quarter_hours = (hours * Decimal("4")).to_integral_value(rounding=ROUND_DOWN)
-        adjusted = (quarter_hours / Decimal("4")).quantize(Decimal("0.01"))
-        return float(adjusted)
+        policy_reported = self._floor_seconds_to_quarter_hours(seconds)
+        actual_cap = self._floor_seconds_to_quarter_hours(self._worked_seconds())
+        return min(policy_reported, actual_cap)
 
     def rounded_start(self):
         if self.clock_in:
