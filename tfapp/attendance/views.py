@@ -61,6 +61,8 @@ from .services import weekly_reconciliation
 from .schedule_utils import (
     crosses_midnight_for_day,
     earliest_clock_in_allowed,
+    clock_in_at_or_after_scheduled_lunch_in,
+    entry_requires_payroll_lunch_import_review,
     get_scheduled_lunch_in_for_day,
     get_scheduled_lunch_out_for_day,
     get_scheduled_shift_end_datetime,
@@ -1640,7 +1642,11 @@ def payroll_schedule_csv_upload(request):
             entry.clock_in_early_override_denied = False
             entry.payroll_lunch_review_required = False
             if lo is None and li is None:
-                if get_scheduled_lunch_out_for_day(u, wd) and get_scheduled_lunch_in_for_day(u, wd):
+                if (
+                    get_scheduled_lunch_out_for_day(u, wd)
+                    and get_scheduled_lunch_in_for_day(u, wd)
+                    and not clock_in_at_or_after_scheduled_lunch_in(u, wd, cin)
+                ):
                     entry.payroll_lunch_review_required = True
             entry.save()
             sync_tardy_occurrences_for_time_entry(entry)
@@ -1659,6 +1665,62 @@ def payroll_schedule_csv_upload(request):
     return _payroll_redirect_after_csv_upload(request, week_ending_ref)
 
 
+def _clear_stale_payroll_lunch_review_flags(week_start: date, week_ending: date) -> None:
+    """
+    Clear payroll_lunch_review_required when clock-in is at/after scheduled lunch-in
+    (partial day; lunch period was before work started).
+    """
+    qs = TimeEntry.objects.filter(
+        date__range=[week_start, week_ending],
+        payroll_lunch_review_required=True,
+        clock_in__isnull=False,
+    )
+    for entry in qs.select_related("user"):
+        if clock_in_at_or_after_scheduled_lunch_in(entry.user, entry.date, entry.clock_in):
+            TimeEntry.objects.filter(pk=entry.pk).update(
+                payroll_lunch_review_required=False,
+                lunch_out=None,
+                lunch_in=None,
+            )
+
+
+def _apply_payroll_lunch_disposition(entry, disp: str, approver) -> None:
+    """Apply finalize choice for a CSV row that omitted lunch punches."""
+    if disp == "confirm":
+        entry.payroll_lunch_review_required = False
+        entry.save(update_fields=["payroll_lunch_review_required"])
+        return
+    if disp == "partial":
+        entry.payroll_lunch_review_required = False
+        entry.lunch_out = None
+        entry.lunch_in = None
+        entry.save(
+            update_fields=["payroll_lunch_review_required", "lunch_out", "lunch_in"]
+        )
+        sync_tardy_occurrences_for_time_entry(entry)
+        return
+    if disp == "wtl":
+        wtl = (
+            WorkThroughLunchRequest.objects.filter(
+                user=entry.user,
+                work_date=entry.date,
+                status=TimeOffRequestStatus.PENDING,
+            )
+            .order_by("-id")
+            .first()
+        )
+        if not wtl:
+            wtl = WorkThroughLunchRequest.objects.create(user=entry.user, work_date=entry.date)
+        wtl.approve(approver)
+        TimeEntry.objects.filter(pk=entry.pk).update(
+            lunch_out=None,
+            lunch_in=None,
+            payroll_lunch_review_required=False,
+        )
+        entry.refresh_from_db()
+        sync_tardy_occurrences_for_time_entry(entry)
+
+
 def _build_payroll_close_review_groups(
     week_start: date,
     week_ending: date,
@@ -1669,15 +1731,18 @@ def _build_payroll_close_review_groups(
     omitted lunch on a scheduled-lunch day (payroll_lunch_review_required). Only days with
     a pending item are listed (not the full week).
     """
+    _clear_stale_payroll_lunch_review_flags(week_start, week_ending)
     override_by_eid = defaultdict(dict)
     for row in pending_override_entries:
         override_by_eid[row["entry"].id][row["reason"]] = row["key"]
-    lunch_entries = list(
-        TimeEntry.objects.filter(
+    lunch_entries = [
+        e
+        for e in TimeEntry.objects.filter(
             date__range=[week_start, week_ending],
             payroll_lunch_review_required=True,
         ).select_related("user")
-    )
+        if entry_requires_payroll_lunch_import_review(e)
+    ]
     user_ids = set()
     for row in pending_override_entries:
         user_ids.add(row["entry"].user_id)
@@ -1696,7 +1761,7 @@ def _build_payroll_close_review_groups(
             eid = entry.id if entry else None
             override_unscheduled = override_by_eid.get(eid, {}).get("unscheduled") if eid else None
             override_early = override_by_eid.get(eid, {}).get("early") if eid else None
-            needs_lunch = bool(eid in lunch_eids)
+            needs_lunch = bool(entry and eid in lunch_eids)
             if not (override_unscheduled or override_early or needs_lunch):
                 cur += timedelta(days=1)
                 continue
@@ -1900,48 +1965,29 @@ def close_payroll(request):
             )
             return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
 
-    lunch_review_pending = list(
-        TimeEntry.objects.filter(
+    _clear_stale_payroll_lunch_review_flags(week_start, week_ending)
+    lunch_review_pending = [
+        e.id
+        for e in TimeEntry.objects.filter(
             date__range=[week_start, week_ending],
             payroll_lunch_review_required=True,
-        ).values_list("id", flat=True)
-    )
+        ).select_related("user")
+        if entry_requires_payroll_lunch_import_review(e)
+    ]
     if lunch_review_pending:
         for eid in lunch_review_pending:
             disp = (request.POST.get(f"lunch_disposition_{eid}") or "").strip()
-            if disp not in ("confirm", "wtl"):
+            if disp not in ("confirm", "wtl", "partial"):
                 messages.error(
                     request,
                     "Each row that imported without lunch on a scheduled-lunch day needs a choice: "
-                    "keep scheduled lunch or work through lunch.",
+                    "keep scheduled lunch, work through lunch, or arrived after lunch (no lunch).",
                 )
                 return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
         for eid in lunch_review_pending:
             disp = request.POST.get(f"lunch_disposition_{eid}")
             entry = TimeEntry.objects.get(pk=eid)
-            if disp == "confirm":
-                entry.payroll_lunch_review_required = False
-                entry.save(update_fields=["payroll_lunch_review_required"])
-            else:
-                wtl = (
-                    WorkThroughLunchRequest.objects.filter(
-                        user=entry.user,
-                        work_date=entry.date,
-                        status=TimeOffRequestStatus.PENDING,
-                    )
-                    .order_by("-id")
-                    .first()
-                )
-                if not wtl:
-                    wtl = WorkThroughLunchRequest.objects.create(user=entry.user, work_date=entry.date)
-                wtl.approve(request.user)
-                TimeEntry.objects.filter(pk=entry.pk).update(
-                    lunch_out=None,
-                    lunch_in=None,
-                    payroll_lunch_review_required=False,
-                )
-                entry.refresh_from_db()
-                sync_tardy_occurrences_for_time_entry(entry)
+            _apply_payroll_lunch_disposition(entry, disp, request.user)
 
     # Ensure holiday occurrences exist for this payroll week
     ensure_holiday_occurrences_for_range(week_start, week_ending)

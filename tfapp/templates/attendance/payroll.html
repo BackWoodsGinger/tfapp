@@ -135,8 +135,8 @@
                     </div>
                     <p class="small text-muted mb-2">
                       Times use local HH:MM (same as payroll CSV). Only employees and days listed below need action.
-                      If the CSV omitted lunch on a scheduled-lunch day, choose <strong>keep scheduled lunch</strong>
-                      or <strong>work through lunch</strong> for that row before finalizing.
+                      If the CSV omitted lunch on a scheduled-lunch day, choose how to treat lunch for that row.
+                      Rows where clock-in is at or after scheduled lunch-in are skipped automatically (partial day).
                     </p>
                     {% for group in payroll_close_review_groups %}
                     <div class="card border mb-3 shadow-sm">
@@ -189,6 +189,7 @@
                                   <div class="text-muted mb-1">Import had no lunch (scheduled lunch day)</div>
                                   <label class="form-check form-check-inline"><input class="form-check-input" type="radio" name="lunch_disposition_{{ row.entry.id }}" value="confirm" required> Keep scheduled lunch</label>
                                   <label class="form-check form-check-inline"><input class="form-check-input" type="radio" name="lunch_disposition_{{ row.entry.id }}" value="wtl"> Work through lunch</label>
+                                  <label class="form-check form-check-inline"><input class="form-check-input" type="radio" name="lunch_disposition_{{ row.entry.id }}" value="partial"> Arrived after lunch (no lunch)</label>
                                 </div>
                                 {% endif %}
                                 {% if not row.override_unscheduled_key and not row.override_early_key and not row.needs_lunch_import_review %}

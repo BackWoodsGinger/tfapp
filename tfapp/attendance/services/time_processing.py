@@ -251,6 +251,31 @@ def earliest_clock_in_allowed(user, d: date):
     return scheduled_local - timedelta(minutes=15)
 
 
+def clock_in_at_or_after_scheduled_lunch_in(user, d: date, clock_in_dt) -> bool:
+    """
+    True when the first punch of the day is at or after scheduled lunch return time
+    (partial afternoon shift; no lunch break applies to time worked).
+    """
+    if not clock_in_dt:
+        return False
+    lunch_in_t = get_scheduled_lunch_in_for_day(user, d)
+    if not lunch_in_t:
+        return False
+    clock_in_local_t = timezone.localtime(clock_in_dt).time()
+    return clock_in_local_t >= lunch_in_t
+
+
+def entry_requires_payroll_lunch_import_review(entry) -> bool:
+    """CSV omitted lunch on a scheduled-lunch day and review is still required."""
+    if not getattr(entry, "payroll_lunch_review_required", False):
+        return False
+    if not entry.clock_in:
+        return False
+    if clock_in_at_or_after_scheduled_lunch_in(entry.user, entry.date, entry.clock_in):
+        return False
+    return True
+
+
 def work_through_lunch_approved_for_day(user, d: date) -> bool:
     """
     True if the user has an approved request to work through lunch on date d

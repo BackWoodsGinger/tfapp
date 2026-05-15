@@ -4,7 +4,9 @@ Import from here remains stable for existing call sites.
 """
 from attendance.services.time_processing import (  # noqa: F401
     TIME_FMT,
+    clock_in_at_or_after_scheduled_lunch_in,
     clock_in_requires_approver,
+    entry_requires_payroll_lunch_import_review,
     crosses_midnight_for_day,
     earliest_clock_in_allowed,
     get_scheduled_end_time_for_day,

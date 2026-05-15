@@ -1420,6 +1420,57 @@ class TestNetTardyRecovery(TestCase):
         self.assertAlmostEqual(entry.net_scheduled_start_tardy_loss_hours(), 2.0, places=1)
 
 
+class TestPayrollLunchImportReview(TestCase):
+    """CSV lunch review flag and partial-day auto-skip when clock-in is at/after lunch-in."""
+
+    def setUp(self):
+        self.user = CustomUser.objects.create_user(username="lunchrev", password="testpass")
+        WorkSchedule.objects.create(
+            user=self.user,
+            day=0,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+
+    def test_clock_in_at_lunch_in_does_not_require_review(self):
+        from attendance.services.time_processing import (
+            clock_in_at_or_after_scheduled_lunch_in,
+            entry_requires_payroll_lunch_import_review,
+        )
+
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)
+        ci = timezone.make_aware(datetime(2025, 3, 3, 11, 30, 0), tz)
+        co = timezone.make_aware(datetime(2025, 3, 3, 15, 30, 0), tz)
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=d,
+            clock_in=ci,
+            clock_out=co,
+            payroll_lunch_review_required=True,
+        )
+        self.assertTrue(clock_in_at_or_after_scheduled_lunch_in(self.user, d, ci))
+        self.assertFalse(entry_requires_payroll_lunch_import_review(entry))
+
+    def test_full_shift_missing_lunch_requires_review(self):
+        from attendance.services.time_processing import entry_requires_payroll_lunch_import_review
+
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)
+        ci = timezone.make_aware(datetime(2025, 3, 3, 5, 0, 0), tz)
+        co = timezone.make_aware(datetime(2025, 3, 3, 15, 30, 0), tz)
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=d,
+            clock_in=ci,
+            clock_out=co,
+            payroll_lunch_review_required=True,
+        )
+        self.assertTrue(entry_requires_payroll_lunch_import_review(entry))
+
+
 class TestPayrollCsvClockOutCalendarDate(TestCase):
     """CSV import anchors clock_out on the correct calendar day for overnight pairs."""
 
