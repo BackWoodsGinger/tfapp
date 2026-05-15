@@ -1215,11 +1215,8 @@ def payroll_view(request):
     pending_override_entries = attendance_engine.entries_requiring_clock_in_override(
         start_of_week, end_of_week
     )
-    pending_wtl_entries = attendance_engine.entries_requiring_work_through_lunch_signoff(
-        start_of_week, end_of_week
-    )
     payroll_close_review_groups = _build_payroll_close_review_groups(
-        start_of_week, end_of_week, pending_override_entries, pending_wtl_entries
+        start_of_week, end_of_week, pending_override_entries
     )
 
     return render(request, "attendance/payroll.html", {
@@ -1234,7 +1231,6 @@ def payroll_view(request):
         "payroll_weeks_display": payroll_weeks_display,
         "payroll_finalized": payroll_finalized,
         "pending_override_entries": pending_override_entries,
-        "pending_wtl_entries": pending_wtl_entries,
         "payroll_close_review_groups": payroll_close_review_groups,
         "user_service_dates_json": json.dumps(user_service_dates),
         "today_iso": today.isoformat(),
@@ -1667,34 +1663,30 @@ def _build_payroll_close_review_groups(
     week_start: date,
     week_ending: date,
     pending_override_entries,
-    pending_wtl_entries,
 ):
     """
-    Employees who need payroll review this week, each with all seven days and pending flags.
-    Used by the Close Payroll modal (grouped layout).
+    Employees who need payroll review this week: clock-in overrides and/or CSV rows that
+    omitted lunch on a scheduled-lunch day (payroll_lunch_review_required). Only days with
+    a pending item are listed (not the full week).
     """
     override_by_eid = defaultdict(dict)
     for row in pending_override_entries:
         override_by_eid[row["entry"].id][row["reason"]] = row["key"]
-    wtl_eids = {row["entry"].id for row in pending_wtl_entries}
-    lunch_eids = set(
+    lunch_entries = list(
         TimeEntry.objects.filter(
             date__range=[week_start, week_ending],
             payroll_lunch_review_required=True,
-        ).values_list("id", flat=True)
+        ).select_related("user")
     )
     user_ids = set()
     for row in pending_override_entries:
         user_ids.add(row["entry"].user_id)
-    for row in pending_wtl_entries:
-        user_ids.add(row["entry"].user_id)
-    for eid in lunch_eids:
-        uid = TimeEntry.objects.filter(pk=eid).values_list("user_id", flat=True).first()
-        if uid:
-            user_ids.add(uid)
+    for entry in lunch_entries:
+        user_ids.add(entry.user_id)
     if not user_ids:
         return []
     users = sorted(CustomUser.objects.filter(id__in=user_ids), key=_payroll_sort_key)
+    lunch_eids = {e.id for e in lunch_entries}
     groups = []
     for u in users:
         rows = []
@@ -1702,6 +1694,12 @@ def _build_payroll_close_review_groups(
         while cur <= week_ending:
             entry = TimeEntry.objects.filter(user=u, date=cur).first()
             eid = entry.id if entry else None
+            override_unscheduled = override_by_eid.get(eid, {}).get("unscheduled") if eid else None
+            override_early = override_by_eid.get(eid, {}).get("early") if eid else None
+            needs_lunch = bool(eid in lunch_eids)
+            if not (override_unscheduled or override_early or needs_lunch):
+                cur += timedelta(days=1)
+                continue
             display = None
             if entry:
                 display = {
@@ -1715,14 +1713,14 @@ def _build_payroll_close_review_groups(
                     "date": cur,
                     "entry": entry,
                     "display": display,
-                    "override_unscheduled_key": override_by_eid.get(eid, {}).get("unscheduled") if eid else None,
-                    "override_early_key": override_by_eid.get(eid, {}).get("early") if eid else None,
-                    "needs_lunch_import_review": bool(entry and entry.payroll_lunch_review_required),
-                    "needs_wtl_candidate": bool(eid in wtl_eids and entry and not entry.payroll_lunch_review_required),
+                    "override_unscheduled_key": override_unscheduled,
+                    "override_early_key": override_early,
+                    "needs_lunch_import_review": needs_lunch,
                 }
             )
             cur += timedelta(days=1)
-        groups.append({"user": u, "rows": rows})
+        if rows:
+            groups.append({"user": u, "rows": rows})
     return groups
 
 
@@ -1944,80 +1942,6 @@ def close_payroll(request):
                 )
                 entry.refresh_from_db()
                 sync_tardy_occurrences_for_time_entry(entry)
-
-    approve_all_wtl = (request.POST.get("approve_missing_work_through_lunches") or "").lower() in {
-        "1",
-        "true",
-        "on",
-        "yes",
-    }
-    has_wtl_post = approve_all_wtl or request.POST.getlist(
-        "approved_wtl_entry_ids"
-    ) or request.POST.getlist("denied_wtl_entry_ids")
-    if has_wtl_post:
-        pending_wtl_post = attendance_engine.entries_requiring_work_through_lunch_signoff(
-            week_start, week_ending
-        )
-        selected_wtl = {
-            v.strip()
-            for v in request.POST.getlist("approved_wtl_entry_ids")
-            if (v or "").strip()
-        }
-        denied_wtl = {
-            v.strip()
-            for v in request.POST.getlist("denied_wtl_entry_ids")
-            if (v or "").strip()
-        }
-        approvable_wtl = {str(row["entry"].pk) for row in pending_wtl_post}
-        conflicting_wtl = selected_wtl.intersection(denied_wtl).intersection(approvable_wtl)
-        if conflicting_wtl:
-            messages.error(
-                request,
-                "A work-through lunch row cannot be both approved and denied. Update selections and try again.",
-            )
-            return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
-        if approve_all_wtl:
-            keys_to_approve_wtl = sorted(approvable_wtl)
-        else:
-            keys_to_approve_wtl = sorted(selected_wtl.intersection(approvable_wtl))
-        keys_to_deny_wtl = sorted(denied_wtl.intersection(approvable_wtl))
-
-        for sid in keys_to_approve_wtl:
-            if not sid.isdigit():
-                continue
-            entry = TimeEntry.objects.get(pk=int(sid))
-            wtl = (
-                WorkThroughLunchRequest.objects.filter(
-                    user=entry.user,
-                    work_date=entry.date,
-                    status=TimeOffRequestStatus.PENDING,
-                )
-                .order_by("-id")
-                .first()
-            )
-            if not wtl:
-                wtl = WorkThroughLunchRequest.objects.create(user=entry.user, work_date=entry.date)
-            wtl.approve(request.user)
-            TimeEntry.objects.filter(pk=entry.pk).update(lunch_out=None, lunch_in=None)
-            entry.refresh_from_db()
-            sync_tardy_occurrences_for_time_entry(entry)
-
-        for sid in keys_to_deny_wtl:
-            if not sid.isdigit():
-                continue
-            entry = TimeEntry.objects.get(pk=int(sid))
-            wtl = (
-                WorkThroughLunchRequest.objects.filter(
-                    user=entry.user,
-                    work_date=entry.date,
-                    status=TimeOffRequestStatus.PENDING,
-                )
-                .order_by("-id")
-                .first()
-            )
-            if not wtl:
-                wtl = WorkThroughLunchRequest.objects.create(user=entry.user, work_date=entry.date)
-            wtl.deny(request.user)
 
     # Ensure holiday occurrences exist for this payroll week
     ensure_holiday_occurrences_for_range(week_start, week_ending)
