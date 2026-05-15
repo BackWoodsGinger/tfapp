@@ -193,12 +193,14 @@ class TimeEntry(models.Model):
           5+ min late rounds up from scheduled start to next 15-min mark.
         - clock-out rounds down to prior 15-min mark.
         - lunch uses quarter-hour rounding (out down, in up) with 30-minute minimum.
-        - final total never exceeds actual worked hours floored to a quarter hour.
+        - final total never exceeds actual worked hours floored to a quarter hour,
+          except tardy-in-grace (<=4 min late) where schedule-start credit applies.
         Keeps actual punches untouched while reporting payroll-compliant hours.
         """
         if not (self.clock_in and self.clock_out):
             return 0.0
 
+        minutes_late = None  # set on scheduled days from tardy rules
         scheduled_start = self._scheduled_start_time_for_date()
         if not scheduled_start:
             # Unscheduled day: payroll-approved shift uses posted/edited clock-in;
@@ -223,8 +225,11 @@ class TimeEntry(models.Model):
                 adjusted_in = clock_in_local.replace(
                     minute=adjusted_minutes, second=0, microsecond=0
                 )
+                minutes_late, _ = self._tardy_minutes_and_adjusted_start(
+                    self.clock_in, scheduled_start
+                )
             else:
-                _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+                minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
                     self.clock_in, scheduled_start
                 )
 
@@ -240,8 +245,13 @@ class TimeEntry(models.Model):
 
         seconds = max((worked - lunch).total_seconds(), 0)
         policy_reported = self._floor_seconds_to_quarter_hours(seconds)
+        # Grace tardy credits from schedule start (policy > actual by a few minutes).
+        if minutes_late is not None and minutes_late <= 4:
+            return policy_reported
         actual_cap = self._floor_seconds_to_quarter_hours(self._worked_seconds())
-        return min(policy_reported, actual_cap)
+        if policy_reported > actual_cap:
+            return actual_cap
+        return policy_reported
 
     def rounded_start(self):
         if self.clock_in:

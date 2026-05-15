@@ -389,6 +389,30 @@ class TestTardyOccurrence(TestCase):
         self.assertIsNotNone(in_grace)
         self.assertEqual(in_grace.duration_hours, 0.0)
 
+    def test_tardy_in_grace_does_not_dock_reported_hours(self):
+        """1–4 min late: occurrence only; reported hours credit from schedule start."""
+        tz = timezone.get_current_timezone()
+        d = date(2025, 3, 3)  # Monday (matches WorkSchedule day=0)
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=d,
+            clock_in=timezone.make_aware(datetime(2025, 3, 3, 8, 1, 0), tz),
+            lunch_out=timezone.make_aware(datetime(2025, 3, 3, 12, 0, 0), tz),
+            lunch_in=timezone.make_aware(datetime(2025, 3, 3, 12, 30, 0), tz),
+            clock_out=timezone.make_aware(datetime(2025, 3, 3, 17, 0, 0), tz),
+        )
+        entry.check_tardy()
+        self.assertTrue(
+            Occurrence.objects.filter(
+                user=self.user,
+                date=d,
+                subtype=OccurrenceSubtype.TARDY_IN_GRACE,
+            ).exists()
+        )
+        self.assertAlmostEqual(entry.actual_worked_hours(), 8.48, places=2)
+        self.assertAlmostEqual(entry.reported_worked_hours(), 8.5, places=2)
+        self.assertGreaterEqual(entry.reported_worked_hours(), entry.actual_worked_hours())
+
     def test_reported_hours_allow_late_stay_to_recover_tardy(self):
         """8:08 in (tardy) and 17:47 out reports as 9.00 with quarter-hour rules."""
         tz = timezone.get_current_timezone()
@@ -1457,8 +1481,10 @@ class TestEarlyOverrideReportedHours(TestCase):
         )
         actual = entry.actual_worked_hours()
         reported = entry.reported_worked_hours()
-        self.assertLessEqual(reported, actual)
+        self.assertAlmostEqual(actual, 12.27, places=2)
+        # 14 min late (out of grace): no tardy round-up to 13:15 on clock-in; cap floors to actual.
         self.assertAlmostEqual(reported, 12.25, places=2)
+        self.assertLess(reported, 12.5)
 
     def test_early_authorized_partial_shift_floors_to_actual_not_quarter_up(self):
         """Short outside-normal shift: 4.37 actual must not report as 4.5."""
