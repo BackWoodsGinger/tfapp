@@ -1640,6 +1640,8 @@ def payroll_schedule_csv_upload(request):
             entry.clock_out = cout
             entry.clock_in_override_denied = False
             entry.clock_in_early_override_denied = False
+            entry.clock_in_authorized_by = None
+            entry.clock_in_early_authorized_by = None
             entry.payroll_lunch_review_required = False
             if lo is None and li is None:
                 if (
@@ -1939,13 +1941,6 @@ def close_payroll(request):
                 clock_in_authorized_by=request.user,
                 clock_in_override_denied=False,
             )
-            for eid in approve_unscheduled_ids:
-                entry = TimeEntry.objects.get(pk=eid)
-                if attendance_engine.unscheduled_entry_includes_early_credit(entry):
-                    TimeEntry.objects.filter(pk=eid).update(
-                        clock_in_early_authorized_by=request.user,
-                        clock_in_early_override_denied=False,
-                    )
         if approve_early_ids:
             TimeEntry.objects.filter(id__in=approve_early_ids).update(
                 clock_in_early_authorized_by=request.user,

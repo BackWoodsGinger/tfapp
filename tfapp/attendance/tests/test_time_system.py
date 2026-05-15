@@ -1,8 +1,10 @@
 """
 Automated tests for the time/clock system: TimeEntry model, punch flow, guards, and rounding.
 """
+import io
 from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase, Client
 from django.urls import reverse
@@ -1109,6 +1111,56 @@ class TestPayrollCloseOverrideApproval(TestCase):
             clock_out=timezone.make_aware(datetime(d.year, d.month, d.day, out_h, out_m, 0), self.tz),
         )
 
+    def test_csv_import_clears_clock_in_authorization_so_unscheduled_review_appears(self):
+        user = CustomUser.objects.create_user(
+            username="csvunsched",
+            password="x",
+            payroll_lastname="Test",
+            payroll_firstname="Csv",
+            is_exempt=False,
+        )
+        WorkSchedule.objects.create(
+            user=user,
+            day=0,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        entry = self._entry(user, date(2025, 3, 7), 4, 45, 15, 30)
+        entry.clock_in_authorized_by = self.admin
+        entry.clock_in_early_authorized_by = self.admin
+        entry.save()
+        self.assertEqual(
+            attendance_engine.entries_requiring_clock_in_override(
+                date(2025, 3, 2), date(2025, 3, 8)
+            ),
+            [],
+        )
+
+        csv_body = (
+            "week_ending,payroll_lastname,payroll_firstname,work_date,clock_in,lunch_out,lunch_in,clock_out\n"
+            "2025-03-08,Test,Csv,2025-03-07,04:45,,,15:30\n"
+        )
+        upload_url = reverse("attendance:payroll_schedule_csv_upload")
+        response = self.client.post(
+            upload_url,
+            {
+                "time_entries_csv": SimpleUploadedFile(
+                    "entries.csv", csv_body.encode("utf-8"), content_type="text/csv"
+                ),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        entry.refresh_from_db()
+        self.assertIsNone(entry.clock_in_authorized_by_id)
+        self.assertIsNone(entry.clock_in_early_authorized_by_id)
+        pending = attendance_engine.entries_requiring_clock_in_override(
+            date(2025, 3, 2), date(2025, 3, 8)
+        )
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["reason"], "unscheduled")
+
     def test_finalize_blocks_when_missing_override_not_approved(self):
         user = CustomUser.objects.create_user(username="needoverride1", password="x")
         WorkSchedule.objects.create(
@@ -1154,7 +1206,7 @@ class TestPayrollCloseOverrideApproval(TestCase):
         self.assertEqual(response.status_code, 200)
         entry.refresh_from_db()
         self.assertEqual(entry.clock_in_authorized_by_id, self.admin.id)
-        self.assertEqual(entry.clock_in_early_authorized_by_id, self.admin.id)
+        self.assertIsNone(entry.clock_in_early_authorized_by_id)
         self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
 
     def test_finalize_with_partial_selection_keeps_unreviewed_pending(self):
@@ -1303,6 +1355,18 @@ class TestReportedHoursOverridesAndLunchRounding(TestCase):
             clock_out=self._dt(2025, 3, 7, 15, 30),
         )
         self.assertAlmostEqual(entry.reported_worked_hours(), 10.0, places=2)
+
+    def test_unscheduled_approved_credits_posted_clock_in_without_early_override(self):
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2025, 3, 7),
+            clock_in=self._dt(2025, 3, 7, 4, 45),
+            lunch_out=self._dt(2025, 3, 7, 11, 0),
+            lunch_in=self._dt(2025, 3, 7, 11, 30),
+            clock_out=self._dt(2025, 3, 7, 15, 30),
+            clock_in_authorized_by=self.approver,
+        )
+        self.assertAlmostEqual(entry.reported_worked_hours(), 10.25, places=2)
 
     def test_long_lunch_result_is_floored_to_quarter_hour(self):
         entry = TimeEntry.objects.create(

@@ -24,30 +24,10 @@ from attendance.services.time_processing import (
 from timeclock.models import TimeEntry
 
 
-def unscheduled_entry_includes_early_credit(entry) -> bool:
-    """
-    On an unscheduled work day, True when clock-in is before the inferred reference
-    start from nearby scheduled days (early-arrival credit is bundled into unscheduled approval).
-    """
-    if get_scheduled_start_for_day(entry.user, entry.date):
-        return False
-    if not entry.clock_in:
-        return False
-    fallback_start = entry._fallback_scheduled_start_time_for_unscheduled_day()
-    if not fallback_start:
-        return False
-    clock_in_local = django_tz.localtime(entry.clock_in)
-    fallback_local = django_tz.make_aware(
-        datetime.combine(entry.date, fallback_start),
-        django_tz.get_current_timezone(),
-    )
-    return clock_in_local <= fallback_local
-
-
 def entries_requiring_clock_in_override(week_start: date, week_ending: date):
     """
     Time entries in week that require clock-in override approval but do not have it yet.
-    Returns list of dicts: entry, reason, key, label, hint, includes_early_credit.
+    Returns list of dicts: entry, reason, key, label.
 
     Unscheduled days use one approval row (not a separate "early clock-in" row).
     """
@@ -66,21 +46,12 @@ def entries_requiring_clock_in_override(week_start: date, week_ending: date):
         if reason == "unscheduled":
             if e.clock_in_authorized_by_id or e.clock_in_override_denied:
                 continue
-            includes_early = unscheduled_entry_includes_early_credit(e)
-            hint = ""
-            if includes_early:
-                hint = (
-                    "Clock-in is before the usual start from nearby scheduled days; "
-                    "approving also credits that early arrival."
-                )
             out.append(
                 {
                     "entry": e,
                     "reason": "unscheduled",
                     "key": f"{e.id}:unscheduled",
                     "label": "Unscheduled shift",
-                    "hint": hint,
-                    "includes_early_credit": includes_early,
                 }
             )
         elif reason == "early":
@@ -92,8 +63,6 @@ def entries_requiring_clock_in_override(week_start: date, week_ending: date):
                     "reason": "early",
                     "key": f"{e.id}:early",
                     "label": "Early clock-in (before scheduled start)",
-                    "hint": "",
-                    "includes_early_credit": False,
                 }
             )
     return out

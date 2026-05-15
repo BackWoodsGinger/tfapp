@@ -159,6 +159,10 @@ header #main-header {
  * (Card body keeps light CSS variables for non-table copy; tables reset below.)
  */
 .card-body .table {
+  --bs-body-color: #212529;
+  --bs-body-color-rgb: 33, 37, 41;
+  --bs-emphasis-color: #1a1d20;
+  --bs-emphasis-color-rgb: 26, 29, 32;
   --bs-table-color: #212529;
   --bs-table-bg: #f1f3f5;
   --bs-table-striped-color: #212529;
@@ -170,6 +174,10 @@ header #main-header {
   --bs-table-border-color: rgba(0, 0, 0, 0.14);
   --bs-secondary-color: rgba(33, 37, 41, 0.65);
   --bs-tertiary-color: rgba(33, 37, 41, 0.45);
+}
+
+.card-body .table .form-check-label {
+  color: #212529;
 }
 
 .card-body .table thead th,

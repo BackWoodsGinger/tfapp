@@ -194,22 +194,20 @@ class TimeEntry(models.Model):
 
         scheduled_start = self._scheduled_start_time_for_date()
         if not scheduled_start:
-            # Unscheduled day: only credit early time when an approver override exists.
-            fallback_start = self._fallback_scheduled_start_time_for_unscheduled_day()
+            # Unscheduled day: payroll-approved shift uses posted/edited clock-in;
+            # otherwise dock early arrival vs inferred start from nearby scheduled days.
             clock_in_local = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
             anchor_date = clock_in_local.date()
-            if not fallback_start:
+            if self.clock_in_authorized_by:
                 adjusted_in = clock_in_local
-            elif self.clock_in_authorized_by and self.clock_in_early_authorized_by:
-                adjusted_in = clock_in_local
-            elif self.clock_in_authorized_by:
-                _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
-                    self.clock_in, fallback_start, anchor_date=anchor_date
-                )
             else:
-                _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
-                    self.clock_in, fallback_start, anchor_date=anchor_date
-                )
+                fallback_start = self._fallback_scheduled_start_time_for_unscheduled_day()
+                if not fallback_start:
+                    adjusted_in = clock_in_local
+                else:
+                    _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+                        self.clock_in, fallback_start, anchor_date=anchor_date
+                    )
         else:
             # Scheduled day: early clock-ins require override to be credited.
             if self.clock_in_early_authorized_by:
