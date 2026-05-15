@@ -24,10 +24,32 @@ from attendance.services.time_processing import (
 from timeclock.models import TimeEntry
 
 
+def unscheduled_entry_includes_early_credit(entry) -> bool:
+    """
+    On an unscheduled work day, True when clock-in is before the inferred reference
+    start from nearby scheduled days (early-arrival credit is bundled into unscheduled approval).
+    """
+    if get_scheduled_start_for_day(entry.user, entry.date):
+        return False
+    if not entry.clock_in:
+        return False
+    fallback_start = entry._fallback_scheduled_start_time_for_unscheduled_day()
+    if not fallback_start:
+        return False
+    clock_in_local = django_tz.localtime(entry.clock_in)
+    fallback_local = django_tz.make_aware(
+        datetime.combine(entry.date, fallback_start),
+        django_tz.get_current_timezone(),
+    )
+    return clock_in_local <= fallback_local
+
+
 def entries_requiring_clock_in_override(week_start: date, week_ending: date):
     """
     Time entries in week that require clock-in override approval but do not have it yet.
-    Returns list of dicts: entry, reason, key.
+    Returns list of dicts: entry, reason, key, label, hint, includes_early_credit.
+
+    Unscheduled days use one approval row (not a separate "early clock-in" row).
     """
     out = []
     rows = (
@@ -40,43 +62,40 @@ def entries_requiring_clock_in_override(week_start: date, week_ending: date):
     )
     for e in rows:
         clock_in_local = django_tz.localtime(e.clock_in)
-        requires, reason = clock_in_requires_approver(e.user, clock_in_local, e.date)
+        _requires, reason = clock_in_requires_approver(e.user, clock_in_local, e.date)
         if reason == "unscheduled":
-            if not e.clock_in_authorized_by_id and not e.clock_in_override_denied:
-                out.append(
-                    {
-                        "entry": e,
-                        "reason": "unscheduled",
-                        "key": f"{e.id}:unscheduled",
-                    }
+            if e.clock_in_authorized_by_id or e.clock_in_override_denied:
+                continue
+            includes_early = unscheduled_entry_includes_early_credit(e)
+            hint = ""
+            if includes_early:
+                hint = (
+                    "Clock-in is before the usual start from nearby scheduled days; "
+                    "approving also credits that early arrival."
                 )
-            fallback_start = e._fallback_scheduled_start_time_for_unscheduled_day()
-            if fallback_start:
-                fallback_local = django_tz.make_aware(
-                    datetime.combine(e.date, fallback_start),
-                    django_tz.get_current_timezone(),
-                )
-                if (
-                    clock_in_local <= fallback_local
-                    and not e.clock_in_early_authorized_by_id
-                    and not e.clock_in_early_override_denied
-                ):
-                    out.append(
-                        {
-                            "entry": e,
-                            "reason": "early",
-                            "key": f"{e.id}:early",
-                        }
-                    )
+            out.append(
+                {
+                    "entry": e,
+                    "reason": "unscheduled",
+                    "key": f"{e.id}:unscheduled",
+                    "label": "Unscheduled shift",
+                    "hint": hint,
+                    "includes_early_credit": includes_early,
+                }
+            )
         elif reason == "early":
-            if not e.clock_in_early_authorized_by_id and not e.clock_in_early_override_denied:
-                out.append(
-                    {
-                        "entry": e,
-                        "reason": "early",
-                        "key": f"{e.id}:early",
-                    }
-                )
+            if e.clock_in_early_authorized_by_id or e.clock_in_early_override_denied:
+                continue
+            out.append(
+                {
+                    "entry": e,
+                    "reason": "early",
+                    "key": f"{e.id}:early",
+                    "label": "Early clock-in (before scheduled start)",
+                    "hint": "",
+                    "includes_early_credit": False,
+                }
+            )
     return out
 
 

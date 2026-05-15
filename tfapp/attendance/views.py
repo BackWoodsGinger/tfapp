@@ -1732,9 +1732,9 @@ def _build_payroll_close_review_groups(
     a pending item are listed (not the full week).
     """
     _clear_stale_payroll_lunch_review_flags(week_start, week_ending)
-    override_by_eid = defaultdict(dict)
+    override_by_eid = defaultdict(list)
     for row in pending_override_entries:
-        override_by_eid[row["entry"].id][row["reason"]] = row["key"]
+        override_by_eid[row["entry"].id].append(row)
     lunch_entries = [
         e
         for e in TimeEntry.objects.filter(
@@ -1759,10 +1759,9 @@ def _build_payroll_close_review_groups(
         while cur <= week_ending:
             entry = TimeEntry.objects.filter(user=u, date=cur).first()
             eid = entry.id if entry else None
-            override_unscheduled = override_by_eid.get(eid, {}).get("unscheduled") if eid else None
-            override_early = override_by_eid.get(eid, {}).get("early") if eid else None
+            override_items = override_by_eid.get(eid, []) if eid else []
             needs_lunch = bool(entry and eid in lunch_eids)
-            if not (override_unscheduled or override_early or needs_lunch):
+            if not (override_items or needs_lunch):
                 cur += timedelta(days=1)
                 continue
             display = None
@@ -1778,8 +1777,7 @@ def _build_payroll_close_review_groups(
                     "date": cur,
                     "entry": entry,
                     "display": display,
-                    "override_unscheduled_key": override_unscheduled,
-                    "override_early_key": override_early,
+                    "override_items": override_items,
                     "needs_lunch_import_review": needs_lunch,
                 }
             )
@@ -1941,6 +1939,13 @@ def close_payroll(request):
                 clock_in_authorized_by=request.user,
                 clock_in_override_denied=False,
             )
+            for eid in approve_unscheduled_ids:
+                entry = TimeEntry.objects.get(pk=eid)
+                if attendance_engine.unscheduled_entry_includes_early_credit(entry):
+                    TimeEntry.objects.filter(pk=eid).update(
+                        clock_in_early_authorized_by=request.user,
+                        clock_in_early_override_denied=False,
+                    )
         if approve_early_ids:
             TimeEntry.objects.filter(id__in=approve_early_ids).update(
                 clock_in_early_authorized_by=request.user,

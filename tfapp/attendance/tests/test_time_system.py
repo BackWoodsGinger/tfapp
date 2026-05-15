@@ -8,6 +8,7 @@ from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
 
+from attendance.services import attendance_engine
 from attendance.models import (
     CustomUser,
     Occurrence,
@@ -1135,16 +1136,25 @@ class TestPayrollCloseOverrideApproval(TestCase):
         )
         entry = self._entry(user, date(2025, 3, 7), 4, 45, 15, 30)  # Friday unscheduled early
 
+        pending = attendance_engine.entries_requiring_clock_in_override(
+            date(2025, 3, 2), date(2025, 3, 8)
+        )
+        entry_pending = [r for r in pending if r["entry"].id == entry.id]
+        self.assertEqual(len(entry_pending), 1)
+        self.assertEqual(entry_pending[0]["reason"], "unscheduled")
+        self.assertEqual(entry_pending[0]["label"], "Unscheduled shift")
+
         response = self.client.post(
             self.close_url,
             {
                 "week_ending": "2025-03-08",
-                "approved_override_entry_ids": [f"{entry.id}:unscheduled", f"{entry.id}:early"],
+                "approved_override_entry_ids": [f"{entry.id}:unscheduled"],
             },
         )
         self.assertEqual(response.status_code, 200)
         entry.refresh_from_db()
         self.assertEqual(entry.clock_in_authorized_by_id, self.admin.id)
+        self.assertEqual(entry.clock_in_early_authorized_by_id, self.admin.id)
         self.assertTrue(PayrollPeriod.objects.get(week_ending=date(2025, 3, 8)).is_finalized)
 
     def test_finalize_with_partial_selection_keeps_unreviewed_pending(self):

@@ -170,20 +170,14 @@
                                 <a href="{% url 'timeclock:edit_entry' row.entry.slug %}" target="_blank" rel="noopener noreferrer" class="small">Full edit</a>
                               </td>
                               <td class="small">
-                                {% if row.override_unscheduled_key %}
-                                <div class="mb-1">
-                                  <span class="text-muted">Unscheduled</span>
-                                  <label class="form-check form-check-inline ms-1"><input class="form-check-input" type="checkbox" name="approved_override_entry_ids" value="{{ row.override_unscheduled_key }}"> Approve</label>
-                                  <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="denied_override_entry_ids" value="{{ row.override_unscheduled_key }}"> Deny</label>
+                                {% for item in row.override_items %}
+                                <div class="mb-1{% if not forloop.first %} border-top pt-1 mt-1{% endif %}">
+                                  <div class="fw-medium text-body">{{ item.label }}</div>
+                                  {% if item.hint %}<div class="text-muted small">{{ item.hint }}</div>{% endif %}
+                                  <label class="form-check form-check-inline ms-1"><input class="form-check-input" type="checkbox" name="approved_override_entry_ids" value="{{ item.key }}"> Approve</label>
+                                  <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="denied_override_entry_ids" value="{{ item.key }}"> Deny</label>
                                 </div>
-                                {% endif %}
-                                {% if row.override_early_key %}
-                                <div class="mb-1">
-                                  <span class="text-muted">Early clock-in</span>
-                                  <label class="form-check form-check-inline ms-1"><input class="form-check-input" type="checkbox" name="approved_override_entry_ids" value="{{ row.override_early_key }}"> Approve</label>
-                                  <label class="form-check form-check-inline"><input class="form-check-input" type="checkbox" name="denied_override_entry_ids" value="{{ row.override_early_key }}"> Deny</label>
-                                </div>
-                                {% endif %}
+                                {% endfor %}
                                 {% if row.needs_lunch_import_review %}
                                 <div class="mb-1 border-top pt-1 mt-1">
                                   <div class="text-muted mb-1">Import had no lunch (scheduled lunch day)</div>
@@ -192,7 +186,7 @@
                                   <label class="form-check form-check-inline"><input class="form-check-input" type="radio" name="lunch_disposition_{{ row.entry.id }}" value="partial"> Arrived after lunch (no lunch)</label>
                                 </div>
                                 {% endif %}
-                                {% if not row.override_unscheduled_key and not row.override_early_key and not row.needs_lunch_import_review %}
+                                {% if not row.override_items and not row.needs_lunch_import_review %}
                                 <span class="text-muted">—</span>
                                 {% endif %}
                               </td>
