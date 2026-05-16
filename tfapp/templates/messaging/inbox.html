@@ -15,11 +15,11 @@
     <a class="btn btn-primary btn-sm" href="{% url 'messaging:group_create' %}">New group</a>
   </div>
   {% if rows %}
-  <div class="list-group shadow-sm">
+  <div class="list-group shadow-sm messaging-inbox-list">
     {% for row in rows %}
-    <a href="{% url 'messaging:thread' row.conversation.pk %}" class="list-group-item list-group-item-action px-3 py-3 text-decoration-none text-reset">
+    <a href="{% url 'messaging:thread' row.conversation.pk %}" class="list-group-item list-group-item-action px-3 py-3 text-decoration-none">
       <div class="d-flex justify-content-between gap-2">
-        <div class="fw-semibold">{{ row.title }}</div>
+        <div class="fw-semibold text-dark">{{ row.title }}</div>
         <div class="small text-muted text-nowrap">{{ row.last_at|date:"M j, g:i A" }}</div>
       </div>
       {% if row.last_preview %}

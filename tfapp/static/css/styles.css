@@ -333,6 +333,37 @@ input[type="date"].form-control {
   max-width: 100%;
 }
 
+/*
+ * Messaging inbox: list-group sits on the page container (not a dark card-body).
+ * body { color: #fff } + .text-reset made titles inherit white on the light list bg.
+ */
+.messaging-inbox-list {
+  --bs-list-group-color: #212529;
+  --bs-list-group-bg: #fff;
+  --bs-list-group-border-color: rgba(0, 0, 0, 0.125);
+  --bs-list-group-action-color: #212529;
+  --bs-list-group-action-hover-color: #1a1d20;
+  --bs-list-group-action-hover-bg: #f8f9fa;
+  --bs-list-group-action-active-color: #fff;
+  --bs-list-group-action-active-bg: #313198;
+  --bs-secondary-color: rgba(33, 37, 41, 0.65);
+}
+
+.messaging-inbox-list .list-group-item-action {
+  color: #212529;
+  background-color: #fff;
+}
+
+.messaging-inbox-list .list-group-item-action:hover,
+.messaging-inbox-list .list-group-item-action:focus {
+  color: #1a1d20;
+  background-color: #f8f9fa;
+}
+
+.messaging-inbox-list .text-muted {
+  color: rgba(33, 37, 41, 0.65) !important;
+}
+
 /* Payroll weekly import: align file input with buttons across Firefox / WebKit / Chromium */
 .payroll-schedule-import {
   color-scheme: dark;
