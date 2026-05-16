@@ -1510,6 +1510,30 @@ class TestEarlyOverrideReportedHours(TestCase):
         self.assertAlmostEqual(entry.reported_worked_hours(), 4.25, places=2)
         self.assertLess(entry.reported_worked_hours(), entry.actual_worked_hours())
 
+    def test_early_authorized_in_grace_window_still_capped_to_actual(self):
+        """Early override + 1 min late must not bypass the no-round-up cap."""
+        user = CustomUser.objects.create_user(username="earlygrace", password="x")
+        WorkSchedule.objects.create(
+            user=user,
+            day=3,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+        tz = timezone.get_current_timezone()
+        entry = TimeEntry.objects.create(
+            user=user,
+            date=date(2026, 4, 30),
+            clock_in=timezone.make_aware(datetime(2026, 4, 30, 5, 1, 0), tz),
+            lunch_out=timezone.make_aware(datetime(2026, 4, 30, 11, 0, 0), tz),
+            lunch_in=timezone.make_aware(datetime(2026, 4, 30, 11, 30, 0), tz),
+            clock_out=timezone.make_aware(datetime(2026, 4, 30, 15, 36, 0), tz),
+            clock_in_early_authorized_by=self.approver,
+        )
+        self.assertAlmostEqual(entry.actual_worked_hours(), 10.08, places=2)
+        self.assertAlmostEqual(entry.reported_worked_hours(), 10.0, places=2)
+
     def test_early_authorized_never_rounds_up_from_ten_ten_actual(self):
         user = CustomUser.objects.create_user(username="pricecase", password="x")
         WorkSchedule.objects.create(

@@ -245,8 +245,14 @@ class TimeEntry(models.Model):
 
         seconds = max((worked - lunch).total_seconds(), 0)
         policy_reported = self._floor_seconds_to_quarter_hours(seconds)
-        # Grace tardy credits from schedule start (policy > actual by a few minutes).
-        if minutes_late is not None and minutes_late <= 4:
+        # Grace tardy (1–4 min late, no early override): credit schedule start; do not cap.
+        # Early-authorized and on-time rows still cap when policy would exceed actual.
+        tardy_in_grace = (
+            minutes_late is not None
+            and 1 <= minutes_late <= 4
+            and not self.clock_in_early_authorized_by_id
+        )
+        if tardy_in_grace:
             return policy_reported
         actual_cap = self._floor_seconds_to_quarter_hours(self._worked_seconds())
         if policy_reported > actual_cap:
