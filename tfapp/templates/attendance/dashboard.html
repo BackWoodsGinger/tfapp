@@ -66,8 +66,9 @@
           {% if is_lead_role_or_above %}
           <h5 class="mt-4">Clock-in overrides</h5>
           <p class="text-muted small mb-2">Punches in the last 90 days that required a manager, supervisor, executive, or group lead because the employee was not scheduled or clocked in more than 15 minutes before shift start.</p>
-          <div class="table-responsive">
-            <table class="table table-sm table-bordered align-middle">
+          <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
+          <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Clock-in overrides" tabindex="0">
+            <table class="table table-sm table-bordered align-middle mb-0">
               <thead>
                 <tr>
                   <th>Date</th>
@@ -382,7 +383,8 @@
           <div class="mb-4 border border-secondary rounded p-3">
             <h6 class="mb-2">{{ row.group_label }}</h6>
             <p class="text-muted small mb-2">PTO and personal reflect applied amounts on each absence in this period.</p>
-            <div class="table-responsive">
+            <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
+            <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Group absence detail for {{ row.group_label }}" tabindex="0">
               <table class="table table-bordered table-sm mb-0 align-middle">
                 <thead>
                   <tr>
@@ -422,7 +424,8 @@
 
           {% if report_occurrences %}
           <h5 class="mt-4">Individual preview — {{ report_selected_user.payroll_display_name }}</h5>
-          <div class="table-responsive">
+          <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
+          <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Individual attendance report preview" tabindex="0">
             <table class="table table-bordered table-sm mb-0">
               <thead>
                 <tr>
@@ -478,14 +481,11 @@
             <li>Personal Time (unpaid): {{ personal_time }} hrs</li>
             <li>Future Personal: {{ future_personal }} hrs <span class="text-muted">(approved future time off that would add to unpaid once those dates pass—no PTO left to cover)</span></li>
           </ul>
-        </div>
-      </div>
 
-      <div class="card mb-4">
-        <div class="card-body">
-          <h5>Past Absences (since last service date)</h5>
+          <h5 class="mt-4 mb-0">Past absences (since last service date)</h5>
           <p class="text-muted small mb-2">PTO and personal columns reflect how each absence was applied to balances. Subtypes that do not use PTO/personal may show 0 for both while total duration is still listed.</p>
-          <div class="table-responsive">
+          <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
+          <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Past absences" tabindex="0">
             <table class="table table-bordered table-sm mb-0">
               <thead>
                 <tr>
@@ -513,14 +513,11 @@
               </tbody>
             </table>
           </div>
-        </div>
-      </div>
 
-      <div class="card mb-4">
-        <div class="card-body">
-          <h5>Upcoming Absences</h5>
+          <h5 class="mt-4 mb-0">Upcoming absences</h5>
           <p class="text-muted small mb-2">PTO and personal amounts are usually 0 until the absence date; they update when balances are applied.</p>
-          <div class="table-responsive">
+          <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
+          <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Upcoming absences" tabindex="0">
             <table class="table table-bordered table-sm mb-0">
               <thead>
                 <tr>
