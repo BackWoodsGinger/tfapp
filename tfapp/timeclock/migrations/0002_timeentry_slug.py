@@ -26,10 +26,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # Add without db_index first; AlterField below adds unique+index once (avoids
+        # duplicate PostgreSQL *_like indexes from AddField + AlterField both indexing).
         migrations.AddField(
             model_name="timeentry",
             name="slug",
-            field=models.SlugField(db_index=True, editable=False, max_length=48, null=True),
+            field=models.SlugField(editable=False, max_length=48, null=True),
         ),
         migrations.RunPython(fill_timeentry_slugs, migrations.RunPython.noop),
         migrations.AlterField(
