@@ -2,6 +2,10 @@ import secrets
 
 from django.db import migrations, models
 
+from attendance.pg_slug_migration import run_apply_unique_slug, run_drop_orphan_indexes
+
+TIMEOFF_SLUG_INDEX_PREFIX = "attendance_timeoffrequest_slug"
+
 
 def populate_timeoff_slugs(apps, schema_editor):
     TimeOffRequest = apps.get_model("attendance", "TimeOffRequest")
@@ -25,15 +29,37 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunPython(
+            run_drop_orphan_indexes(TIMEOFF_SLUG_INDEX_PREFIX),
+            migrations.RunPython.noop,
+        ),
         migrations.AddField(
             model_name="timeoffrequest",
             name="slug",
-            field=models.SlugField(db_index=True, editable=False, max_length=48, null=True),
+            field=models.SlugField(editable=False, max_length=48, null=True),
         ),
         migrations.RunPython(populate_timeoff_slugs, migrations.RunPython.noop),
-        migrations.AlterField(
-            model_name="timeoffrequest",
-            name="slug",
-            field=models.SlugField(db_index=True, editable=False, max_length=48, unique=True),
+        migrations.RunPython(
+            run_drop_orphan_indexes(TIMEOFF_SLUG_INDEX_PREFIX),
+            migrations.RunPython.noop,
+        ),
+        migrations.RunPython(
+            run_apply_unique_slug("attendance_timeoffrequest", "slug"),
+            migrations.RunPython.noop,
+        ),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[],
+            state_operations=[
+                migrations.AlterField(
+                    model_name="timeoffrequest",
+                    name="slug",
+                    field=models.SlugField(
+                        db_index=True,
+                        editable=False,
+                        max_length=48,
+                        unique=True,
+                    ),
+                ),
+            ],
         ),
     ]
