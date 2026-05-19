@@ -161,6 +161,8 @@ header #main-header {
 .card-body .table {
   --bs-body-color: #212529;
   --bs-body-color-rgb: 33, 37, 41;
+  --bs-body-bg: #ffffff;
+  --bs-body-bg-rgb: 255, 255, 255;
   --bs-emphasis-color: #1a1d20;
   --bs-emphasis-color-rgb: 26, 29, 32;
   --bs-table-color: #212529;
@@ -396,6 +398,36 @@ input, textarea, select {
 input:focus, textarea:focus, select:focus {
   border-color: #bb86fc; /* Highlighted border on focus */
   outline: none;
+}
+
+/*
+ * Close Payroll modal: nested .card-body + global input{} left HH:MM fields with
+ * dark --bs-body-bg and dark --bs-body-color (black on black in white table cells).
+ */
+#closePayrollModal .modal-content,
+#closePayrollModal .payroll-close-review-table {
+  --bs-body-color: #212529;
+  --bs-body-bg: #ffffff;
+}
+
+#closePayrollModal .payroll-close-time-input,
+#closePayrollModal .payroll-close-review-table .form-control {
+  color: #212529 !important;
+  background-color: #ffffff !important;
+  border-color: #ced4da !important;
+  color-scheme: light;
+}
+
+#closePayrollModal .payroll-close-time-input:focus,
+#closePayrollModal .payroll-close-review-table .form-control:focus {
+  color: #212529 !important;
+  background-color: #ffffff !important;
+  border-color: #86b7fe !important;
+  box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25) !important;
+}
+
+#closePayrollModal .payroll-close-time-input::placeholder {
+  color: rgba(33, 37, 41, 0.55) !important;
 }
 
 /* Navbar */
