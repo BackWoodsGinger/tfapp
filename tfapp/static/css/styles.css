@@ -180,6 +180,61 @@ header #main-header {
   color: #212529;
 }
 
+/* Text inputs in light table rows still inherit dark --bs-body-bg from .card-body */
+.card-body .table .form-control {
+  color: #212529;
+  background-color: #ffffff;
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+.card-body .table .form-control:focus {
+  color: #212529;
+  background-color: #ffffff;
+  border-color: #86b7fe;
+  box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+.card-body .table .form-control::placeholder {
+  color: rgba(33, 37, 41, 0.55);
+}
+
+/*
+ * Close Payroll modal lives inside .card-body; Bootstrap modal chrome inherits
+ * the card’s dark CSS variables (--bs-modal-bg uses --bs-body-bg).
+ */
+.card-body .modal-content {
+  --bs-body-color: #212529;
+  --bs-body-color-rgb: 33, 37, 41;
+  --bs-body-bg: #ffffff;
+  --bs-body-bg-rgb: 255, 255, 255;
+  --bs-emphasis-color: #1a1d20;
+  --bs-emphasis-color-rgb: 26, 29, 32;
+  --bs-secondary-color: rgba(33, 37, 41, 0.75);
+  --bs-tertiary-color: rgba(33, 37, 41, 0.5);
+  --bs-border-color: #dee2e6;
+  --bs-border-color-translucent: rgba(0, 0, 0, 0.175);
+  --bs-modal-bg: #ffffff;
+  color: #212529;
+  background-color: #ffffff;
+}
+
+.card-body .modal-content .form-control,
+.card-body .modal-content .form-select {
+  color: #212529;
+  background-color: #ffffff;
+  border-color: #ced4da;
+}
+
+.card-body .modal-content .form-control:focus,
+.card-body .modal-content .form-select:focus {
+  color: #212529;
+  background-color: #ffffff;
+}
+
+.card-body .modal-content .text-muted {
+  color: rgba(33, 37, 41, 0.65) !important;
+}
+
 .card-body .table thead th,
 .card-body .table tfoot th,
 .card-body .pa-table-scroll-wrap thead th {
