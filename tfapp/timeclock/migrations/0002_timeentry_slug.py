@@ -4,7 +4,7 @@ from django.db import migrations, models
 
 
 def drop_orphan_slug_indexes(apps, schema_editor):
-    """PostgreSQL: failed 0002 runs can leave *_like indexes before AlterField completes."""
+    """PostgreSQL: remove leftover slug indexes from failed 0002 attempts."""
     if schema_editor.connection.vendor != "postgresql":
         return
     with schema_editor.connection.cursor() as cursor:
@@ -38,6 +38,23 @@ def fill_timeentry_slugs(apps, schema_editor):
             entry.save(update_fields=["slug"])
 
 
+def apply_slug_unique_postgres(apps, schema_editor):
+    """Apply NOT NULL + unique on slug without Django AlterField (avoids duplicate *_like index)."""
+    if schema_editor.connection.vendor != "postgresql":
+        return
+    drop_orphan_slug_indexes(apps, schema_editor)
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute(
+            "ALTER TABLE timeclock_timeentry ALTER COLUMN slug SET NOT NULL"
+        )
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS timeclock_timeentry_slug_key
+            ON timeclock_timeentry (slug)
+            """
+        )
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -45,8 +62,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Add without db_index first; AlterField below adds unique+index once (avoids
-        # duplicate PostgreSQL *_like indexes from AddField + AlterField both indexing).
+        migrations.RunPython(drop_orphan_slug_indexes, migrations.RunPython.noop),
         migrations.AddField(
             model_name="timeentry",
             name="slug",
@@ -54,9 +70,20 @@ class Migration(migrations.Migration):
         ),
         migrations.RunPython(fill_timeentry_slugs, migrations.RunPython.noop),
         migrations.RunPython(drop_orphan_slug_indexes, migrations.RunPython.noop),
-        migrations.AlterField(
-            model_name="timeentry",
-            name="slug",
-            field=models.SlugField(db_index=True, editable=False, max_length=48, unique=True),
+        migrations.RunPython(apply_slug_unique_postgres, migrations.RunPython.noop),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[],
+            state_operations=[
+                migrations.AlterField(
+                    model_name="timeentry",
+                    name="slug",
+                    field=models.SlugField(
+                        db_index=True,
+                        editable=False,
+                        max_length=48,
+                        unique=True,
+                    ),
+                ),
+            ],
         ),
     ]
