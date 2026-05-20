@@ -203,20 +203,29 @@ class TimeEntry(models.Model):
         minutes_late = None  # set on scheduled days from tardy rules
         scheduled_start = self._scheduled_start_time_for_date()
         if not scheduled_start:
-            # Unscheduled day: payroll-approved shift uses posted/edited clock-in;
-            # otherwise dock early arrival vs inferred start from nearby scheduled days.
             clock_in_local = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
             anchor_date = clock_in_local.date()
+            fallback_start = self._fallback_scheduled_start_time_for_unscheduled_day()
             if self.clock_in_authorized_by:
-                adjusted_in = clock_in_local
-            else:
-                fallback_start = self._fallback_scheduled_start_time_for_unscheduled_day()
+                # Approved unscheduled: credit posted clock-in unless 1–4 min late vs
+                # nearby schedule start (grace), then use scheduled start.
                 if not fallback_start:
                     adjusted_in = clock_in_local
+                    minutes_late = None
                 else:
-                    _minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+                    minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
                         self.clock_in, fallback_start, anchor_date=anchor_date
                     )
+                    if not (1 <= minutes_late <= 4):
+                        adjusted_in = clock_in_local
+                        minutes_late = None
+            elif not fallback_start:
+                adjusted_in = clock_in_local
+                minutes_late = None
+            else:
+                minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
+                    self.clock_in, fallback_start, anchor_date=anchor_date
+                )
         else:
             # Scheduled day: early clock-ins require override to be credited.
             if self.clock_in_early_authorized_by:
@@ -420,39 +429,11 @@ class TimeEntry(models.Model):
 
     def check_lunch_tardy(self):
         """
-        Apply the same grace/rounding rules when returning from lunch:
-        - <= 4 minutes late from scheduled lunch_in: no docking.
-        - 5+ minutes late: round up to next quarter hour and create a
-          'Tardy Out of Grace' occurrence for the lost time, applying PTO.
+        Long or late lunches are reflected only in reported_worked_hours (lunch deduction).
+        Do not create tardy occurrences for late lunch return — payroll variance/exchange
+        covers schedule shortfall after credited hours are totaled.
         """
-        from attendance.models import Occurrence, OccurrenceSubtype, OccurrenceType
-
-        lunch_in_sched = get_scheduled_lunch_in_for_day(self.user, self.date)
-        if not lunch_in_sched or not self.lunch_in:
-            return
-
-        minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
-            self.lunch_in, lunch_in_sched
-        )
-
-        # Within 4‑minute grace from lunch: no docking
-        if minutes_late <= 4:
-            return
-
-        if minutes_late >= 5:
-            scheduled_lunch_local = self._scheduled_local_datetime(lunch_in_sched)
-            loss = (adjusted_in - scheduled_lunch_local).total_seconds() / 3600
-            if loss > 0:
-                # Use get_or_create to avoid duplicate if rule runs twice (unique constraint)
-                Occurrence.objects.get_or_create(
-                    user=self.user,
-                    date=self.date,
-                    subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
-                    defaults={
-                        "occurrence_type": OccurrenceType.UNPLANNED,
-                        "duration_hours": loss,
-                    },
-                )
+        return
 
     def save(self, *args, **kwargs):
         if not self.slug:

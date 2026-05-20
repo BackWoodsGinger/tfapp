@@ -1407,6 +1407,137 @@ class TestReportedHoursOverridesAndLunchRounding(TestCase):
         # lunch_out 9:25 -> 9:15, lunch_in 12:26 -> 12:30 => 3h15m deduction.
         self.assertAlmostEqual(entry.reported_worked_hours(), 7.25, places=2)
 
+    def test_late_lunch_return_does_not_create_tardy_occurrence(self):
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2025, 3, 3),
+            clock_in=self._dt(2025, 3, 3, 6, 56),
+            lunch_out=self._dt(2025, 3, 3, 12, 15),
+            lunch_in=self._dt(2025, 3, 3, 14, 4),
+            clock_out=self._dt(2025, 3, 3, 16, 30),
+        )
+        entry.check_lunch_tardy()
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.user,
+                date=entry.date,
+                subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+            ).exists()
+        )
+
+    def test_unscheduled_approved_three_minutes_late_in_grace(self):
+        """Approved unscheduled Friday: 6:33 in vs Mon 6:30 fallback => 6:30–11:00 (4.5h)."""
+        WorkSchedule.objects.filter(user=self.user).update(start_time=time(6, 30))
+        fri = date(2025, 3, 7)
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=fri,
+            clock_in=self._dt(2025, 3, 7, 6, 33),
+            clock_out=self._dt(2025, 3, 7, 11, 0),
+            clock_in_authorized_by=self.approver,
+        )
+        self.assertAlmostEqual(entry.reported_worked_hours(), 4.5, places=2)
+
+
+class TestPayrollWeek20260509Regression(TestCase):
+    """
+    Punch times from tfapp/media/TimeEntries.csv (week ending 2026-05-09).
+    Payroll export: tfapp/media/payroll_week_ending_2026-05-09.csv
+    """
+
+    def setUp(self):
+        self.tz = timezone.get_current_timezone()
+        self.approver = CustomUser.objects.create_user(username="mgr0509", password="x")
+
+    def _dt(self, y, m, d, hh, mm):
+        return timezone.make_aware(datetime(y, m, d, hh, mm, 0), self.tz)
+
+    def _day_shift_user(self, username, start=time(7, 0), end=time(16, 30)):
+        user = CustomUser.objects.create_user(username=username, password="x")
+        for day in range(0, 4):
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=start,
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=end,
+            )
+        return user
+
+    def test_gregory_frank_long_lunch_no_tardy_occurrence(self):
+        """5/7/2026 lunch 12:15–14:04 must not create Tardy Out of Grace (was 2.75h PTO)."""
+        user = self._day_shift_user("gregory0509")
+        entry = TimeEntry.objects.create(
+            user=user,
+            date=date(2026, 5, 7),
+            clock_in=self._dt(2026, 5, 7, 6, 56),
+            lunch_out=self._dt(2026, 5, 7, 12, 15),
+            lunch_in=self._dt(2026, 5, 7, 14, 4),
+            clock_out=self._dt(2026, 5, 7, 16, 30),
+        )
+        entry.check_lunch_tardy()
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=user,
+                date=entry.date,
+                subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+            ).exists()
+        )
+        self.assertAlmostEqual(entry.reported_worked_hours(), 7.5, places=2)
+        self.assertAlmostEqual(entry.actual_worked_hours(), 7.75, places=2)
+
+    def test_harman_gray_friday_unscheduled_in_grace(self):
+        """5/8/2026 6:33–11:00 approved unscheduled; Mon–Thu 6:30 => 4.5h not 4.25h."""
+        user = CustomUser.objects.create_user(username="harman0509", password="x")
+        for day in range(0, 4):
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(6, 30),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(17, 0),
+            )
+        entry = TimeEntry.objects.create(
+            user=user,
+            date=date(2026, 5, 8),
+            clock_in=self._dt(2026, 5, 8, 6, 33),
+            clock_out=self._dt(2026, 5, 8, 11, 0),
+            clock_in_authorized_by=self.approver,
+        )
+        self.assertAlmostEqual(entry.reported_worked_hours(), 4.5, places=2)
+
+    def test_soullier_coty_long_lunch_tuesday_no_tardy(self):
+        """5/5/2026 lunch 8:36–11:56: 7.25 reported; no lunch-return tardy (was +0.5h)."""
+        user = CustomUser.objects.create_user(username="soullier0509", password="x")
+        for day in range(0, 4):
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(4, 45),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        entry = TimeEntry.objects.create(
+            user=user,
+            date=date(2026, 5, 5),
+            clock_in=self._dt(2026, 5, 5, 4, 40),
+            lunch_out=self._dt(2026, 5, 5, 8, 36),
+            lunch_in=self._dt(2026, 5, 5, 11, 56),
+            clock_out=self._dt(2026, 5, 5, 15, 31),
+        )
+        entry.check_lunch_tardy()
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=user,
+                date=entry.date,
+                subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
+            ).exists()
+        )
+        self.assertAlmostEqual(entry.reported_worked_hours(), 7.25, places=2)
+
 
 class TestPayrollCreditedHours(TestCase):
     """payroll_credited_hours prefers reported but falls back to actual when reported is 0."""

@@ -2794,8 +2794,6 @@ def approve_adjust_punch(request, slug):
             entry.save()
             if apr.punch_field == AdjustPunchField.CLOCK_IN:
                 entry.check_tardy()
-            elif apr.punch_field == AdjustPunchField.LUNCH_IN:
-                entry.check_lunch_tardy()
             apr.approver = approver
             apr.status = TimeOffRequestStatus.APPROVED
             apr.save()

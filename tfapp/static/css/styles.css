@@ -364,6 +364,34 @@ input:focus, textarea:focus, select:focus {
   color: rgba(33, 37, 41, 0.55) !important;
 }
 
+/*
+ * Daily Breakdown modal is outside .card-body; body { color: #fff !important } makes
+ * title/name unreadable on Bootstrap’s light modal panel.
+ */
+#payrollUserModal .modal-title,
+#payrollUserModal .modal-header,
+#payrollUserModal .modal-body,
+#payrollUserModal .modal-footer,
+#payrollUserModal #payrollUserModalMeta {
+  color: #212529 !important;
+}
+
+#payrollUserModal .text-muted {
+  color: rgba(33, 37, 41, 0.65) !important;
+}
+
+#payrollUserModal .table {
+  --bs-body-color: #212529;
+  --bs-table-color: #212529;
+  --bs-table-bg: #f1f3f5;
+}
+
+#payrollUserModal .table thead th,
+#payrollUserModal .table tfoot th {
+  background-color: #bfc4c9 !important;
+  color: #1a1d20 !important;
+}
+
 /* Navbar */
 .navbar {
   background-color: #202020; /* Dark navbar background */

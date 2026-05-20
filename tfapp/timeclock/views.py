@@ -159,8 +159,6 @@ def timeclock_home(request):
         # Apply business rules after recording the punch (outside lock)
         if action == "clock_in":
             entry.check_tardy()
-        elif action == "lunch_in":
-            entry.check_lunch_tardy()
 
         readable_action = action.replace("_", " ").title()
         user_name = user.get_full_name() or user.username

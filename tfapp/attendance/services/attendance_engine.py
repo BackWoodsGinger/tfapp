@@ -294,7 +294,7 @@ def entries_requiring_work_through_lunch_signoff(week_start: date, week_ending: 
 def sync_tardy_occurrences_for_time_entry(entry):
     """
     Remove existing tardy absences for this user and date (refunding PTO/personal),
-    then re-apply start-of-shift and lunch tardy rules from the entry's punches.
+    then re-apply start-of-shift tardy rules from the entry's punches.
     """
     with transaction.atomic():
         u = CustomUser.objects.select_for_update().get(pk=entry.user_id)
@@ -302,5 +302,3 @@ def sync_tardy_occurrences_for_time_entry(entry):
     entry.refresh_from_db()
     if entry.clock_in:
         entry.check_tardy()
-    if entry.lunch_in:
-        entry.check_lunch_tardy()
