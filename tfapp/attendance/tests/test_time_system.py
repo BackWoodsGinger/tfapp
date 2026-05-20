@@ -23,6 +23,10 @@ from attendance.models import (
     WorkSchedule,
     WorkThroughLunchRequest,
 )
+from attendance.schedule_utils import (
+    clock_in_requires_approver_for_entry,
+    effective_schedule_reference_date,
+)
 from timeclock.models import TimeEntry
 
 
@@ -1392,6 +1396,18 @@ class TestReportedHoursOverridesAndLunchRounding(TestCase):
         )
         self.assertAlmostEqual(entry.reported_worked_hours(), 10.25, places=2)
 
+    def test_long_lunch_credits_actual_when_rounded_lunch_over_deducts(self):
+        entry = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2025, 3, 3),
+            clock_in=self._dt(2025, 3, 3, 6, 56),
+            lunch_out=self._dt(2025, 3, 3, 12, 15),
+            lunch_in=self._dt(2025, 3, 3, 14, 4),
+            clock_out=self._dt(2025, 3, 3, 16, 30),
+        )
+        self.assertTrue(entry._reported_lunch_over_deducts_actual())
+        self.assertAlmostEqual(entry.reported_worked_hours(), 7.75, places=2)
+
     def test_long_lunch_result_is_floored_to_quarter_hour(self):
         entry = TimeEntry.objects.create(
             user=self.user,
@@ -1447,7 +1463,15 @@ class TestPayrollWeek20260509Regression(TestCase):
 
     def setUp(self):
         self.tz = timezone.get_current_timezone()
-        self.approver = CustomUser.objects.create_user(username="mgr0509", password="x")
+        self.approver = CustomUser.objects.create_user(
+            username="mgr0509",
+            password="x",
+            is_staff=True,
+            role=RoleChoices.EXECUTIVE,
+        )
+        self.client = Client()
+        self.client.force_login(self.approver)
+        self.close_url = reverse("attendance:close_payroll")
 
     def _dt(self, y, m, d, hh, mm):
         return timezone.make_aware(datetime(y, m, d, hh, mm, 0), self.tz)
@@ -1484,8 +1508,96 @@ class TestPayrollWeek20260509Regression(TestCase):
                 subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE,
             ).exists()
         )
-        self.assertAlmostEqual(entry.reported_worked_hours(), 7.5, places=2)
+        self.assertAlmostEqual(entry.reported_worked_hours(), 7.75, places=2)
         self.assertAlmostEqual(entry.actual_worked_hours(), 7.75, places=2)
+
+    def test_gregory_week_close_applies_1_25_exchange_pto(self):
+        """Long-lunch Thursday at 7.75 raises week worked; exchange PTO is 1.25 not 1.5."""
+        user = CustomUser.objects.create_user(
+            username="gregory0509",
+            password="x",
+            pto_balance=10.0,
+            personal_time_balance=0.0,
+        )
+        for day in range(0, 4):
+            WorkSchedule.objects.create(
+                user=user,
+                day=day,
+                start_time=time(7, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(16, 30),
+            )
+        WorkSchedule.objects.create(
+            user=user,
+            day=4,
+            start_time=time(7, 0),
+            lunch_out=None,
+            lunch_in=None,
+            end_time=time(11, 0),
+        )
+        week = [
+            (date(2026, 5, 4), 6, 56, 11, 0, 11, 30, 16, 30),
+            (date(2026, 5, 5), 6, 56, 11, 0, 11, 30, 16, 30),
+            (date(2026, 5, 6), 6, 57, 11, 0, 11, 30, 16, 30),
+            (date(2026, 5, 7), 6, 56, 12, 15, 14, 4, 16, 30),
+            (date(2026, 5, 8), 6, 56, None, None, None, 11, 0),
+        ]
+        for row in week:
+            d, ci_h, ci_m, lo_h, lo_m, li_h, li_m, co_h, co_m = row
+            kwargs = {
+                "user": user,
+                "date": d,
+                "clock_in": self._dt(2026, 5, d.day, ci_h, ci_m),
+                "clock_out": self._dt(2026, 5, d.day, co_h, co_m),
+            }
+            if lo_h is not None:
+                kwargs["lunch_out"] = self._dt(2026, 5, d.day, lo_h, lo_m)
+                kwargs["lunch_in"] = self._dt(2026, 5, d.day, li_h, li_m)
+            TimeEntry.objects.create(**kwargs)
+
+        thu = TimeEntry.objects.get(user=user, date=date(2026, 5, 7))
+        self.assertAlmostEqual(thu.reported_worked_hours(), 7.75, places=2)
+
+        response = self.client.post(
+            self.close_url,
+            {"week_ending": "2026-05-09", "approve_missing_overrides": "1"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        week_start = date(2026, 5, 4)
+        week_ending = date(2026, 5, 9)
+        week_worked = sum(
+            e.payroll_credited_hours()
+            for e in TimeEntry.objects.filter(
+                user=user, date__range=[week_start, week_ending]
+            )
+            if e.clock_in and e.clock_out
+        )
+        # Thursday must be 7.75 (not 7.5); that +0.25 is what drops exchange PTO to 1.25.
+        self.assertGreater(week_worked, 38.5)
+
+        from attendance.schedule_utils import scheduled_hours_for_range
+        from attendance.services.weekly_reconciliation import (
+            required_week_hours_for_policy,
+        )
+
+        scheduled = scheduled_hours_for_range(user, week_start, week_ending)
+        expected_shortfall = round(
+            required_week_hours_for_policy(scheduled) - week_worked, 2
+        )
+        self.assertAlmostEqual(expected_shortfall, 1.25, places=2)
+
+        pto_applied = sum(
+            o.pto_hours_applied
+            for o in Occurrence.objects.filter(
+                user=user,
+                date__range=[week_start, week_ending],
+                subtype=OccurrenceSubtype.EXCHANGE,
+                pto_applied=True,
+            )
+        )
+        self.assertAlmostEqual(pto_applied, 1.25, places=2)
 
     def test_harman_gray_friday_unscheduled_in_grace(self):
         """5/8/2026 6:33–11:00 approved unscheduled; Mon–Thu 6:30 => 4.5h not 4.25h."""
@@ -1537,6 +1649,74 @@ class TestPayrollWeek20260509Regression(TestCase):
             ).exists()
         )
         self.assertAlmostEqual(entry.reported_worked_hours(), 7.25, places=2)
+
+
+class TestStyesGillPayrollWeek20260509(TestCase):
+    """
+    STYES exchanged Mon<->Wed shifts (nominal Wed 5–9, worked Mon-style 7–15:30 on Wed).
+    Early clock-in on 5/6 correctly flags vs 7:00; deny => credit from 7:00 not 6:41.
+    """
+
+    def setUp(self):
+        self.tz = timezone.get_current_timezone()
+        self.user = CustomUser.objects.create_user(username="styes0509", password="x")
+        self.user.weekly_schedule = {
+            "monday": {
+                "start": "07:00",
+                "end": "15:30",
+                "lunch_out": "11:00",
+                "lunch_in": "11:30",
+            },
+            "tuesday": {
+                "start": "07:00",
+                "end": "15:30",
+                "lunch_out": "11:00",
+                "lunch_in": "11:30",
+            },
+            "wednesday": {"start": "05:00", "end": "09:00"},
+        }
+        self.user.save()
+
+    def _dt(self, y, m, d, hh, mm):
+        return timezone.make_aware(datetime(y, m, d, hh, mm, 0), self.tz)
+
+    def test_wednesday_uses_monday_shift_template_when_worked_longer(self):
+        wed = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2026, 5, 6),
+            clock_in=self._dt(2026, 5, 6, 6, 41),
+            lunch_out=self._dt(2026, 5, 6, 11, 0),
+            lunch_in=self._dt(2026, 5, 6, 11, 28),
+            clock_out=self._dt(2026, 5, 6, 15, 33),
+        )
+        mon_ref = date(2026, 5, 4)
+        self.assertEqual(effective_schedule_reference_date(wed), mon_ref)
+
+    def test_denied_early_wednesday_credits_seven_am_start(self):
+        wed = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2026, 5, 6),
+            clock_in=self._dt(2026, 5, 6, 6, 41),
+            lunch_out=self._dt(2026, 5, 6, 11, 0),
+            lunch_in=self._dt(2026, 5, 6, 11, 28),
+            clock_out=self._dt(2026, 5, 6, 15, 33),
+            clock_in_early_override_denied=True,
+        )
+        requires, reason = clock_in_requires_approver_for_entry(wed)
+        self.assertTrue(requires)
+        self.assertEqual(reason, "early")
+        self.assertAlmostEqual(wed.reported_worked_hours(), 8.0, places=2)
+
+    def test_monday_short_shift_uses_calendar_schedule(self):
+        mon = TimeEntry.objects.create(
+            user=self.user,
+            date=date(2026, 5, 4),
+            clock_in=self._dt(2026, 5, 4, 6, 49),
+            clock_out=self._dt(2026, 5, 4, 11, 0),
+            clock_in_early_override_denied=True,
+        )
+        self.assertEqual(effective_schedule_reference_date(mon), date(2026, 5, 4))
+        self.assertAlmostEqual(mon.reported_worked_hours(), 4.0, places=2)
 
 
 class TestPayrollCreditedHours(TestCase):

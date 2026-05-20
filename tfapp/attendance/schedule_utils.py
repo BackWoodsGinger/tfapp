@@ -6,6 +6,8 @@ from attendance.services.time_processing import (  # noqa: F401
     TIME_FMT,
     clock_in_at_or_after_scheduled_lunch_in,
     clock_in_requires_approver,
+    clock_in_requires_approver_for_entry,
+    effective_schedule_reference_date,
     entry_requires_payroll_lunch_import_review,
     crosses_midnight_for_day,
     earliest_clock_in_allowed,

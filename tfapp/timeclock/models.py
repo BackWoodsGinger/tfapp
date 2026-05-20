@@ -6,6 +6,7 @@ from datetime import timedelta, datetime
 
 from attendance.slug_utils import ensure_unique_slug
 from attendance.schedule_utils import (
+    effective_schedule_reference_date,
     get_scheduled_lunch_in_for_day,
     get_scheduled_lunch_out_for_day,
     get_scheduled_start_for_day,
@@ -146,6 +147,21 @@ class TimeEntry(models.Model):
             return timedelta(0)
         return timedelta(minutes=30)
 
+    def _reported_lunch_over_deducts_actual(self) -> bool:
+        """True when quarter-hour lunch rounding deducts more than actual lunch taken."""
+        if not (self.lunch_out and self.lunch_in):
+            return False
+        actual_lunch = self.lunch_in - self.lunch_out
+        if actual_lunch < timedelta(minutes=30):
+            actual_lunch = timedelta(minutes=30)
+        reported_lunch = self._reported_lunch_deduction_timedelta()
+        return reported_lunch > actual_lunch + timedelta(seconds=30)
+
+    def _early_clock_in_credited(self) -> bool:
+        return bool(
+            self.clock_in_early_authorized_by_id and not self.clock_in_early_override_denied
+        )
+
     def _worked_seconds(self):
         """Worked seconds after lunch deduction."""
         if not (self.clock_in and self.clock_out):
@@ -195,13 +211,16 @@ class TimeEntry(models.Model):
         - lunch uses quarter-hour rounding (out down, in up) with 30-minute minimum.
         - final total never exceeds actual worked hours floored to a quarter hour,
           except tardy-in-grace (<=4 min late) where schedule-start credit applies.
+        - long lunch: when quarter-hour lunch rounding deducts more break than taken,
+          credit actual worked hours (floored to quarter hour), not the lower policy total.
         Keeps actual punches untouched while reporting payroll-compliant hours.
         """
         if not (self.clock_in and self.clock_out):
             return 0.0
 
         minutes_late = None  # set on scheduled days from tardy rules
-        scheduled_start = self._scheduled_start_time_for_date()
+        sched_ref = effective_schedule_reference_date(self)
+        scheduled_start = get_scheduled_start_for_day(self.user, sched_ref)
         if not scheduled_start:
             clock_in_local = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
             anchor_date = clock_in_local.date()
@@ -227,19 +246,19 @@ class TimeEntry(models.Model):
                     self.clock_in, fallback_start, anchor_date=anchor_date
                 )
         else:
-            # Scheduled day: early clock-ins require override to be credited.
-            if self.clock_in_early_authorized_by:
+            # Scheduled day: early clock-in only when approved (not denied at payroll close).
+            if self._early_clock_in_credited():
                 clock_in_local = timezone.localtime(self.clock_in).replace(second=0, microsecond=0)
                 adjusted_minutes = (clock_in_local.minute // 15) * 15
                 adjusted_in = clock_in_local.replace(
                     minute=adjusted_minutes, second=0, microsecond=0
                 )
                 minutes_late, _ = self._tardy_minutes_and_adjusted_start(
-                    self.clock_in, scheduled_start
+                    self.clock_in, scheduled_start, anchor_date=self.date
                 )
             else:
                 minutes_late, adjusted_in = self._tardy_minutes_and_adjusted_start(
-                    self.clock_in, scheduled_start
+                    self.clock_in, scheduled_start, anchor_date=self.date
                 )
 
         out_local = timezone.localtime(self.clock_out)
@@ -259,14 +278,19 @@ class TimeEntry(models.Model):
         tardy_in_grace = (
             minutes_late is not None
             and 1 <= minutes_late <= 4
-            and not self.clock_in_early_authorized_by_id
+            and not self._early_clock_in_credited()
         )
         if tardy_in_grace:
             return policy_reported
         actual_cap = self._floor_seconds_to_quarter_hours(self._worked_seconds())
         if policy_reported > actual_cap:
-            return actual_cap
-        return policy_reported
+            result = actual_cap
+        elif actual_cap > policy_reported and self._reported_lunch_over_deducts_actual():
+            # Long lunch: rounded deduction can exceed actual break; credit time worked.
+            result = actual_cap
+        else:
+            result = policy_reported
+        return result
 
     def rounded_start(self):
         if self.clock_in:
@@ -318,9 +342,11 @@ class TimeEntry(models.Model):
 
     def _scheduled_start_time_for_date(self):
         """
-        Scheduled start time for this entry date from weekly_schedule or WorkSchedule.
+        Scheduled start for this entry (effective weekday template when shifts are exchanged).
         """
-        return get_scheduled_start_for_day(self.user, self.date)
+        return get_scheduled_start_for_day(
+            self.user, effective_schedule_reference_date(self)
+        )
 
     def _fallback_scheduled_start_time_for_unscheduled_day(self):
         """
@@ -344,7 +370,9 @@ class TimeEntry(models.Model):
         Reported-policy hours from scheduled shift end through floored clock-out (>= 0).
         Offsets start-of-shift tardy when the employee stays late the same shift.
         """
-        end_dt = get_scheduled_shift_end_datetime(self.user, self.date)
+        end_dt = get_scheduled_shift_end_datetime(
+            self.user, effective_schedule_reference_date(self)
+        )
         if not end_dt or not self.clock_in or not self.clock_out:
             return 0.0
         out_local = timezone.localtime(self.clock_out).replace(second=0, microsecond=0)
@@ -358,11 +386,12 @@ class TimeEntry(models.Model):
         Hours lost vs scheduled shift start from late clock-in (same rules as check_tardy),
         before netting stay-late recovery. 0 if on time, in grace, or unscheduled day.
         """
-        start_time = get_scheduled_start_for_day(self.user, self.date)
+        sched_ref = effective_schedule_reference_date(self)
+        start_time = get_scheduled_start_for_day(self.user, sched_ref)
         if not start_time or not self.clock_in:
             return 0.0
         minutes_late, adjusted_start = self._tardy_minutes_and_adjusted_start(
-            self.clock_in, start_time
+            self.clock_in, start_time, anchor_date=self.date
         )
         if minutes_late <= 4:
             return 0.0
@@ -385,21 +414,22 @@ class TimeEntry(models.Model):
         """
         from attendance.models import Occurrence, OccurrenceSubtype, OccurrenceType
 
-        start_time = get_scheduled_start_for_day(self.user, self.date)
+        sched_ref = effective_schedule_reference_date(self)
+        start_time = get_scheduled_start_for_day(self.user, sched_ref)
         if not start_time or not self.clock_in:
             return
 
-        if self.clock_in_early_authorized_by_id:
+        if self._early_clock_in_credited():
             return
 
-        lunch_in_sched = get_scheduled_lunch_in_for_day(self.user, self.date)
+        lunch_in_sched = get_scheduled_lunch_in_for_day(self.user, sched_ref)
         if lunch_in_sched:
             clock_in_local_t = timezone.localtime(self.clock_in).time()
             if clock_in_local_t >= lunch_in_sched:
                 return
 
         minutes_late, adjusted_start = self._tardy_minutes_and_adjusted_start(
-            self.clock_in, start_time
+            self.clock_in, start_time, anchor_date=self.date
         )
 
         # Within 4‑minute grace window: mark as in‑grace but do not dock time
