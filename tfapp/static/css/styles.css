@@ -209,9 +209,9 @@ header #main-header {
   box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12);
 }
 
-/* Dashboard: wide layout; tables wrap instead of horizontal scroll */
+/* Dashboard: wide enough for multi-column tables without horizontal scroll */
 main > .container-fluid.dashboard-page {
-  max-width: min(100%, 90rem);
+  max-width: min(100%, 68rem);
   margin-left: auto;
   margin-right: auto;
 }
