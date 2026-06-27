@@ -16,7 +16,7 @@
         tfoot td { font-weight: bold; }
         .muted { color: #444; font-size: 9px; margin: 0 0 6px 0; }
         .chart-wrap { margin: 8px 0 14px 0; page-break-inside: avoid; }
-        .chart-wrap img { width: 340px; max-width: 100%; height: auto; display: block; }
+        .chart-wrap img { width: 520px; max-width: 100%; height: auto; display: block; }
         .group-block { margin-bottom: 14px; page-break-inside: avoid; }
         .group-block h4 { margin: 0 0 4px 0; font-size: 11px; }
     </style>
@@ -32,6 +32,7 @@
         <p><strong>Period:</strong> {{ start }} to {{ end }}</p>
         <p><strong>Grouped by:</strong> {{ group_by_label }}</p>
         <p><strong>Subtype filter:</strong> {{ subtype_filter_label }}</p>
+        <p><strong>Planned / unplanned filter:</strong> {{ planned_filter_label }}</p>
     </div>
 
     <p class="section-title">Company totals</p>

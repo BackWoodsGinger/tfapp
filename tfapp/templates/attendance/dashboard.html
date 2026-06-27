@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% load static %}
 {% block content %}
-<div class="container mt-4">
-  <div class="row justify-content-center">
-    <div class="col-lg-12 col-md-10 col-sm-12">
+<div class="container-fluid dashboard-page mt-4 px-3 px-lg-4">
+  <div class="row">
+    <div class="col-12">
 
       {% if pending_approval_counts and pending_approval_counts.total %}
       <div class="alert alert-warning border-0 shadow-sm mb-4" role="alert">
@@ -67,7 +67,7 @@
           <h5 class="mt-4">Clock-in overrides</h5>
           <p class="text-muted small mb-2">Punches in the last 90 days that required a manager, supervisor, executive, or group lead because the employee was not scheduled or clocked in more than 15 minutes before shift start.</p>
           <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
-          <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Clock-in overrides" tabindex="0">
+          <div class="pa-table-scroll-wrap" role="region" aria-label="Clock-in overrides" tabindex="0">
             <table class="table table-sm table-bordered align-middle mb-0">
               <thead>
                 <tr>
@@ -197,8 +197,8 @@
           <h3 class="mb-2">Generate Attendance Report</h3>
           <p class="text-muted small mb-3">
             Choose an individual employee PDF or a group analytics PDF
-            summarized by department or supervisor. Optional subtype filter
-            limits rows to one absence type or all types.
+            summarized by department or supervisor. Optional subtype and planned/unplanned filters
+            limit rows to selected absence types.
           </p>
           <form method="get" action="{% url 'attendance:generate_report_pdf' %}" id="absence-report-form" class="mb-0">
             {% if user_list|length > 1 %}
@@ -257,6 +257,14 @@
               </p>
               {{ report_form.subtype_filter }}
               <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="subtype-filter-clear">Clear selection (all types)</button>
+            </div>
+
+            <div class="mb-3">
+              <label for="id_planned_filter" class="form-label fw-semibold">Planned / unplanned</label>
+              <p class="text-muted small mb-1">
+                Limit the report to planned absences (requested in advance), unplanned absences, or leave as all.
+              </p>
+              {{ report_form.planned_filter }}
             </div>
             <script>
               (function () {
@@ -363,7 +371,7 @@
           <h6 class="text-secondary small text-uppercase mb-2">Total hours by group</h6>
           {% if report_pie_hours_uri %}
           <div class="mb-3 text-center text-md-start">
-            <img src="{{ report_pie_hours_uri }}" alt="Pie chart: absence hours by group" class="img-fluid border rounded" style="max-width: 360px;" />
+            <img src="{{ report_pie_hours_uri }}" alt="Pie chart: absence hours by group" class="img-fluid border rounded shadow-sm" style="max-width: 520px;" />
           </div>
           {% else %}
           <p class="text-muted small">Not enough non-zero hours to draw a chart.</p>
@@ -372,11 +380,54 @@
           <h6 class="text-secondary small text-uppercase mt-4 mb-2">Absence records by group</h6>
           {% if report_pie_records_uri %}
           <div class="mb-3 text-center text-md-start">
-            <img src="{{ report_pie_records_uri }}" alt="Pie chart: absence records by group" class="img-fluid border rounded" style="max-width: 360px;" />
+            <img src="{{ report_pie_records_uri }}" alt="Pie chart: absence records by group" class="img-fluid border rounded shadow-sm" style="max-width: 520px;" />
           </div>
           {% else %}
           <p class="text-muted small">Not enough records to draw a chart.</p>
           {% endif %}
+
+          <h6 class="text-secondary small text-uppercase mt-4 mb-2">Planned vs unplanned split</h6>
+          <p class="text-muted small mb-3">Same grouping as above, but only planned or only unplanned absences in each chart.</p>
+          <div class="row g-4">
+            <div class="col-md-6">
+              <h6 class="small fw-semibold mb-2">Planned — total hours by group</h6>
+              {% if report_pie_planned_hours_uri %}
+              <div class="mb-3 text-center text-md-start">
+                <img src="{{ report_pie_planned_hours_uri }}" alt="Pie chart: planned absence hours by group" class="img-fluid border rounded shadow-sm" style="max-width: 520px;" />
+              </div>
+              {% else %}
+              <p class="text-muted small">No planned absences with hours in this range.</p>
+              {% endif %}
+
+              <h6 class="small fw-semibold mt-3 mb-2">Planned — absence records by group</h6>
+              {% if report_pie_planned_records_uri %}
+              <div class="mb-0 text-center text-md-start">
+                <img src="{{ report_pie_planned_records_uri }}" alt="Pie chart: planned absence records by group" class="img-fluid border rounded shadow-sm" style="max-width: 520px;" />
+              </div>
+              {% else %}
+              <p class="text-muted small mb-0">No planned absence records in this range.</p>
+              {% endif %}
+            </div>
+            <div class="col-md-6">
+              <h6 class="small fw-semibold mb-2">Unplanned — total hours by group</h6>
+              {% if report_pie_unplanned_hours_uri %}
+              <div class="mb-3 text-center text-md-start">
+                <img src="{{ report_pie_unplanned_hours_uri }}" alt="Pie chart: unplanned absence hours by group" class="img-fluid border rounded shadow-sm" style="max-width: 520px;" />
+              </div>
+              {% else %}
+              <p class="text-muted small">No unplanned absences with hours in this range.</p>
+              {% endif %}
+
+              <h6 class="small fw-semibold mt-3 mb-2">Unplanned — absence records by group</h6>
+              {% if report_pie_unplanned_records_uri %}
+              <div class="mb-0 text-center text-md-start">
+                <img src="{{ report_pie_unplanned_records_uri }}" alt="Pie chart: unplanned absence records by group" class="img-fluid border rounded shadow-sm" style="max-width: 520px;" />
+              </div>
+              {% else %}
+              <p class="text-muted small mb-0">No unplanned absence records in this range.</p>
+              {% endif %}
+            </div>
+          </div>
 
           <h6 class="text-secondary small text-uppercase mt-4 mb-2">Detail by employee</h6>
           {% for row in report_group_summary %}
@@ -384,7 +435,7 @@
             <h6 class="mb-2">{{ row.group_label }}</h6>
             <p class="text-muted small mb-2">PTO and personal reflect applied amounts on each absence in this period.</p>
             <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
-            <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Group absence detail for {{ row.group_label }}" tabindex="0">
+            <div class="pa-table-scroll-wrap" role="region" aria-label="Group absence detail for {{ row.group_label }}" tabindex="0">
               <table class="table table-bordered table-sm mb-0 align-middle">
                 <thead>
                   <tr>
@@ -425,7 +476,7 @@
           {% if report_occurrences %}
           <h5 class="mt-4">Individual preview — {{ report_selected_user.payroll_display_name }}</h5>
           <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
-          <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Individual attendance report preview" tabindex="0">
+          <div class="pa-table-scroll-wrap" role="region" aria-label="Individual attendance report preview" tabindex="0">
             <table class="table table-bordered table-sm mb-0">
               <thead>
                 <tr>
@@ -485,7 +536,7 @@
           <h5 class="mt-4 mb-0">Past absences (since last service date)</h5>
           <p class="text-muted small mb-2">PTO and personal columns reflect how each absence was applied to balances. Subtypes that do not use PTO/personal may show 0 for both while total duration is still listed.</p>
           <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
-          <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Past absences" tabindex="0">
+          <div class="pa-table-scroll-wrap" role="region" aria-label="Past absences" tabindex="0">
             <table class="table table-bordered table-sm mb-0">
               <thead>
                 <tr>
@@ -517,7 +568,7 @@
           <h5 class="mt-4 mb-0">Upcoming absences</h5>
           <p class="text-muted small mb-2">PTO and personal amounts are usually 0 until the absence date; they update when balances are applied.</p>
           <p class="text-muted small mb-2 mb-sm-1">Showing about 10 rows at a time; scroll inside the table for more.</p>
-          <div class="pa-table-scroll-wrap table-responsive" role="region" aria-label="Upcoming absences" tabindex="0">
+          <div class="pa-table-scroll-wrap" role="region" aria-label="Upcoming absences" tabindex="0">
             <table class="table table-bordered table-sm mb-0">
               <thead>
                 <tr>

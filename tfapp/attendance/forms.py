@@ -52,6 +52,14 @@ class ReportFilterForm(forms.Form):
         ("supervisor", "Supervisor / reporting line"),
         ("group_lead", "Group lead"),
     ]
+    PLANNED_FILTER_ALL = ""
+    PLANNED_FILTER_PLANNED = "planned"
+    PLANNED_FILTER_UNPLANNED = "unplanned"
+    PLANNED_FILTER_CHOICES = [
+        (PLANNED_FILTER_ALL, "All (planned and unplanned)"),
+        (PLANNED_FILTER_PLANNED, "Planned only"),
+        (PLANNED_FILTER_UNPLANNED, "Unplanned only"),
+    ]
 
     report_mode = forms.ChoiceField(
         choices=REPORT_MODE_CHOICES,
@@ -76,6 +84,13 @@ class ReportFilterForm(forms.Form):
                 "size": "10",
             }
         ),
+    )
+    planned_filter = forms.ChoiceField(
+        label="Planned / unplanned",
+        required=False,
+        choices=PLANNED_FILTER_CHOICES,
+        initial=PLANNED_FILTER_ALL,
+        widget=forms.Select(attrs={"class": "form-select", "style": "max-width: 28rem;"}),
     )
     user = forms.ModelChoiceField(
         queryset=CustomUser.objects.all(),
@@ -130,6 +145,11 @@ class ReportFilterForm(forms.Form):
             if v in valid and v not in out:
                 out.append(v)
         return out
+
+    def clean_planned_filter(self):
+        val = self.cleaned_data.get("planned_filter") or ""
+        valid = {c[0] for c in self.PLANNED_FILTER_CHOICES}
+        return val if val in valid else self.PLANNED_FILTER_ALL
 
     def clean(self):
         cleaned = super().clean()

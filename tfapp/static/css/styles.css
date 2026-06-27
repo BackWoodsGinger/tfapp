@@ -209,6 +209,33 @@ header #main-header {
   box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12);
 }
 
+/* Dashboard: wide layout; tables wrap instead of horizontal scroll */
+main > .container-fluid.dashboard-page {
+  max-width: min(100%, 90rem);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.dashboard-page .pa-table-scroll-wrap {
+  overflow-x: visible;
+  overflow-y: auto;
+}
+
+.dashboard-page .pa-table-scroll-wrap table {
+  width: 100%;
+}
+
+.dashboard-page .pa-table-scroll-wrap th,
+.dashboard-page .pa-table-scroll-wrap td {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.dashboard-page .pa-table-scroll-wrap th.text-end,
+.dashboard-page .pa-table-scroll-wrap td.text-end {
+  white-space: nowrap;
+}
+
 /* Payroll weekly summary: ~20 visible rows; numeric columns as narrow as headings allow */
 .card-body .payroll-weekly-totals-scroll {
   max-height: min(38.5rem, 72vh);

@@ -642,12 +642,17 @@ def dashboard(request):
     report_group_by_label = ""
     report_pie_hours_uri = None
     report_pie_records_uri = None
+    report_pie_planned_hours_uri = None
+    report_pie_planned_records_uri = None
+    report_pie_unplanned_hours_uri = None
+    report_pie_unplanned_records_uri = None
     report_today = localdate()
     if report_form.is_valid():
         report_mode = report_form.cleaned_data.get("report_mode") or ReportFilterForm.REPORT_MODE_INDIVIDUAL
         report_start_date = report_form.cleaned_data.get("start_date")
         report_end_date = report_form.cleaned_data.get("end_date")
         subtype_filters = report_form.cleaned_data.get("subtype_filter") or []
+        planned_filter = report_form.cleaned_data.get("planned_filter") or ReportFilterForm.PLANNED_FILTER_ALL
         if (
             report_mode == ReportFilterForm.REPORT_MODE_GROUP
             and report_start_date
@@ -661,20 +666,31 @@ def dashboard(request):
                 user__in=visible_users,
                 date__range=(report_start_date, report_end_date),
             ).select_related("user", "user__supervisor", "user__group_lead")
-            if subtype_filters:
-                occ_qs = occ_qs.filter(subtype__in=subtype_filters)
-            report_group_summary = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
+            occ_qs = _filter_occurrences_for_report(
+                occ_qs, subtype_filters=subtype_filters, planned_filter=planned_filter
+            )
+            occ_list = list(occ_qs)
+            report_group_summary = _aggregate_group_absence_report_rows(occ_list, group_by)
             report_pie_hours_uri, report_pie_records_uri = group_report_pie_pair_uris(
                 report_group_summary
             )
+            (
+                report_pie_planned_hours_uri,
+                report_pie_planned_records_uri,
+                report_pie_unplanned_hours_uri,
+                report_pie_unplanned_records_uri,
+            ) = _group_report_planned_unplanned_pie_uris(occ_list, group_by)
         elif report_mode == ReportFilterForm.REPORT_MODE_INDIVIDUAL and report_form.cleaned_data.get("user"):
             report_selected_user = report_form.cleaned_data["user"]
             if report_start_date and report_end_date:
                 report_occurrences = Occurrence.objects.filter(
                     user=report_selected_user, date__range=(report_start_date, report_end_date)
                 ).order_by("date")
-                if subtype_filters:
-                    report_occurrences = report_occurrences.filter(subtype__in=subtype_filters)
+                report_occurrences = _filter_occurrences_for_report(
+                    report_occurrences,
+                    subtype_filters=subtype_filters,
+                    planned_filter=planned_filter,
+                )
 
     user_service_dates = {
         str(u.public_slug): u.service_date.isoformat() if u.service_date else None
@@ -798,6 +814,10 @@ def dashboard(request):
         "report_group_by_label": report_group_by_label,
         "report_pie_hours_uri": report_pie_hours_uri,
         "report_pie_records_uri": report_pie_records_uri,
+        "report_pie_planned_hours_uri": report_pie_planned_hours_uri,
+        "report_pie_planned_records_uri": report_pie_planned_records_uri,
+        "report_pie_unplanned_hours_uri": report_pie_unplanned_hours_uri,
+        "report_pie_unplanned_records_uri": report_pie_unplanned_records_uri,
         "user_service_dates": user_service_dates,
         "today_iso": report_today.isoformat(),
         "clock_in_overrides": clock_in_overrides,
@@ -913,6 +933,45 @@ def _user_row_sort_key(u: CustomUser | None) -> tuple:
         (u.payroll_firstname or u.first_name or "").lower(),
         (u.username or "").lower(),
     )
+
+
+def _planned_filter_label(planned_filter: str) -> str:
+    return dict(ReportFilterForm.PLANNED_FILTER_CHOICES).get(
+        planned_filter or ReportFilterForm.PLANNED_FILTER_ALL,
+        "All (planned and unplanned)",
+    )
+
+
+def _report_filter_note(subtype_filters, subtype_filter_label: str, planned_filter: str) -> str | None:
+    parts = []
+    if subtype_filters:
+        parts.append(f"Filtered to subtype(s): {subtype_filter_label}")
+    if planned_filter and planned_filter != ReportFilterForm.PLANNED_FILTER_ALL:
+        parts.append(f"Filtered to: {_planned_filter_label(planned_filter)}")
+    return "; ".join(parts) if parts else None
+
+
+def _filter_occurrences_for_report(qs, *, subtype_filters, planned_filter):
+    if subtype_filters:
+        qs = qs.filter(subtype__in=subtype_filters)
+    if planned_filter == ReportFilterForm.PLANNED_FILTER_PLANNED:
+        qs = qs.filter(occurrence_type=OccurrenceType.PLANNED)
+    elif planned_filter == ReportFilterForm.PLANNED_FILTER_UNPLANNED:
+        qs = qs.filter(occurrence_type=OccurrenceType.UNPLANNED)
+    return qs
+
+
+def _group_report_planned_unplanned_pie_uris(occurrences, group_by: str):
+    """(planned hours, planned records, unplanned hours, unplanned records) pie URIs."""
+    planned = [o for o in occurrences if o.occurrence_type == OccurrenceType.PLANNED]
+    unplanned = [o for o in occurrences if o.occurrence_type == OccurrenceType.UNPLANNED]
+    planned_hours, planned_records = group_report_pie_pair_uris(
+        _aggregate_group_absence_report_rows(planned, group_by)
+    )
+    unplanned_hours, unplanned_records = group_report_pie_pair_uris(
+        _aggregate_group_absence_report_rows(unplanned, group_by)
+    )
+    return planned_hours, planned_records, unplanned_hours, unplanned_records
 
 
 def _aggregate_group_absence_report_rows(occurrences, group_by: str) -> list:
@@ -2168,6 +2227,7 @@ def generate_report_pdf(request):
     start_date = form.cleaned_data["start_date"]
     end_date = form.cleaned_data["end_date"]
     subtype_filters = form.cleaned_data.get("subtype_filter") or []
+    planned_filter = form.cleaned_data.get("planned_filter") or ReportFilterForm.PLANNED_FILTER_ALL
     report_mode = form.cleaned_data.get("report_mode") or ReportFilterForm.REPORT_MODE_INDIVIDUAL
     logo_uri = _report_logo_data_uri()
     _subtype_labels = dict(OccurrenceSubtype.choices)
@@ -2176,6 +2236,7 @@ def generate_report_pdf(request):
         if not subtype_filters
         else ", ".join(_subtype_labels.get(s, s) for s in subtype_filters)
     )
+    planned_filter_label = _planned_filter_label(planned_filter)
 
     if report_mode == ReportFilterForm.REPORT_MODE_GROUP:
         group_by = form.cleaned_data.get("report_group_by") or "department"
@@ -2184,8 +2245,9 @@ def generate_report_pdf(request):
             user__in=visible_users,
             date__range=(start_date, end_date),
         ).select_related("user", "user__supervisor", "user__group_lead")
-        if subtype_filters:
-            occ_qs = occ_qs.filter(subtype__in=subtype_filters)
+        occ_qs = _filter_occurrences_for_report(
+            occ_qs, subtype_filters=subtype_filters, planned_filter=planned_filter
+        )
         group_rows = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
         pie_hours_uri, pie_records_uri = group_report_pie_pair_uris(group_rows)
         distinct_user_ids = set(occ_qs.values_list("user_id", flat=True))
@@ -2205,6 +2267,7 @@ def generate_report_pdf(request):
                 "logo_uri": logo_uri,
                 "group_by_label": group_by_label,
                 "subtype_filter_label": subtype_filter_label,
+                "planned_filter_label": planned_filter_label,
                 "group_rows": group_rows,
                 "grand": grand,
                 "pie_hours_uri": pie_hours_uri,
@@ -2224,8 +2287,9 @@ def generate_report_pdf(request):
     occurrences = Occurrence.objects.filter(
         user=user, date__range=(start_date, end_date)
     ).order_by("date")
-    if subtype_filters:
-        occurrences = occurrences.filter(subtype__in=subtype_filters)
+    occurrences = _filter_occurrences_for_report(
+        occurrences, subtype_filters=subtype_filters, planned_filter=planned_filter
+    )
 
     # Ensure current balance reflects any occurrences that became due.
     apply_past_due_occurrences(user)
@@ -2246,8 +2310,9 @@ def generate_report_pdf(request):
     ).exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID).exclude(subtype=fmla_st).exclude(
         subtype__in=leave_no_personal
     )
-    if subtype_filters:
-        pto_using_main = pto_using_main.filter(subtype__in=subtype_filters)
+    pto_using_main = _filter_occurrences_for_report(
+        pto_using_main, subtype_filters=subtype_filters, planned_filter=planned_filter
+    )
     pto_used = sum(o.pto_hours_applied for o in pto_using_main)
     personal_used = sum(o.personal_hours_applied for o in pto_using_main)
     legacy_hours = sum(
@@ -2301,11 +2366,7 @@ def generate_report_pdf(request):
             "leave_group_pto_applied_total": leave_group_pto_applied_total,
             "has_fmla_rows": occurrences_fmla.exists(),
             "has_leave_group_rows": occurrences_leave_group.exists(),
-            "subtype_filter_note": (
-                None
-                if not subtype_filters
-                else f"Filtered to subtype(s): {subtype_filter_label}"
-            ),
+            "subtype_filter_note": _report_filter_note(subtype_filters, subtype_filter_label, planned_filter),
         }
     )
     response = HttpResponse(content_type="application/pdf")
