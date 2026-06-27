@@ -274,6 +274,71 @@ def scheduled_hours_for_range(user, week_start: date, week_ending: date) -> floa
     return total
 
 
+def scheduled_duration_hours_for_day_indexed(
+    user,
+    d: date,
+    schedules_by_weekday: dict[int, object],
+) -> float:
+    """Like scheduled_duration_hours_for_day but uses prefetched schedules (no per-day DB query)."""
+    schedule = user.weekly_schedule or {}
+    weekday_str = d.strftime("%A").lower()
+    if schedule and weekday_str in schedule:
+        try:
+            sched = schedule[weekday_str]
+            start = datetime.strptime(sched["start"], TIME_FMT)
+            end = datetime.strptime(sched["end"], TIME_FMT)
+            cm = crosses_midnight_for_day(user, d)
+            lunch_out = lunch_in = None
+            if schedule_row_has_lunch(sched):
+                lunch_out = datetime.strptime(sched["lunch_out"], TIME_FMT)
+                lunch_in = datetime.strptime(sched["lunch_in"], TIME_FMT)
+            return _duration_hours_from_parts(start, end, lunch_out, lunch_in, cm)
+        except (KeyError, ValueError, TypeError):
+            pass
+    sched = schedules_by_weekday.get(d.weekday())
+    if not sched:
+        return 0.0
+    d0 = date(2000, 1, 3)
+    start = datetime.combine(d0, sched.start_time)
+    end = datetime.combine(d0, sched.end_time)
+    cm = crosses_midnight_for_day(user, d)
+    if sched.lunch_out is not None and sched.lunch_in is not None:
+        lunch_out_dt = datetime.combine(d0, sched.lunch_out)
+        lunch_in_dt = datetime.combine(d0, sched.lunch_in)
+        return _duration_hours_from_parts(start, end, lunch_out_dt, lunch_in_dt, cm)
+    return _duration_hours_from_parts(start, end, None, None, cm)
+
+
+def build_daily_scheduled_hours_map(
+    users,
+    span_start: date,
+    span_end: date,
+) -> tuple[list[date], dict[int, list[float]]]:
+    """
+    One pass per user over [span_start, span_end]. Callers should prefetch_related('schedules').
+    Returns (date list, user_id -> daily hours aligned with dates). Skips exempt users.
+    """
+    dates: list[date] = []
+    d = span_start
+    while d <= span_end:
+        dates.append(d)
+        d += timedelta(days=1)
+
+    schedules_by_user: dict[int, dict[int, object]] = {}
+    daily_by_user: dict[int, list[float]] = {}
+    for user in users:
+        if getattr(user, "is_exempt", False):
+            continue
+        uid = user.id
+        if uid not in schedules_by_user:
+            schedules_by_user[uid] = {s.day: s for s in user.schedules.all()}
+        by_weekday = schedules_by_user[uid]
+        daily_by_user[uid] = [
+            scheduled_duration_hours_for_day_indexed(user, day, by_weekday) for day in dates
+        ]
+    return dates, daily_by_user
+
+
 def earliest_clock_in_allowed(user, d: date):
     """
     Earliest moment the user may clock in without manager approval (15 min before scheduled start).

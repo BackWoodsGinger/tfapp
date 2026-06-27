@@ -8,6 +8,11 @@ app_name = "attendance"
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path(
+        "dashboard/group-report-analytics.json",
+        views.group_report_analytics_api,
+        name="group_report_analytics_api",
+    ),
+    path(
         "dashboard/absenteeism-chart.json",
         views.absenteeism_chart_api,
         name="absenteeism_chart_api",

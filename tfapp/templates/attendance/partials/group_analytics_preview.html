@@ -1,0 +1,116 @@
+<h5 class="mt-4">Group analytics preview ({{ report_group_by_label }})</h5>
+<p class="text-muted small mb-3">
+  Absence rate is absence hours as a percent of scheduled time for non-exempt employees in your view.
+  Predictive absenteeism uses a linear trend on weekly unplanned rates (simple regression, not a trained ML model).
+  Full-time = 30–40 avg scheduled hrs/week; part-time = 29 or fewer.
+</p>
+
+<div class="row g-2 g-md-3 mb-4">
+  <div class="col-6 col-md-4 col-lg-3">
+    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
+      <div class="small text-muted text-uppercase">Absence rate</div>
+      <div class="fs-5 fw-semibold">{{ kpi.absence_rate_pct }}%</div>
+      <div class="small text-muted">{{ kpi.absence_hours|floatformat:1 }}h / {{ kpi.scheduled_hours|floatformat:0 }}h sched.</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-3">
+    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
+      <div class="small text-muted text-uppercase">Tardiness</div>
+      <div class="fs-5 fw-semibold">{{ kpi.tardy_hours|floatformat:1 }}h</div>
+      <div class="small text-muted">In / out of grace</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-3">
+    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
+      <div class="small text-muted text-uppercase">Early departure</div>
+      <div class="fs-5 fw-semibold">{{ kpi.early_departure_hours|floatformat:1 }}h</div>
+      <div class="small text-muted">Schedule variance (non-tardy)</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-3">
+    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
+      <div class="small text-muted text-uppercase">Planned / unplanned</div>
+      <div class="fs-5 fw-semibold">{{ kpi.planned_pct|floatformat:0 }}% / {{ kpi.unplanned_pct|floatformat:0 }}%</div>
+      <div class="small text-muted">{{ kpi.planned_hours|floatformat:1 }}h / {{ kpi.unplanned_hours|floatformat:1 }}h</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-3">
+    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
+      <div class="small text-muted text-uppercase">Predicted unplanned</div>
+      <div class="fs-5 fw-semibold">{{ kpi.predicted_unplanned_pct }}%</div>
+      <div class="small text-muted">Next-period trend estimate</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-3">
+    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
+      <div class="small text-muted text-uppercase">Full-time</div>
+      <div class="fs-5 fw-semibold">{{ kpi.full_time_count }}</div>
+      <div class="small text-muted">30–40 hrs/wk scheduled</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-3">
+    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
+      <div class="small text-muted text-uppercase">Part-time</div>
+      <div class="fs-5 fw-semibold">{{ kpi.part_time_count }}</div>
+      <div class="small text-muted">≤29 hrs/wk scheduled</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-4 col-lg-3">
+    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
+      <div class="small text-muted text-uppercase">Non-exempt in view</div>
+      <div class="fs-5 fw-semibold">{{ kpi.non_exempt_count }}</div>
+      <div class="small text-muted">Active employees counted</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-6">
+    <h6 class="text-secondary small text-uppercase mb-2">Absence rate by group</h6>
+    {% if charts.absence_rate_uri %}
+    <img src="{{ charts.absence_rate_uri }}" alt="Absence rate by group" class="group-chart-img img-fluid border rounded shadow-sm d-block mx-auto" />
+    {% else %}
+    <p class="text-muted small">No absence rate data for this period.</p>
+    {% endif %}
+  </div>
+  <div class="col-md-6">
+    <h6 class="text-secondary small text-uppercase mb-2">Predictive unplanned absenteeism by group</h6>
+    {% if charts.predicted_uri %}
+    <img src="{{ charts.predicted_uri }}" alt="Predicted unplanned absenteeism by group" class="group-chart-img img-fluid border rounded shadow-sm d-block mx-auto" />
+    {% else %}
+    <p class="text-muted small">Not enough weekly history to project trends.</p>
+    {% endif %}
+  </div>
+  <div class="col-md-6">
+    <h6 class="text-secondary small text-uppercase mb-2">Planned vs unplanned (hours)</h6>
+    {% if charts.planned_unplanned_uri %}
+    <img src="{{ charts.planned_unplanned_uri }}" alt="Planned vs unplanned hours" class="group-chart-img img-fluid border rounded shadow-sm d-block mx-auto" />
+    {% else %}
+    <p class="text-muted small">No planned or unplanned hours in range.</p>
+    {% endif %}
+  </div>
+  <div class="col-md-6">
+    <h6 class="text-secondary small text-uppercase mb-2">Non-exempt workforce (FT vs PT)</h6>
+    {% if charts.workforce_uri %}
+    <img src="{{ charts.workforce_uri }}" alt="Full-time vs part-time workforce" class="group-chart-img img-fluid border rounded shadow-sm d-block mx-auto" />
+    {% else %}
+    <p class="text-muted small">No scheduled non-exempt employees in view.</p>
+    {% endif %}
+  </div>
+  <div class="col-12">
+    <h6 class="text-secondary small text-uppercase mb-2">Tardiness, early departure &amp; other absence by group</h6>
+    {% if charts.attendance_breakdown_uri %}
+    <img src="{{ charts.attendance_breakdown_uri }}" alt="Attendance breakdown by group" class="group-chart-img img-fluid border rounded shadow-sm d-block mx-auto" />
+    {% else %}
+    <p class="text-muted small">No breakdown data for this period.</p>
+    {% endif %}
+  </div>
+  <div class="col-12">
+    <h6 class="text-secondary small text-uppercase mb-2">Total absence hours by group</h6>
+    {% if charts.hours_by_group_uri %}
+    <img src="{{ charts.hours_by_group_uri }}" alt="Absence hours by group" class="group-chart-img img-fluid border rounded shadow-sm d-block mx-auto" />
+    {% else %}
+    <p class="text-muted small">Not enough hours to draw a chart.</p>
+    {% endif %}
+  </div>
+</div>

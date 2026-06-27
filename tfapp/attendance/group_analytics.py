@@ -4,10 +4,11 @@ Group absence analytics for dashboard preview and PDF reports.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 from .models import CustomUser, Occurrence, OccurrenceSubtype, OccurrenceType
-from .services.time_processing import scheduled_hours_for_range
+from .services.time_processing import build_daily_scheduled_hours_map
 
 TARDY_SUBTYPES = frozenset(
     {
@@ -39,14 +40,6 @@ def _group_label(user: CustomUser, group_by: str) -> str:
     return (user.department or "").strip() or "(No department)"
 
 
-def _avg_weekly_scheduled_hours(user: CustomUser, start: date, end: date) -> float:
-    days = (end - start).days + 1
-    if days <= 0:
-        return 0.0
-    total = scheduled_hours_for_range(user, start, end)
-    return total / (days / 7.0)
-
-
 def _employment_band(avg_weekly_hours: float) -> str:
     if avg_weekly_hours <= PT_WEEKLY_MAX:
         return "part_time"
@@ -55,18 +48,26 @@ def _employment_band(avg_weekly_hours: float) -> str:
     return "between"
 
 
-def _week_windows(start: date, end: date) -> list[tuple[date, date]]:
-    windows: list[tuple[date, date]] = []
+def _week_windows(start: date, end: date) -> list[tuple[int, int]]:
+    """Inclusive date-index ranges (into shared date list) per calendar week."""
+    if start > end:
+        return []
+    dates: list[date] = []
+    d = start
+    while d <= end:
+        dates.append(d)
+        d += timedelta(days=1)
+    date_to_i = {day: i for i, day in enumerate(dates)}
+    windows: list[tuple[int, int]] = []
     cur = start
     while cur <= end:
         week_end = min(cur + timedelta(days=6), end)
-        windows.append((cur, week_end))
+        windows.append((date_to_i[cur], date_to_i[week_end]))
         cur = week_end + timedelta(days=1)
     return windows
 
 
 def _extrapolate_next(values: list[float]) -> float:
-    """Linear trend extrapolation one step ahead (simple predictive absenteeism)."""
     n = len(values)
     if n == 0:
         return 0.0
@@ -81,28 +82,7 @@ def _extrapolate_next(values: list[float]) -> float:
     cov_xy = sum((xs[i] - mx) * (values[i] - my) for i in range(n))
     beta = cov_xy / var_x
     alpha = my - beta * mx
-    projected = alpha + beta * n
-    return round(max(0.0, projected), 2)
-
-
-def _occ_hours(occurrences: list[Occurrence]) -> float:
-    return sum(float(o.duration_hours or 0) for o in occurrences)
-
-
-def _tardy_hours(occurrences: list[Occurrence]) -> float:
-    return sum(float(o.duration_hours or 0) for o in occurrences if o.subtype in TARDY_SUBTYPES)
-
-
-def _early_departure_hours(occurrences: list[Occurrence]) -> float:
-    return sum(
-        float(o.duration_hours or 0)
-        for o in occurrences
-        if o.is_variance_to_schedule and o.subtype not in TARDY_SUBTYPES
-    )
-
-
-def _scheduled_for_users(users: list[CustomUser], start: date, end: date) -> float:
-    return sum(scheduled_hours_for_range(u, start, end) for u in users if not u.is_exempt)
+    return round(max(0.0, alpha + beta * n), 2)
 
 
 def _absence_rate_pct(absence_hours: float, scheduled_hours: float) -> float:
@@ -111,24 +91,89 @@ def _absence_rate_pct(absence_hours: float, scheduled_hours: float) -> float:
     return round(100.0 * absence_hours / scheduled_hours, 2)
 
 
-def _weekly_unplanned_rates(
-    users: list[CustomUser],
-    occurrences: list[Occurrence],
-    start: date,
-    end: date,
-) -> list[float]:
-    user_ids = {u.id for u in users}
-    occs = [o for o in occurrences if o.user_id in user_ids]
-    rates: list[float] = []
-    for w_start, w_end in _week_windows(start, end):
-        sched = _scheduled_for_users(users, w_start, w_end)
-        unpl = sum(
-            float(o.duration_hours or 0)
-            for o in occs
-            if w_start <= o.date <= w_end and o.occurrence_type == OccurrenceType.UNPLANNED
+@dataclass
+class _ScheduleIndex:
+    dates: list[date]
+    daily_by_user: dict[int, list[float]]
+    prefix_by_user: dict[int, list[float]]
+    week_windows: list[tuple[int, int]]
+    period_days: int
+
+    @classmethod
+    def build(cls, users: list[CustomUser], start: date, end: date) -> _ScheduleIndex:
+        dates, daily_by_user = build_daily_scheduled_hours_map(users, start, end)
+        prefix_by_user = {
+            uid: _prefix(daily) for uid, daily in daily_by_user.items()
+        }
+        return cls(
+            dates=dates,
+            daily_by_user=daily_by_user,
+            prefix_by_user=prefix_by_user,
+            week_windows=_week_windows(start, end),
+            period_days=len(dates),
         )
+
+    def scheduled_sum(self, user_ids: set[int], i0: int, i1: int) -> float:
+        total = 0.0
+        for uid in user_ids:
+            prefix = self.prefix_by_user.get(uid)
+            if prefix:
+                total += prefix[i1 + 1] - prefix[i0]
+        return total
+
+    def avg_weekly_hours(self, user_id: int) -> float:
+        prefix = self.prefix_by_user.get(user_id)
+        if not prefix or self.period_days <= 0:
+            return 0.0
+        total = prefix[-1]
+        return total / (self.period_days / 7.0)
+
+
+def _prefix(values: list[float]) -> list[float]:
+    out = [0.0]
+    for v in values:
+        out.append(out[-1] + v)
+    return out
+
+
+def _index_occurrences(occurrences: list[Occurrence]) -> dict[int, list[Occurrence]]:
+    by_user: dict[int, list[Occurrence]] = defaultdict(list)
+    for o in occurrences:
+        by_user[o.user_id].append(o)
+    return by_user
+
+
+def _sum_occ_hours(occs: list[Occurrence], pred) -> float:
+    return sum(float(o.duration_hours or 0) for o in occs if pred(o))
+
+
+def _weekly_unplanned_rates(
+    schedule: _ScheduleIndex,
+    occs_by_user: dict[int, list[Occurrence]],
+    user_ids: set[int],
+) -> list[float]:
+    rates: list[float] = []
+    for i0, i1 in schedule.week_windows:
+        sched = schedule.scheduled_sum(user_ids, i0, i1)
+        unpl = 0.0
+        for uid in user_ids:
+            for o in occs_by_user.get(uid, ()):
+                if (
+                    o.occurrence_type == OccurrenceType.UNPLANNED
+                    and schedule.dates[i0] <= o.date <= schedule.dates[i1]
+                ):
+                    unpl += float(o.duration_hours or 0)
         rates.append(_absence_rate_pct(unpl, sched))
     return rates
+
+
+def _group_occurrences(
+    occs_by_user: dict[int, list[Occurrence]], user_ids: set[int]
+) -> list[Occurrence]:
+    out: list[Occurrence] = []
+    for uid in user_ids:
+        out.extend(occs_by_user.get(uid, ()))
+    return out
 
 
 def compute_group_analytics(
@@ -139,27 +184,36 @@ def compute_group_analytics(
     end_date: date,
     group_by: str,
 ) -> dict:
-    """
-    Company and per-group KPIs plus chart segment data for group report preview.
-    """
     ne_users = [u for u in visible_users if not u.is_exempt]
-    users_by_group: dict[str, list[CustomUser]] = defaultdict(list)
-    for u in ne_users:
-        users_by_group[_group_label(u, group_by)].append(u)
+    ne_ids = {u.id for u in ne_users}
+    schedule = _ScheduleIndex.build(ne_users, start_date, end_date)
+    occs_by_user = _index_occurrences(occurrences)
 
-    total_scheduled = _scheduled_for_users(ne_users, start_date, end_date)
-    total_absence = _occ_hours(occurrences)
-    tardy_h = _tardy_hours(occurrences)
-    early_h = _early_departure_hours(occurrences)
-    planned_h = sum(float(o.duration_hours or 0) for o in occurrences if o.occurrence_type == OccurrenceType.PLANNED)
-    unplanned_h = sum(
-        float(o.duration_hours or 0) for o in occurrences if o.occurrence_type == OccurrenceType.UNPLANNED
+    users_by_group: dict[str, list[CustomUser]] = defaultdict(list)
+    group_user_ids: dict[str, set[int]] = defaultdict(set)
+    for u in ne_users:
+        label = _group_label(u, group_by)
+        users_by_group[label].append(u)
+        group_user_ids[label].add(u.id)
+
+    total_scheduled = schedule.scheduled_sum(ne_ids, 0, schedule.period_days - 1)
+    total_absence = _sum_occ_hours(occurrences, lambda o: True)
+    tardy_h = _sum_occ_hours(occurrences, lambda o: o.subtype in TARDY_SUBTYPES)
+    early_h = _sum_occ_hours(
+        occurrences,
+        lambda o: o.is_variance_to_schedule and o.subtype not in TARDY_SUBTYPES,
+    )
+    planned_h = _sum_occ_hours(
+        occurrences, lambda o: o.occurrence_type == OccurrenceType.PLANNED
+    )
+    unplanned_h = _sum_occ_hours(
+        occurrences, lambda o: o.occurrence_type == OccurrenceType.UNPLANNED
     )
     other_h = max(0.0, total_absence - tardy_h - early_h)
 
     ft_count = pt_count = between_count = 0
     for u in ne_users:
-        band = _employment_band(_avg_weekly_scheduled_hours(u, start_date, end_date))
+        band = _employment_band(schedule.avg_weekly_hours(u.id))
         if band == "full_time":
             ft_count += 1
         elif band == "part_time":
@@ -182,31 +236,31 @@ def compute_group_analytics(
         "part_time_count": pt_count,
         "between_count": between_count,
         "non_exempt_count": len(ne_users),
-        "predicted_unplanned_pct": _extrapolate_next(_weekly_unplanned_rates(ne_users, occurrences, start_date, end_date)),
+        "predicted_unplanned_pct": _extrapolate_next(
+            _weekly_unplanned_rates(schedule, occs_by_user, ne_ids)
+        ),
     }
 
     by_group: list[dict] = []
     for label in sorted(users_by_group.keys(), key=lambda s: s.lower()):
-        group_users = users_by_group[label]
-        group_user_ids = {u.id for u in group_users}
-        group_occs = [o for o in occurrences if o.user_id in group_user_ids]
-        g_sched = _scheduled_for_users(group_users, start_date, end_date)
-        g_absence = _occ_hours(group_occs)
-        g_tardy = _tardy_hours(group_occs)
-        g_early = _early_departure_hours(group_occs)
-        g_planned = sum(
-            float(o.duration_hours or 0)
-            for o in group_occs
-            if o.occurrence_type == OccurrenceType.PLANNED
+        uids = group_user_ids[label]
+        group_occs = _group_occurrences(occs_by_user, uids)
+        g_sched = schedule.scheduled_sum(uids, 0, schedule.period_days - 1)
+        g_absence = _sum_occ_hours(group_occs, lambda o: True)
+        g_tardy = _sum_occ_hours(group_occs, lambda o: o.subtype in TARDY_SUBTYPES)
+        g_early = _sum_occ_hours(
+            group_occs,
+            lambda o: o.is_variance_to_schedule and o.subtype not in TARDY_SUBTYPES,
         )
-        g_unplanned = sum(
-            float(o.duration_hours or 0)
-            for o in group_occs
-            if o.occurrence_type == OccurrenceType.UNPLANNED
+        g_planned = _sum_occ_hours(
+            group_occs, lambda o: o.occurrence_type == OccurrenceType.PLANNED
+        )
+        g_unplanned = _sum_occ_hours(
+            group_occs, lambda o: o.occurrence_type == OccurrenceType.UNPLANNED
         )
         g_ft = g_pt = 0
-        for u in group_users:
-            band = _employment_band(_avg_weekly_scheduled_hours(u, start_date, end_date))
+        for uid in uids:
+            band = _employment_band(schedule.avg_weekly_hours(uid))
             if band == "full_time":
                 g_ft += 1
             elif band == "part_time":
@@ -226,7 +280,7 @@ def compute_group_analytics(
                 "full_time_count": g_ft,
                 "part_time_count": g_pt,
                 "predicted_unplanned_pct": _extrapolate_next(
-                    _weekly_unplanned_rates(group_users, group_occs, start_date, end_date)
+                    _weekly_unplanned_rates(schedule, occs_by_user, uids)
                 ),
             }
         )

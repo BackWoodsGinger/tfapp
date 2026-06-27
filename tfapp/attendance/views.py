@@ -24,7 +24,7 @@ from django.conf import settings as django_settings
 from django.core.cache import cache
 from django.http import HttpResponse
 from django.http import JsonResponse
-from django.template.loader import get_template
+from django.template.loader import get_template, render_to_string
 
 from accounts.models import UserProfile
 from xhtml2pdf import pisa
@@ -498,6 +498,90 @@ def absenteeism_chart_api(request):
         return JsonResponse(payload, status=500)
 
 
+def _group_report_analytics_cache_key(form: ReportFilterForm, user_ids: list[int]) -> str:
+    cd = form.cleaned_data
+    subtypes = ",".join(sorted(cd.get("subtype_filter") or []))
+    return (
+        f"group_report_analytics:v2:{cd['start_date']}:{cd['end_date']}:"
+        f"{cd.get('report_group_by') or 'department'}:"
+        f"{cd.get('planned_filter') or ''}:{subtypes}:{_user_ids_signature(user_ids)}"
+    )
+
+
+def _build_group_report_analytics_html(form: ReportFilterForm, visible_users: list) -> str:
+    start_date = form.cleaned_data["start_date"]
+    end_date = form.cleaned_data["end_date"]
+    group_by = form.cleaned_data.get("report_group_by") or "department"
+    subtype_filters = form.cleaned_data.get("subtype_filter") or []
+    planned_filter = form.cleaned_data.get("planned_filter") or ReportFilterForm.PLANNED_FILTER_ALL
+    group_by_label = dict(ReportFilterForm.REPORT_GROUP_BY_CHOICES).get(group_by, group_by)
+
+    occ_qs = Occurrence.objects.filter(
+        user__in=visible_users,
+        date__range=(start_date, end_date),
+    )
+    occ_qs = _filter_occurrences_for_report(
+        occ_qs, subtype_filters=subtype_filters, planned_filter=planned_filter
+    )
+    occ_list = list(occ_qs)
+    ne_visible = [u for u in visible_users if not u.is_exempt]
+    analytics = compute_group_analytics(
+        occurrences=occ_list,
+        visible_users=ne_visible,
+        start_date=start_date,
+        end_date=end_date,
+        group_by=group_by,
+    )
+    charts = build_group_analytics_chart_uris(analytics, profile="dashboard")
+    return render_to_string(
+        "attendance/partials/group_analytics_preview.html",
+        {
+            "kpi": analytics["company"],
+            "charts": charts,
+            "report_group_by_label": group_by_label,
+        },
+    )
+
+
+@login_required
+def group_report_analytics_api(request):
+    """Group report KPIs + charts for dashboard preview (async; cached)."""
+    if not user_can_view_reports(request.user):
+        return JsonResponse({"error": "forbidden"}, status=403)
+
+    visible_users = list(
+        _users_visible_for_attendance_viewer(request.user).prefetch_related(
+            "schedules", "supervisor", "group_lead"
+        )
+    )
+    form = ReportFilterForm(request.GET)
+    form.fields["user"].queryset = CustomUser.objects.filter(
+        pk__in=[u.pk for u in visible_users]
+    )
+    if not form.is_valid():
+        return JsonResponse({"error": "invalid", "details": form.errors}, status=400)
+
+    report_mode = form.cleaned_data.get("report_mode") or ReportFilterForm.REPORT_MODE_INDIVIDUAL
+    if report_mode != ReportFilterForm.REPORT_MODE_GROUP:
+        return JsonResponse({"error": "group_mode_required"}, status=400)
+
+    user_ids = [u.id for u in visible_users]
+    cache_key = _group_report_analytics_cache_key(form, user_ids)
+    ttl = getattr(django_settings, "GROUP_REPORT_ANALYTICS_CACHE_SECONDS", 600)
+    try:
+        html = cache.get(cache_key)
+        if html is None:
+            html = _build_group_report_analytics_html(form, visible_users)
+            cache.set(cache_key, html, ttl)
+        return JsonResponse({"html": html})
+    except Exception as e:
+        logger.exception("group_report_analytics_api failed")
+        payload = {"error": "analytics_failed"}
+        if django_settings.DEBUG:
+            payload["detail"] = str(e)
+        return JsonResponse(payload, status=500)
+
+
 @login_required
 def dashboard(request):
     user = request.user
@@ -644,12 +728,10 @@ def dashboard(request):
     report_selected_user = None
     report_group_summary = []
     report_group_by_label = ""
-    report_group_analytics = None
-    report_group_charts = {}
-    report_pie_hours_uri = None
-    report_pie_records_uri = None
+    report_group_preview = False
     report_today = localdate()
-    if report_form.is_valid():
+    is_report_preview = request.GET.get("preview") == "1"
+    if report_form.is_valid() and is_report_preview:
         report_mode = report_form.cleaned_data.get("report_mode") or ReportFilterForm.REPORT_MODE_INDIVIDUAL
         report_start_date = report_form.cleaned_data.get("start_date")
         report_end_date = report_form.cleaned_data.get("end_date")
@@ -664,6 +746,7 @@ def dashboard(request):
             report_group_by_label = dict(ReportFilterForm.REPORT_GROUP_BY_CHOICES).get(
                 group_by, group_by
             )
+            report_group_preview = True
             occ_qs = Occurrence.objects.filter(
                 user__in=visible_users,
                 date__range=(report_start_date, report_end_date),
@@ -671,22 +754,7 @@ def dashboard(request):
             occ_qs = _filter_occurrences_for_report(
                 occ_qs, subtype_filters=subtype_filters, planned_filter=planned_filter
             )
-            occ_list = list(occ_qs)
-            report_group_summary = _aggregate_group_absence_report_rows(occ_list, group_by)
-            ne_visible = [u for u in visible_users if not u.is_exempt]
-            report_group_analytics = compute_group_analytics(
-                occurrences=occ_list,
-                visible_users=ne_visible,
-                start_date=report_start_date,
-                end_date=report_end_date,
-                group_by=group_by,
-            )
-            report_group_charts = build_group_analytics_chart_uris(
-                report_group_analytics, profile="dashboard"
-            )
-            report_pie_hours_uri, report_pie_records_uri = group_report_pie_pair_uris(
-                report_group_summary, profile="dashboard"
-            )
+            report_group_summary = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
         elif report_mode == ReportFilterForm.REPORT_MODE_INDIVIDUAL and report_form.cleaned_data.get("user"):
             report_selected_user = report_form.cleaned_data["user"]
             if report_start_date and report_end_date:
@@ -819,10 +887,7 @@ def dashboard(request):
         "report_selected_user": report_selected_user,
         "report_group_summary": report_group_summary,
         "report_group_by_label": report_group_by_label,
-        "report_group_analytics": report_group_analytics,
-        "report_group_charts": report_group_charts,
-        "report_pie_hours_uri": report_pie_hours_uri,
-        "report_pie_records_uri": report_pie_records_uri,
+        "report_group_preview": report_group_preview,
         "user_service_dates": user_service_dates,
         "today_iso": report_today.isoformat(),
         "clock_in_overrides": clock_in_overrides,
