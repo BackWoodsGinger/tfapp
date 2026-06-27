@@ -210,13 +210,6 @@ header #main-header {
 }
 
 /* Dashboard tables: vertical scroll only; text columns wrap */
-@media (min-width: 992px) {
-  .col-lg-90 {
-    flex: 0 0 90%;
-    max-width: 90%;
-  }
-}
-
 .dashboard-page .pa-table-scroll-wrap {
   overflow-x: visible;
   overflow-y: auto;
