@@ -185,27 +185,196 @@ table th:last-child {
     font-size: 14px;
 }
 
-/* Improve Small Screen Display */
+/* ========== Mobile-responsive admin ========== */
+#content {
+    padding: 12px 15px;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+/* Changelist: horizontal scroll for wide tables */
+#changelist .results,
+.changelist-results-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 1rem;
+}
+
+#changelist .results table,
+#result_list {
+    min-width: 600px;
+}
+
+#changelist .actions {
+    padding: 10px;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+#changelist .actions select {
+    max-width: 100%;
+    min-width: 0;
+}
+
+/* Form change pages: stack and full width on small screens */
+.form-row {
+    padding: 8px 0;
+}
+
+.form-row label {
+    display: inline-block;
+    min-width: 0;
+}
+
+/* Header and breadcrumbs wrap on narrow screens */
+#header {
+    min-height: 50px;
+    height: auto;
+    padding: 8px 15px;
+    flex-wrap: wrap;
+}
+
+#branding h1 {
+    font-size: 1.1rem;
+    word-break: break-word;
+}
+
+#branding .brand_img {
+    max-height: 40px;
+    width: auto;
+}
+
+div.breadcrumbs {
+    padding: 8px 15px;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+/* Touch-friendly buttons and inputs */
 @media (max-width: 768px) {
+    body {
+        font-size: 15px;
+    }
+
+    #content {
+        padding: 10px 12px;
+    }
+
+    #content h1 {
+        font-size: 1.25rem;
+    }
+
     table {
         font-size: 14px;
+    }
+
+    #changelist .results,
+    .changelist-results-wrapper {
+        margin-left: -12px;
+        margin-right: -12px;
+        padding-left: 12px;
+        padding-right: 12px;
     }
 
     fieldset.actions {
         flex-direction: column;
     }
 
-    fieldset.actions button, .button {
-        width: 100%; /* Full width buttons for small screens */
+    fieldset.actions label {
+        width: 100%;
+    }
+
+    fieldset.actions button,
+    .button,
+    .submit-row input {
+        width: 100%;
+        min-height: 44px;
+        font-size: 16px;
+    }
+
+    .submit-row {
+        padding: 12px;
+    }
+
+    .submit-row input {
+        margin-bottom: 8px;
     }
 
     .apply-schedule {
-        flex-direction: row;
-        justify-content: space-around;
+        flex-direction: column;
+        align-items: stretch;
     }
 
     .apply-schedule button {
-        flex: 1;
-        margin: 2px;
+        flex: none;
+        min-height: 44px;
+        margin: 4px 0;
+    }
+
+    fieldset.module.aligned {
+        padding: 12px;
+    }
+
+    fieldset.module.aligned .flex-container {
+        flex-direction: column;
+    }
+
+    /* Inline tables (e.g. inlines in add/change form) */
+    .inline-group .tabular {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .inline-group .tabular table {
+        min-width: 500px;
+    }
+
+    /* Nav sidebar: ensure toggle is tap-friendly */
+    #toggle-nav-sidebar {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 12px;
+    }
+
+    #nav-sidebar {
+        width: 100%;
+        max-width: 280px;
+    }
+}
+
+@media (max-width: 480px) {
+    #branding h1 {
+        font-size: 1rem;
+    }
+
+    #branding .brand_img {
+        max-height: 32px;
+    }
+
+    #changelist .toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    #changelist .toolbar input,
+    #changelist .toolbar select {
+        width: 100%;
+        max-width: none;
+    }
+
+    .object-tools {
+        margin-top: 8px;
+    }
+
+    .object-tools li {
+        display: block;
+    }
+
+    .object-tools a {
+        display: block;
+        padding: 10px 12px;
+        min-height: 44px;
+        line-height: 1.4;
+        box-sizing: border-box;
     }
 }
