@@ -50,7 +50,11 @@ from .models import (
     ABSENCE_REPORT_LEAVE_AND_NO_PERSONAL_SUBTYPES,
 )
 from . import approval_emails
-from .group_report_charts import group_report_pie_pair_uris
+from .group_report_charts import (
+    build_group_analytics_chart_uris,
+    group_report_pie_pair_uris,
+)
+from .group_analytics import compute_group_analytics
 from .forms import ReportFilterForm, TimeOffRequestForm, WorkThroughLunchRequestForm, AdjustPunchRequestForm
 from .payroll_utils import (
     week_ending_for_date as _week_ending_for_date,
@@ -640,12 +644,10 @@ def dashboard(request):
     report_selected_user = None
     report_group_summary = []
     report_group_by_label = ""
+    report_group_analytics = None
+    report_group_charts = {}
     report_pie_hours_uri = None
     report_pie_records_uri = None
-    report_pie_planned_hours_uri = None
-    report_pie_planned_records_uri = None
-    report_pie_unplanned_hours_uri = None
-    report_pie_unplanned_records_uri = None
     report_today = localdate()
     if report_form.is_valid():
         report_mode = report_form.cleaned_data.get("report_mode") or ReportFilterForm.REPORT_MODE_INDIVIDUAL
@@ -671,15 +673,20 @@ def dashboard(request):
             )
             occ_list = list(occ_qs)
             report_group_summary = _aggregate_group_absence_report_rows(occ_list, group_by)
-            report_pie_hours_uri, report_pie_records_uri = group_report_pie_pair_uris(
-                report_group_summary
+            ne_visible = [u for u in visible_users if not u.is_exempt]
+            report_group_analytics = compute_group_analytics(
+                occurrences=occ_list,
+                visible_users=ne_visible,
+                start_date=report_start_date,
+                end_date=report_end_date,
+                group_by=group_by,
             )
-            (
-                report_pie_planned_hours_uri,
-                report_pie_planned_records_uri,
-                report_pie_unplanned_hours_uri,
-                report_pie_unplanned_records_uri,
-            ) = _group_report_planned_unplanned_pie_uris(occ_list, group_by)
+            report_group_charts = build_group_analytics_chart_uris(
+                report_group_analytics, profile="dashboard"
+            )
+            report_pie_hours_uri, report_pie_records_uri = group_report_pie_pair_uris(
+                report_group_summary, profile="dashboard"
+            )
         elif report_mode == ReportFilterForm.REPORT_MODE_INDIVIDUAL and report_form.cleaned_data.get("user"):
             report_selected_user = report_form.cleaned_data["user"]
             if report_start_date and report_end_date:
@@ -812,12 +819,10 @@ def dashboard(request):
         "report_selected_user": report_selected_user,
         "report_group_summary": report_group_summary,
         "report_group_by_label": report_group_by_label,
+        "report_group_analytics": report_group_analytics,
+        "report_group_charts": report_group_charts,
         "report_pie_hours_uri": report_pie_hours_uri,
         "report_pie_records_uri": report_pie_records_uri,
-        "report_pie_planned_hours_uri": report_pie_planned_hours_uri,
-        "report_pie_planned_records_uri": report_pie_planned_records_uri,
-        "report_pie_unplanned_hours_uri": report_pie_unplanned_hours_uri,
-        "report_pie_unplanned_records_uri": report_pie_unplanned_records_uri,
         "user_service_dates": user_service_dates,
         "today_iso": report_today.isoformat(),
         "clock_in_overrides": clock_in_overrides,
@@ -959,19 +964,6 @@ def _filter_occurrences_for_report(qs, *, subtype_filters, planned_filter):
     elif planned_filter == ReportFilterForm.PLANNED_FILTER_UNPLANNED:
         qs = qs.filter(occurrence_type=OccurrenceType.UNPLANNED)
     return qs
-
-
-def _group_report_planned_unplanned_pie_uris(occurrences, group_by: str):
-    """(planned hours, planned records, unplanned hours, unplanned records) pie URIs."""
-    planned = [o for o in occurrences if o.occurrence_type == OccurrenceType.PLANNED]
-    unplanned = [o for o in occurrences if o.occurrence_type == OccurrenceType.UNPLANNED]
-    planned_hours, planned_records = group_report_pie_pair_uris(
-        _aggregate_group_absence_report_rows(planned, group_by)
-    )
-    unplanned_hours, unplanned_records = group_report_pie_pair_uris(
-        _aggregate_group_absence_report_rows(unplanned, group_by)
-    )
-    return planned_hours, planned_records, unplanned_hours, unplanned_records
 
 
 def _aggregate_group_absence_report_rows(occurrences, group_by: str) -> list:
@@ -2249,7 +2241,7 @@ def generate_report_pdf(request):
             occ_qs, subtype_filters=subtype_filters, planned_filter=planned_filter
         )
         group_rows = _aggregate_group_absence_report_rows(list(occ_qs), group_by)
-        pie_hours_uri, pie_records_uri = group_report_pie_pair_uris(group_rows)
+        pie_hours_uri, pie_records_uri = group_report_pie_pair_uris(group_rows, profile="pdf")
         distinct_user_ids = set(occ_qs.values_list("user_id", flat=True))
         grand = {
             "occurrence_count": sum(r["occurrence_count"] for r in group_rows),

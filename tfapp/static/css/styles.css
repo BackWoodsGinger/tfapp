@@ -210,24 +210,30 @@ header #main-header {
 }
 
 /* Dashboard tables: vertical scroll only; text columns wrap */
-.dashboard-page .pa-table-scroll-wrap {
+.card-body .pa-table-scroll-wrap {
   overflow-x: visible;
   overflow-y: auto;
 }
 
-.dashboard-page .pa-table-scroll-wrap table {
+.card-body .pa-table-scroll-wrap table {
   width: 100%;
 }
 
-.dashboard-page .pa-table-scroll-wrap th,
-.dashboard-page .pa-table-scroll-wrap td {
+.card-body .pa-table-scroll-wrap th,
+.card-body .pa-table-scroll-wrap td {
   white-space: normal;
   word-break: break-word;
 }
 
-.dashboard-page .pa-table-scroll-wrap th.text-end,
-.dashboard-page .pa-table-scroll-wrap td.text-end {
+.card-body .pa-table-scroll-wrap th.text-end,
+.card-body .pa-table-scroll-wrap td.text-end {
   white-space: nowrap;
+}
+
+.group-chart-img {
+  max-width: 100%;
+  width: 100%;
+  height: auto;
 }
 
 /* Payroll weekly summary: ~20 visible rows; numeric columns as narrow as headings allow */
