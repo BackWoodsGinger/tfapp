@@ -209,11 +209,13 @@ header #main-header {
   box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12);
 }
 
-/* Dashboard: wide enough for multi-column tables without horizontal scroll */
-main > .container-fluid.dashboard-page {
-  max-width: min(100%, 68rem);
+/* Dashboard: centered column wide enough for tables, narrower than full viewport */
+.dashboard-page {
+  width: 100%;
+  max-width: 50rem;
   margin-left: auto;
   margin-right: auto;
+  flex: 0 0 100%;
 }
 
 .dashboard-page .pa-table-scroll-wrap {

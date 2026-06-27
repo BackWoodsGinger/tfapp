@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% load static %}
 {% block content %}
-<div class="container-fluid dashboard-page mt-4 px-3 px-lg-4">
-  <div class="row">
-    <div class="col-12">
+<div class="container-fluid mt-4 px-3 px-lg-4">
+  <div class="row justify-content-center">
+    <div class="col-12 dashboard-page">
 
       {% if pending_approval_counts and pending_approval_counts.total %}
       <div class="alert alert-warning border-0 shadow-sm mb-4" role="alert">
