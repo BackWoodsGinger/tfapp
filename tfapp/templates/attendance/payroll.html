@@ -1,6 +1,28 @@
 {% extends "base.html" %}
 {% load crispy_forms_tags %}
 {% block content %}
+<style>
+  /* body { color: #fff !important } in styles.css; Bootstrap modal panel is light */
+  #payrollUserModal {
+    --bs-modal-color: #212529;
+    --bs-body-color: #212529;
+    --bs-emphasis-color: #212529;
+    --bs-secondary-color: rgba(33, 37, 41, 0.65);
+  }
+  #payrollUserModal .modal-content,
+  #payrollUserModal .modal-content .modal-title,
+  #payrollUserModal .modal-content .modal-header,
+  #payrollUserModal .modal-content .modal-body,
+  #payrollUserModal .modal-content .modal-footer,
+  #payrollUserModal .modal-content #payrollUserModalMeta,
+  #payrollUserModal .modal-content .table td,
+  #payrollUserModal .modal-content .table th {
+    color: #212529 !important;
+  }
+  #payrollUserModal .modal-content .text-muted {
+    color: rgba(33, 37, 41, 0.65) !important;
+  }
+</style>
 <div class="container mt-4">
   <div class="row justify-content-center">
     <div class="col-sm-12 col-md-10 col-lg-12">

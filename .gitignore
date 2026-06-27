@@ -5,12 +5,23 @@ __pycache__/
 # Virtual env
 venv/
 env/
+.venv/
 
 # Django
 media/
 staticfiles/
 # Database
 db.sqlite3
+*.sqlite3
+*.sqlite3-journal
+
+# PostrgreSQL backups
+backups/
+*.dump
+*.bak
+
+# Logs
+*.log
 
 # Secrets
 .env

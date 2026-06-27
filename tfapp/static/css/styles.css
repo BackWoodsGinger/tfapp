@@ -365,18 +365,28 @@ input:focus, textarea:focus, select:focus {
 }
 
 /*
- * Daily Breakdown modal is outside .card-body; body { color: #fff !important } makes
- * title/name unreadable on Bootstrap’s light modal panel.
+ * Daily Breakdown: modal is moved to <body>; inherits body { color: #fff !important }.
+ * Set Bootstrap tokens on #payrollUserModal and force dark text on .modal-content.
  */
-#payrollUserModal .modal-title,
-#payrollUserModal .modal-header,
-#payrollUserModal .modal-body,
-#payrollUserModal .modal-footer,
-#payrollUserModal #payrollUserModalMeta {
+#payrollUserModal {
+  --bs-modal-color: #212529;
+  --bs-body-color: #212529;
+  --bs-emphasis-color: #212529;
+  --bs-secondary-color: rgba(33, 37, 41, 0.65);
+}
+
+#payrollUserModal .modal-content,
+#payrollUserModal .modal-content .modal-title,
+#payrollUserModal .modal-content .modal-header,
+#payrollUserModal .modal-content .modal-body,
+#payrollUserModal .modal-content .modal-footer,
+#payrollUserModal .modal-content #payrollUserModalMeta,
+#payrollUserModal .modal-content .table td,
+#payrollUserModal .modal-content .table th {
   color: #212529 !important;
 }
 
-#payrollUserModal .text-muted {
+#payrollUserModal .modal-content .text-muted {
   color: rgba(33, 37, 41, 0.65) !important;
 }
 

@@ -72,7 +72,7 @@ def scheduled_lunch_datetimes_for_entry(entry) -> tuple[datetime, datetime] | No
     Returns None if no schedule or times cannot be placed within the shift.
     """
     user = entry.user
-    d = entry.date
+    d = effective_schedule_reference_date(entry)
     lunch_out_t = get_scheduled_lunch_out_for_day(user, d)
     lunch_in_t = get_scheduled_lunch_in_for_day(user, d)
     if not lunch_out_t or not lunch_in_t:
@@ -93,6 +93,41 @@ def scheduled_lunch_datetimes_for_entry(entry) -> tuple[datetime, datetime] | No
     if lo < ci or li > co or lo >= li:
         return None
     return (lunch_out_dt, lunch_in_dt)
+
+
+def effective_schedule_reference_date(entry) -> date:
+    """
+    Which calendar date's schedule template applies to this entry's punches.
+
+    Nominal weekday schedule is used unless the worked span is much longer than
+    that day's scheduled hours (e.g. working Monday's 7:00–15:30 shift on Wednesday
+    after a schedule exchange). Then pick the weekday template whose end time and
+    duration best match the punches.
+    """
+    user = entry.user
+    d = entry.date
+    nominal = scheduled_duration_hours_for_day(user, d)
+    if not (entry.clock_in and entry.clock_out):
+        return d
+    span_h = (entry.clock_out - entry.clock_in).total_seconds() / 3600
+    if nominal <= 0 or span_h <= nominal + 1.5:
+        return d
+    out_t = timezone.localtime(entry.clock_out).time()
+    best_ref = d
+    best_score = None
+    for wd in range(7):
+        ref = d - timedelta(days=(d.weekday() - wd) % 7)
+        sched_h = scheduled_duration_hours_for_day(user, ref)
+        end_t = get_scheduled_end_time_for_day(user, ref)
+        if sched_h <= 0 or not end_t:
+            continue
+        end_mins = end_t.hour * 60 + end_t.minute
+        out_mins = out_t.hour * 60 + out_t.minute
+        score = abs(end_mins - out_mins) + abs(span_h - sched_h) * 30
+        if best_score is None or score < best_score:
+            best_score = score
+            best_ref = ref
+    return best_ref
 
 
 def get_scheduled_start_for_day(user, d: date):
@@ -299,6 +334,22 @@ def clock_in_requires_approver(user, now, d: date) -> tuple[bool, str | None]:
         return True, "unscheduled"
     earliest = earliest_clock_in_allowed(user, d)
     if earliest and now <= earliest:
+        return True, "early"
+    return False, None
+
+
+def clock_in_requires_approver_for_entry(entry) -> tuple[bool, str | None]:
+    """Like clock_in_requires_approver but uses effective schedule for exchanged shifts."""
+    if not entry.clock_in:
+        return False, None
+    ref = effective_schedule_reference_date(entry)
+    clock_in_local = timezone.localtime(entry.clock_in)
+    start = get_scheduled_start_for_day(entry.user, ref)
+    if not start:
+        return True, "unscheduled"
+    scheduled_local = _combine_local(entry.date, start)
+    earliest = scheduled_local - timedelta(minutes=15)
+    if clock_in_local <= earliest:
         return True, "early"
     return False, None
 

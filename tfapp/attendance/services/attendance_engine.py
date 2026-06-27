@@ -17,7 +17,8 @@ from attendance.models import (
     PTOBalanceHistory,
 )
 from attendance.services.time_processing import (
-    clock_in_requires_approver,
+    clock_in_requires_approver_for_entry,
+    effective_schedule_reference_date,
     get_scheduled_lunch_in_for_day,
     get_scheduled_start_for_day,
 )
@@ -41,8 +42,7 @@ def entries_requiring_clock_in_override(week_start: date, week_ending: date):
         .order_by("date", "user__payroll_lastname", "user__payroll_firstname", "user__username")
     )
     for e in rows:
-        clock_in_local = django_tz.localtime(e.clock_in)
-        _requires, reason = clock_in_requires_approver(e.user, clock_in_local, e.date)
+        _requires, reason = clock_in_requires_approver_for_entry(e)
         if reason == "unscheduled":
             if e.clock_in_authorized_by_id or e.clock_in_override_denied:
                 continue
@@ -128,15 +128,16 @@ def create_tardy_occurrences_for_week(week_start, week_ending, period=None):
         clock_in__isnull=False,
     ).select_related("user")
     for e in entries:
-        scheduled_start = get_scheduled_start_for_day(e.user, e.date)
+        sched_ref = effective_schedule_reference_date(e)
+        scheduled_start = get_scheduled_start_for_day(e.user, sched_ref)
         if not scheduled_start:
             continue
         if not e.clock_in:
             continue
-        if e.clock_in_early_authorized_by_id:
+        if e.clock_in_early_authorized_by_id and not e.clock_in_early_override_denied:
             continue
 
-        lunch_in_t = get_scheduled_lunch_in_for_day(e.user, e.date)
+        lunch_in_t = get_scheduled_lunch_in_for_day(e.user, sched_ref)
         if lunch_in_t:
             clock_in_local_t = django_tz.localtime(e.clock_in).time()
             if clock_in_local_t >= lunch_in_t:
