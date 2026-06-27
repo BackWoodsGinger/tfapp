@@ -209,15 +209,7 @@ header #main-header {
   box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12);
 }
 
-/* Dashboard: centered column wide enough for tables, narrower than full viewport */
-.dashboard-page {
-  width: 100%;
-  max-width: 50rem;
-  margin-left: auto;
-  margin-right: auto;
-  flex: 0 0 100%;
-}
-
+/* Dashboard tables: vertical scroll only; text columns wrap */
 .dashboard-page .pa-table-scroll-wrap {
   overflow-x: visible;
   overflow-y: auto;
