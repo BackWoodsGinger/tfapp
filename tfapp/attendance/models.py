@@ -909,58 +909,68 @@ class DailyAttendanceSummary(models.Model):
         return f"{self.user_id} {self.work_date} ({self.status})"
 
 
-def get_company_holidays(year: int):
+def observed_company_holiday_date(actual: date) -> date:
     """
-    Return a dict of {date: name} for company holidays in the given year.
-    Holidays:
-    - New Year's Day (Jan 1)
-    - Memorial Day (last Monday in May)
-    - Independence Day (July 4)
-    - Labor Day (first Monday in September)
-    - Thanksgiving Day (fourth Thursday in November)
-    - Christmas Day (Dec 25)
+    Payroll observed date for a calendar holiday.
+    - Saturday -> preceding Thursday
+    - Sunday -> following Monday
+    - Otherwise -> actual date
     """
-    holidays = {}
+    if actual.weekday() == 5:
+        return actual - timedelta(days=2)
+    if actual.weekday() == 6:
+        return actual + timedelta(days=1)
+    return actual
 
-    # New Year's Day
+
+def _actual_company_holidays(year: int) -> dict[date, str]:
+    """Calendar (actual) holiday dates for the given year."""
+    holidays: dict[date, str] = {}
+
     holidays[date(year, 1, 1)] = "New Year's Day"
 
-    # Memorial Day: last Monday in May
     may_last = date(year, 5, 31)
-    while may_last.weekday() != 0:  # 0 = Monday
+    while may_last.weekday() != 0:
         may_last -= timedelta(days=1)
     holidays[may_last] = "Memorial Day"
 
-    # Independence Day
     holidays[date(year, 7, 4)] = "Independence Day"
 
-    # Labor Day: first Monday in September
     sept_first = date(year, 9, 1)
     while sept_first.weekday() != 0:
         sept_first += timedelta(days=1)
     holidays[sept_first] = "Labor Day"
 
-    # Thanksgiving: fourth Thursday in November
     nov_first = date(year, 11, 1)
-    # find first Thursday
-    while nov_first.weekday() != 3:  # 3 = Thursday
+    while nov_first.weekday() != 3:
         nov_first += timedelta(days=1)
-    thanksgiving = nov_first + timedelta(weeks=3)
-    holidays[thanksgiving] = "Thanksgiving Day"
+    holidays[nov_first + timedelta(weeks=3)] = "Thanksgiving Day"
 
-    # Christmas Day
     holidays[date(year, 12, 25)] = "Christmas Day"
-
     return holidays
 
 
-def _user_met_holiday_attendance_rule(user: CustomUser, holiday_date: date) -> bool:
+def get_company_holidays_in_range(start_date: date, end_date: date) -> dict[date, str]:
     """
-    Full-time employees only receive holiday pay if they reported
-    (worked OR had an approved occurrence) on their last scheduled day
-    before AND their next scheduled day after the holiday.
+    Return {observed_date: name} for company holidays whose observed date falls
+    within ``start_date``..``end_date`` (inclusive).
     """
-    # Find last scheduled workday before the holiday
+    result: dict[date, str] = {}
+    for year in range(start_date.year - 1, end_date.year + 2):
+        for actual, name in _actual_company_holidays(year).items():
+            observed = observed_company_holiday_date(actual)
+            if start_date <= observed <= end_date:
+                result[observed] = name
+    return result
+
+
+def get_company_holidays(year: int) -> dict[date, str]:
+    """Return {observed_date: name} for company holidays observed in the given year."""
+    return get_company_holidays_in_range(date(year, 1, 1), date(year, 12, 31))
+
+
+def _scheduled_bookend_days_for_holiday(user: CustomUser, holiday_date: date) -> tuple[date | None, date | None]:
+    """Last scheduled workday before and next scheduled workday after the holiday (7-day window)."""
     day = holiday_date - timedelta(days=1)
     last_before = None
     while (holiday_date - day).days <= 7 and day < holiday_date:
@@ -969,7 +979,6 @@ def _user_met_holiday_attendance_rule(user: CustomUser, holiday_date: date) -> b
             break
         day -= timedelta(days=1)
 
-    # Find next scheduled workday after the holiday
     day = holiday_date + timedelta(days=1)
     next_after = None
     while (day - holiday_date).days <= 7 and day > holiday_date:
@@ -978,45 +987,102 @@ def _user_met_holiday_attendance_rule(user: CustomUser, holiday_date: date) -> b
             break
         day += timedelta(days=1)
 
-    if not last_before or not next_after:
-        # If we can't find both sides, be conservative and require neither condition
-        return True
+    return last_before, next_after
 
+
+def _bookend_day_attendance_status(user: CustomUser, the_date: date, *, as_of: date) -> str:
+    """
+    Attendance on a bookend day: ``eligible``, ``ineligible``, or ``pending``.
+    Pending when the day has not occurred yet (as_of < the_date).
+    """
+    if the_date > as_of:
+        return "pending"
+
+    from .schedule_utils import scheduled_duration_hours_for_day
     from timeclock.models import TimeEntry
 
-    def _has_time_or_approved_occurrence(the_date: date) -> bool:
-        # Any time entry counts as reporting
-        has_entry = TimeEntry.objects.filter(user=user, date=the_date).exists()
-        if has_entry:
-            return True
-        # Any occurrence (planned/unplanned, paid/unpaid) means they had an approved leave
-        return Occurrence.objects.filter(user=user, date=the_date).exists()
+    scheduled = scheduled_duration_hours_for_day(user, the_date)
+    if scheduled <= 0:
+        return "eligible"
 
-    return _has_time_or_approved_occurrence(last_before) and _has_time_or_approved_occurrence(
-        next_after
+    worked = 0.0
+    for entry in TimeEntry.objects.filter(user=user, date=the_date):
+        if entry.clock_in and entry.clock_out:
+            worked += entry.payroll_credited_hours()
+
+    planned_hours = (
+        Occurrence.objects.filter(
+            user=user,
+            date=the_date,
+            occurrence_type=OccurrenceType.PLANNED,
+        )
+        .exclude(subtype=OccurrenceSubtype.HOLIDAY_PAID)
+        .aggregate(total=Sum("duration_hours"))["total"]
     )
+    planned_hours = float(planned_hours or 0.0)
+
+    unplanned_hours = (
+        Occurrence.objects.filter(
+            user=user,
+            date=the_date,
+            occurrence_type=OccurrenceType.UNPLANNED,
+        )
+        .exclude(subtype=OccurrenceSubtype.TARDY_IN_GRACE)
+        .aggregate(total=Sum("duration_hours"))["total"]
+    )
+    if float(unplanned_hours or 0.0) > 0:
+        return "ineligible"
+
+    shortfall = round(scheduled - (worked + planned_hours), 2)
+    if shortfall > 0:
+        return "ineligible"
+    return "eligible"
 
 
-def ensure_holiday_occurrences_for_range(start_date: date, end_date: date):
+def holiday_attendance_status(user: CustomUser, holiday_date: date, *, as_of: date | None = None) -> str:
     """
-    For each active, non-exempt user who is scheduled on a company holiday
-    within the given date range, create a HOLIDAY_PAID Occurrence with
-    duration equal to their normal scheduled shift, if one does not already exist.
+    Whether a full-time employee qualifies for holiday pay based on bookend shifts.
+    Returns ``eligible``, ``ineligible``, or ``pending`` (trailing/leading day not yet passed).
+    """
+    as_of = as_of or date.today()
+    last_before, next_after = _scheduled_bookend_days_for_holiday(user, holiday_date)
+    if not last_before or not next_after:
+        return "eligible"
+
+    before_status = _bookend_day_attendance_status(user, last_before, as_of=as_of)
+    after_status = _bookend_day_attendance_status(user, next_after, as_of=as_of)
+    if before_status == "pending" or after_status == "pending":
+        return "pending"
+    if before_status == "ineligible" or after_status == "ineligible":
+        return "ineligible"
+    return "eligible"
+
+
+def _user_met_holiday_attendance_rule(user: CustomUser, holiday_date: date, *, as_of: date | None = None) -> bool:
+    """True only when bookend attendance is fully satisfied (not pending or ineligible)."""
+    return holiday_attendance_status(user, holiday_date, as_of=as_of) == "eligible"
+
+
+def ensure_holiday_occurrences_for_range(start_date: date, end_date: date, *, as_of: date | None = None):
+    """
+    For each active, non-exempt, full-time user scheduled on an observed company holiday
+    within the given date range, create a HOLIDAY_PAID Occurrence when eligible.
+    Removes holiday pay for part-time users and when bookend attendance fails.
     """
     if start_date > end_date:
         return
 
-    years = set()
-    current = start_date
-    while current <= end_date:
-        years.add(current.year)
-        current += timedelta(days=1)
-
-    holiday_dates = {}
-    for y in years:
-        holiday_dates.update(get_company_holidays(y))
+    as_of = as_of or date.today()
+    holiday_dates = get_company_holidays_in_range(start_date, end_date)
 
     from .schedule_utils import scheduled_duration_hours_for_day
+
+    Occurrence.objects.filter(
+        date__range=[start_date, end_date],
+        subtype=OccurrenceSubtype.HOLIDAY_PAID,
+    ).filter(
+        Q(user__is_part_time=True) | Q(user__is_exempt=True) | Q(user__is_active=False)
+    ).delete()
 
     users = CustomUser.objects.filter(is_active=True, is_exempt=False, is_part_time=False)
 
@@ -1032,9 +1098,12 @@ def ensure_holiday_occurrences_for_range(start_date: date, end_date: date):
                 current += timedelta(days=1)
                 continue
 
-            # If employee did not meet attendance rule (last before & next after),
-            # ensure any existing holiday pay is removed and skip granting.
-            if not _user_met_holiday_attendance_rule(user, current):
+            status = holiday_attendance_status(user, current, as_of=as_of)
+            if status == "pending":
+                current += timedelta(days=1)
+                continue
+
+            if status == "ineligible":
                 Occurrence.objects.filter(
                     user=user,
                     date=current,
@@ -1043,7 +1112,6 @@ def ensure_holiday_occurrences_for_range(start_date: date, end_date: date):
                 current += timedelta(days=1)
                 continue
 
-            # Skip if a holiday occurrence already exists
             if Occurrence.objects.filter(
                 user=user,
                 date=current,

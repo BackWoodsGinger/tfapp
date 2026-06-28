@@ -1,0 +1,228 @@
+"""Tests for observed holidays and holiday pay bookend attendance rules."""
+from datetime import date, datetime, time, timedelta
+
+from django.test import TestCase
+from django.utils import timezone
+
+from attendance.models import (
+    CustomUser,
+    Occurrence,
+    OccurrenceSubtype,
+    OccurrenceType,
+    WorkSchedule,
+    ensure_holiday_occurrences_for_range,
+    get_company_holidays,
+    holiday_attendance_status,
+    observed_company_holiday_date,
+)
+from timeclock.models import TimeEntry
+
+
+def _mon_thu_schedule(user, hours_per_day: float = 9.0):
+    """Mon-Thu 5:00–15:30-style schedule (9 credited hours with lunch)."""
+    for weekday in range(4):
+        WorkSchedule.objects.create(
+            user=user,
+            day=weekday,
+            start_time=time(5, 0),
+            lunch_out=time(11, 0),
+            lunch_in=time(11, 30),
+            end_time=time(15, 30),
+        )
+
+
+def _full_shift_entry(user, d: date):
+    tz = timezone.get_current_timezone()
+    clock_in = timezone.make_aware(datetime.combine(d, time(5, 0)), tz)
+    clock_out = timezone.make_aware(datetime.combine(d, time(15, 30)), tz)
+    TimeEntry.objects.create(user=user, date=d, clock_in=clock_in, clock_out=clock_out)
+
+
+class TestObservedHolidays(TestCase):
+    def test_saturday_observed_on_thursday(self):
+        self.assertEqual(
+            observed_company_holiday_date(date(2026, 7, 4)),
+            date(2026, 7, 2),
+        )
+
+    def test_sunday_observed_on_monday(self):
+        self.assertEqual(
+            observed_company_holiday_date(date(2027, 7, 4)),
+            date(2027, 7, 5),
+        )
+
+    def test_weekday_unchanged(self):
+        self.assertEqual(
+            observed_company_holiday_date(date(2025, 7, 4)),
+            date(2025, 7, 4),
+        )
+
+    def test_independence_day_2026_observed_july_2(self):
+        holidays = get_company_holidays(2026)
+        self.assertIn(date(2026, 7, 2), holidays)
+        self.assertEqual(holidays[date(2026, 7, 2)], "Independence Day")
+        self.assertNotIn(date(2026, 7, 4), holidays)
+
+
+class TestHolidayPayEligibility(TestCase):
+    HOLIDAY = date(2026, 7, 2)
+    LEADING = date(2026, 7, 1)
+    TRAILING = date(2026, 7, 6)
+    WEEK_START = date(2026, 6, 28)
+    WEEK_END = date(2026, 7, 4)
+    AS_OF = date(2026, 7, 7)
+
+    def setUp(self):
+        self.ft_user = CustomUser.objects.create_user(
+            username="ft_ok",
+            password="test",
+            payroll_lastname="OK",
+            payroll_firstname="Full",
+        )
+        _mon_thu_schedule(self.ft_user)
+
+        self.pt_user = CustomUser.objects.create_user(
+            username="pt_user",
+            password="test",
+            is_part_time=True,
+            payroll_lastname="Part",
+            payroll_firstname="Time",
+        )
+        _mon_thu_schedule(self.pt_user)
+
+    def _seed_perfect_bookends(self, user):
+        _full_shift_entry(user, self.LEADING)
+        _full_shift_entry(user, self.TRAILING)
+
+    def test_eligible_full_time_receives_holiday_pay(self):
+        self._seed_perfect_bookends(self.ft_user)
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=self.AS_OF
+        )
+        occ = Occurrence.objects.filter(
+            user=self.ft_user,
+            date=self.HOLIDAY,
+            subtype=OccurrenceSubtype.HOLIDAY_PAID,
+        ).first()
+        self.assertIsNotNone(occ)
+        self.assertGreater(occ.duration_hours, 0)
+
+    def test_part_time_never_receives_holiday_pay(self):
+        self._seed_perfect_bookends(self.pt_user)
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=self.AS_OF
+        )
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.pt_user,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).exists()
+        )
+
+    def test_part_time_existing_holiday_removed(self):
+        Occurrence.objects.create(
+            user=self.pt_user,
+            date=self.HOLIDAY,
+            occurrence_type=OccurrenceType.PLANNED,
+            subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            duration_hours=9.0,
+        )
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=self.AS_OF
+        )
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.pt_user,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).exists()
+        )
+
+    def test_unplanned_leading_miss_denies_holiday(self):
+        _full_shift_entry(self.ft_user, self.TRAILING)
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=self.AS_OF
+        )
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.ft_user,
+                date=self.HOLIDAY,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).exists()
+        )
+
+    def test_unplanned_occurrence_on_bookend_denies_holiday(self):
+        _full_shift_entry(self.ft_user, self.LEADING)
+        _full_shift_entry(self.ft_user, self.TRAILING)
+        Occurrence.objects.create(
+            user=self.ft_user,
+            date=self.LEADING,
+            occurrence_type=OccurrenceType.UNPLANNED,
+            subtype=OccurrenceSubtype.EXCHANGE,
+            duration_hours=2.0,
+        )
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=self.AS_OF
+        )
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.ft_user,
+                date=self.HOLIDAY,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).exists()
+        )
+
+    def test_planned_pto_on_leading_still_eligible(self):
+        _full_shift_entry(self.ft_user, self.TRAILING)
+        Occurrence.objects.create(
+            user=self.ft_user,
+            date=self.LEADING,
+            occurrence_type=OccurrenceType.PLANNED,
+            subtype=OccurrenceSubtype.TIME_OFF,
+            duration_hours=9.0,
+        )
+        self.assertEqual(
+            holiday_attendance_status(self.ft_user, self.HOLIDAY, as_of=self.AS_OF),
+            "eligible",
+        )
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=self.AS_OF
+        )
+        self.assertTrue(
+            Occurrence.objects.filter(
+                user=self.ft_user,
+                date=self.HOLIDAY,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).exists()
+        )
+
+    def test_pending_until_trailing_bookend_passes(self):
+        _full_shift_entry(self.ft_user, self.LEADING)
+        self.assertEqual(
+            holiday_attendance_status(self.ft_user, self.HOLIDAY, as_of=date(2026, 7, 3)),
+            "pending",
+        )
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=date(2026, 7, 3)
+        )
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.ft_user,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).exists()
+        )
+
+    def test_partial_shift_shortfall_denies_holiday(self):
+        tz = timezone.get_current_timezone()
+        clock_in = timezone.make_aware(datetime.combine(self.LEADING, time(5, 0)), tz)
+        clock_out = timezone.make_aware(datetime.combine(self.LEADING, time(12, 0)), tz)
+        TimeEntry.objects.create(
+            user=self.ft_user,
+            date=self.LEADING,
+            clock_in=clock_in,
+            clock_out=clock_out,
+        )
+        _full_shift_entry(self.ft_user, self.TRAILING)
+        self.assertEqual(
+            holiday_attendance_status(self.ft_user, self.HOLIDAY, as_of=self.AS_OF),
+            "ineligible",
+        )
