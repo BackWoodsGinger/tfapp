@@ -497,6 +497,31 @@ input[type="date"].form-control {
   line-height: 1.5;
 }
 
+/* Group analytics KPI tiles on dark dashboard cards */
+.card-body .group-analytics-kpi {
+  background-color: #3f4449;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #f8f9fa;
+}
+.card-body .group-analytics-kpi-label {
+  color: rgba(248, 249, 250, 0.78);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+}
+.card-body .group-analytics-kpi-value {
+  color: #ffffff;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.card-body .group-analytics-kpi-sub {
+  color: rgba(248, 249, 250, 0.72);
+  font-size: 0.8125rem;
+  margin-top: 0.25rem;
+}
+
 /* Narrow phones: slightly smaller root size so layouts and tables read better */
 @media (max-width: 575.98px) {
   html {

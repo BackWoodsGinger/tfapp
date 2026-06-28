@@ -2,145 +2,255 @@
 <html>
 <head>
     <style>
-        body { font-family: sans-serif; font-size: 10px; padding: 70px 8px 8px 8px; margin: 0; }
-        .logo-header { position: fixed; top: 0; left: 0; padding: 8px; z-index: 1; }
-        .logo-header img { height: 72px; width: auto; }
-        .report-header { margin: 0; padding: 0; line-height: 1.35; }
-        .report-header h3 { margin: 0 0 4px 0; font-size: 14px; text-align: left; }
-        .report-header p { margin: 0 0 4px 0; padding: 0; }
-        .section-title { font-size: 12px; font-weight: bold; margin: 14px 0 6px 0; }
-        .subsection { font-size: 11px; font-weight: bold; margin: 10px 0 4px 0; color: #222; }
-        table.data { width: 100%; border-collapse: collapse; margin-top: 4px; margin-bottom: 10px; }
-        table.data th, table.data td { border: 1px solid #333; padding: 3px 5px; text-align: left; }
-        td.num, th.num { text-align: right; }
-        tfoot td { font-weight: bold; }
-        .muted { color: #444; font-size: 9px; margin: 0 0 6px 0; }
-        .chart-wrap { margin: 8px 0 14px 0; page-break-inside: avoid; }
-        .chart-wrap img { width: 520px; max-width: 100%; height: auto; display: block; }
-        .group-block { margin-bottom: 14px; page-break-inside: avoid; }
-        .group-block h4 { margin: 0 0 4px 0; font-size: 11px; }
+        @page {
+            size: letter;
+            margin: 0.65in 0.55in 0.55in 0.55in;
+        }
+        body {
+            font-family: sans-serif;
+            font-size: 10px;
+            padding: 0;
+            margin: 0;
+            color: #111;
+        }
+        .logo-header {
+            margin: 0 0 10px 0;
+        }
+        .logo-header img {
+            height: 56px;
+            width: auto;
+        }
+        .report-header {
+            margin: 0 0 10px 0;
+            padding: 0;
+            line-height: 1.35;
+            page-break-inside: avoid;
+        }
+        .report-header h3 {
+            margin: 0 0 4px 0;
+            font-size: 14px;
+            text-align: left;
+        }
+        .report-header p {
+            margin: 0 0 4px 0;
+            padding: 0;
+        }
+        .section-title {
+            font-size: 12px;
+            font-weight: bold;
+            margin: 12px 0 6px 0;
+            page-break-after: avoid;
+        }
+        .subsection {
+            font-size: 11px;
+            font-weight: bold;
+            margin: 8px 0 4px 0;
+            color: #222;
+            page-break-after: avoid;
+        }
+        table.data {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 4px;
+            margin-bottom: 8px;
+        }
+        table.data thead {
+            display: table-header-group;
+        }
+        table.data th,
+        table.data td {
+            border: 1px solid #333;
+            padding: 3px 5px;
+            text-align: left;
+        }
+        table.data tr {
+            page-break-inside: avoid;
+        }
+        td.num, th.num {
+            text-align: right;
+        }
+        tfoot td {
+            font-weight: bold;
+        }
+        .muted {
+            color: #444;
+            font-size: 9px;
+            margin: 0 0 6px 0;
+        }
+        .summary-block {
+            page-break-inside: avoid;
+            margin-bottom: 10px;
+        }
+        .chart-section {
+            margin: 10px 0 0 0;
+            page-break-inside: avoid;
+        }
+        .chart-wrap {
+            margin: 6px 0 0 0;
+            page-break-inside: avoid;
+        }
+        .chart-wrap img {
+            width: 100%;
+            max-width: 520px;
+            height: auto;
+            display: block;
+        }
+        .detail-section {
+            page-break-before: always;
+        }
+        .group-block {
+            margin: 0 0 14px 0;
+        }
+        .group-block:not(:first-child) {
+            page-break-before: always;
+        }
+        .group-heading {
+            page-break-inside: avoid;
+            page-break-after: avoid;
+            margin-bottom: 4px;
+        }
+        .group-block h4 {
+            margin: 0 0 4px 0;
+            font-size: 11px;
+        }
+        .subtype-table-wrap {
+            page-break-inside: avoid;
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body>
-    {% if logo_uri %}
-    <div class="logo-header">
-        <img src="{{ logo_uri }}" alt="Logo" />
-    </div>
-    {% endif %}
-    <div class="report-header">
-        <h3>Attendance — Group report</h3>
-        <p><strong>Period:</strong> {{ start }} to {{ end }}</p>
-        <p><strong>Grouped by:</strong> {{ group_by_label }}</p>
-        <p><strong>Subtype filter:</strong> {{ subtype_filter_label }}</p>
-        <p><strong>Planned / unplanned filter:</strong> {{ planned_filter_label }}</p>
-    </div>
+    <div class="summary-block">
+        {% if logo_uri %}
+        <div class="logo-header">
+            <img src="{{ logo_uri }}" alt="Logo" />
+        </div>
+        {% endif %}
+        <div class="report-header">
+            <h3>Attendance — Group report</h3>
+            <p><strong>Period:</strong> {{ start }} to {{ end }}</p>
+            <p><strong>Grouped by:</strong> {{ group_by_label }}</p>
+            <p><strong>Subtype filter:</strong> {{ subtype_filter_label }}</p>
+            <p><strong>Planned / unplanned filter:</strong> {{ planned_filter_label }}</p>
+        </div>
 
-    <p class="section-title">Company totals</p>
-    <table class="data">
-        <thead>
-            <tr>
-                <th>Unique employees</th>
-                <th class="num">Absence records</th>
-                <th class="num">Total hours</th>
-                <th class="num">PTO applied</th>
-                <th class="num">Personal applied</th>
-            </tr>
-        </thead>
-        <tbody>
-            <tr>
-                <td>{{ grand.unique_employees }}</td>
-                <td class="num">{{ grand.occurrence_count }}</td>
-                <td class="num">{{ grand.total_hours|floatformat:2 }}</td>
-                <td class="num">{{ grand.pto_applied|floatformat:2 }}</td>
-                <td class="num">{{ grand.personal_applied|floatformat:2 }}</td>
-            </tr>
-        </tbody>
-    </table>
-
-    <p class="section-title">Summary — total hours by group (pie)</p>
-    <p class="muted">Slice size is proportional to each group’s total absence hours in this report. Legend lists share of the whole.</p>
-    {% if pie_hours_uri %}
-    <div class="chart-wrap">
-        <img src="{{ pie_hours_uri }}" alt="Hours by group" />
-    </div>
-    {% else %}
-    <p class="muted">Not enough non-zero hours to draw a chart.</p>
-    {% endif %}
-
-    <p class="section-title">Summary — absence records by group (pie)</p>
-    <p class="muted">Slice size is proportional to each group’s absence record count.</p>
-    {% if pie_records_uri %}
-    <div class="chart-wrap">
-        <img src="{{ pie_records_uri }}" alt="Records by group" />
-    </div>
-    {% else %}
-    <p class="muted">Not enough records to draw a chart.</p>
-    {% endif %}
-
-    <p class="section-title">Detail by group and employee</p>
-    {% for row in group_rows %}
-    <div class="group-block">
-        <h4>{{ row.group_label }}</h4>
-        <p class="muted">Group totals: {{ row.occurrence_count }} record(s), {{ row.total_hours|floatformat:2 }} hrs, PTO {{ row.pto_applied|floatformat:2 }}, personal {{ row.personal_applied|floatformat:2 }}</p>
-
-        <p class="subsection">By absence subtype</p>
+        <p class="section-title">Company totals</p>
         <table class="data">
             <thead>
                 <tr>
-                    <th>Subtype</th>
-                    <th class="num">Count</th>
-                    <th class="num">Hours</th>
+                    <th>Unique employees</th>
+                    <th class="num">Absence records</th>
+                    <th class="num">Total hours</th>
+                    <th class="num">PTO applied</th>
+                    <th class="num">Personal applied</th>
                 </tr>
             </thead>
             <tbody>
-                {% for s in row.by_subtype %}
                 <tr>
-                    <td>{{ s.subtype }}</td>
-                    <td class="num">{{ s.count }}</td>
-                    <td class="num">{{ s.hours|floatformat:2 }}</td>
+                    <td>{{ grand.unique_employees }}</td>
+                    <td class="num">{{ grand.occurrence_count }}</td>
+                    <td class="num">{{ grand.total_hours|floatformat:2 }}</td>
+                    <td class="num">{{ grand.pto_applied|floatformat:2 }}</td>
+                    <td class="num">{{ grand.personal_applied|floatformat:2 }}</td>
                 </tr>
-                {% empty %}
-                <tr><td colspan="3">No subtype rows.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-
-        <p class="subsection">Employees</p>
-        <table class="data">
-            <thead>
-                <tr>
-                    <th>Employee</th>
-                    <th>Username</th>
-                    <th>Department</th>
-                    <th>Supervisor</th>
-                    <th>Group lead</th>
-                    <th class="num">Records</th>
-                    <th class="num">Hours</th>
-                    <th class="num">PTO</th>
-                    <th class="num">Personal</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for u in row.users_detail %}
-                <tr>
-                    <td>{{ u.payroll_name }}</td>
-                    <td>{{ u.username }}</td>
-                    <td>{{ u.department }}</td>
-                    <td>{{ u.supervisor }}</td>
-                    <td>{{ u.group_lead }}</td>
-                    <td class="num">{{ u.occurrence_count }}</td>
-                    <td class="num">{{ u.total_hours|floatformat:2 }}</td>
-                    <td class="num">{{ u.pto_applied|floatformat:2 }}</td>
-                    <td class="num">{{ u.personal_applied|floatformat:2 }}</td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="9">No employees in this group.</td></tr>
-                {% endfor %}
             </tbody>
         </table>
     </div>
-    {% empty %}
-    <p class="muted">No absence records match this period and filter.</p>
-    {% endfor %}
+
+    <div class="chart-section">
+        <p class="section-title">Summary — total hours by group (pie)</p>
+        <p class="muted">Slice size is proportional to each group’s total absence hours in this report. Legend lists share of the whole.</p>
+        {% if pie_hours_uri %}
+        <div class="chart-wrap">
+            <img src="{{ pie_hours_uri }}" alt="Hours by group" />
+        </div>
+        {% else %}
+        <p class="muted">Not enough non-zero hours to draw a chart.</p>
+        {% endif %}
+    </div>
+
+    <div class="chart-section">
+        <p class="section-title">Summary — absence records by group (pie)</p>
+        <p class="muted">Slice size is proportional to each group’s absence record count.</p>
+        {% if pie_records_uri %}
+        <div class="chart-wrap">
+            <img src="{{ pie_records_uri }}" alt="Records by group" />
+        </div>
+        {% else %}
+        <p class="muted">Not enough records to draw a chart.</p>
+        {% endif %}
+    </div>
+
+    <div class="detail-section">
+        <p class="section-title">Detail by group and employee</p>
+        {% for row in group_rows %}
+        <div class="group-block">
+            <div class="group-heading">
+                <h4>{{ row.group_label }}</h4>
+                <p class="muted">Group totals: {{ row.occurrence_count }} record(s), {{ row.total_hours|floatformat:2 }} hrs, PTO {{ row.pto_applied|floatformat:2 }}, personal {{ row.personal_applied|floatformat:2 }}</p>
+            </div>
+
+            <div class="subtype-table-wrap">
+                <p class="subsection">By absence subtype</p>
+                <table class="data">
+                    <thead>
+                        <tr>
+                            <th>Subtype</th>
+                            <th class="num">Count</th>
+                            <th class="num">Hours</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for s in row.by_subtype %}
+                        <tr>
+                            <td>{{ s.subtype }}</td>
+                            <td class="num">{{ s.count }}</td>
+                            <td class="num">{{ s.hours|floatformat:2 }}</td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="3">No subtype rows.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <p class="subsection">Employees</p>
+            <table class="data">
+                <thead>
+                    <tr>
+                        <th>Employee</th>
+                        <th>Username</th>
+                        <th>Department</th>
+                        <th>Supervisor</th>
+                        <th>Group lead</th>
+                        <th class="num">Records</th>
+                        <th class="num">Hours</th>
+                        <th class="num">PTO</th>
+                        <th class="num">Personal</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in row.users_detail %}
+                    <tr>
+                        <td>{{ u.payroll_name }}</td>
+                        <td>{{ u.username }}</td>
+                        <td>{{ u.department }}</td>
+                        <td>{{ u.supervisor }}</td>
+                        <td>{{ u.group_lead }}</td>
+                        <td class="num">{{ u.occurrence_count }}</td>
+                        <td class="num">{{ u.total_hours|floatformat:2 }}</td>
+                        <td class="num">{{ u.pto_applied|floatformat:2 }}</td>
+                        <td class="num">{{ u.personal_applied|floatformat:2 }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="9">No employees in this group.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% empty %}
+        <p class="muted">No absence records match this period and filter.</p>
+        {% endfor %}
+    </div>
 </body>
 </html>

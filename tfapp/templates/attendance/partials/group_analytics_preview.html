@@ -5,61 +5,61 @@
   Full-time = 30–40 avg scheduled hrs/week; part-time = 29 or fewer.
 </p>
 
-<div class="row g-2 g-md-3 mb-4">
+<div class="row g-2 g-md-3 mb-4 group-analytics-kpi-grid">
   <div class="col-6 col-md-4 col-lg-3">
-    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
-      <div class="small text-muted text-uppercase">Absence rate</div>
-      <div class="fs-5 fw-semibold">{{ kpi.absence_rate_pct }}%</div>
-      <div class="small text-muted">{{ kpi.absence_hours|floatformat:1 }}h / {{ kpi.scheduled_hours|floatformat:0 }}h sched.</div>
+    <div class="group-analytics-kpi border rounded p-2 p-md-3 h-100">
+      <div class="group-analytics-kpi-label">Absence rate</div>
+      <div class="group-analytics-kpi-value fs-5">{{ kpi.absence_rate_pct }}%</div>
+      <div class="group-analytics-kpi-sub">{{ kpi.absence_hours|floatformat:1 }}h / {{ kpi.scheduled_hours|floatformat:0 }}h sched.</div>
     </div>
   </div>
   <div class="col-6 col-md-4 col-lg-3">
-    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
-      <div class="small text-muted text-uppercase">Tardiness</div>
-      <div class="fs-5 fw-semibold">{{ kpi.tardy_hours|floatformat:1 }}h</div>
-      <div class="small text-muted">In / out of grace</div>
+    <div class="group-analytics-kpi border rounded p-2 p-md-3 h-100">
+      <div class="group-analytics-kpi-label">Tardiness</div>
+      <div class="group-analytics-kpi-value fs-5">{{ kpi.tardy_hours|floatformat:1 }}h</div>
+      <div class="group-analytics-kpi-sub">In / out of grace</div>
     </div>
   </div>
   <div class="col-6 col-md-4 col-lg-3">
-    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
-      <div class="small text-muted text-uppercase">Early departure</div>
-      <div class="fs-5 fw-semibold">{{ kpi.early_departure_hours|floatformat:1 }}h</div>
-      <div class="small text-muted">Schedule variance (non-tardy)</div>
+    <div class="group-analytics-kpi border rounded p-2 p-md-3 h-100">
+      <div class="group-analytics-kpi-label">Early departure</div>
+      <div class="group-analytics-kpi-value fs-5">{{ kpi.early_departure_hours|floatformat:1 }}h</div>
+      <div class="group-analytics-kpi-sub">Schedule variance (non-tardy)</div>
     </div>
   </div>
   <div class="col-6 col-md-4 col-lg-3">
-    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
-      <div class="small text-muted text-uppercase">Planned / unplanned</div>
-      <div class="fs-5 fw-semibold">{{ kpi.planned_pct|floatformat:0 }}% / {{ kpi.unplanned_pct|floatformat:0 }}%</div>
-      <div class="small text-muted">{{ kpi.planned_hours|floatformat:1 }}h / {{ kpi.unplanned_hours|floatformat:1 }}h</div>
+    <div class="group-analytics-kpi border rounded p-2 p-md-3 h-100">
+      <div class="group-analytics-kpi-label">Planned / unplanned</div>
+      <div class="group-analytics-kpi-value fs-5">{{ kpi.planned_pct|floatformat:0 }}% / {{ kpi.unplanned_pct|floatformat:0 }}%</div>
+      <div class="group-analytics-kpi-sub">{{ kpi.planned_hours|floatformat:1 }}h / {{ kpi.unplanned_hours|floatformat:1 }}h</div>
     </div>
   </div>
   <div class="col-6 col-md-4 col-lg-3">
-    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
-      <div class="small text-muted text-uppercase">Predicted unplanned</div>
-      <div class="fs-5 fw-semibold">{{ kpi.predicted_unplanned_pct }}%</div>
-      <div class="small text-muted">Next-period trend estimate</div>
+    <div class="group-analytics-kpi border rounded p-2 p-md-3 h-100">
+      <div class="group-analytics-kpi-label">Predicted unplanned</div>
+      <div class="group-analytics-kpi-value fs-5">{{ kpi.predicted_unplanned_pct }}%</div>
+      <div class="group-analytics-kpi-sub">Next-period trend estimate</div>
     </div>
   </div>
   <div class="col-6 col-md-4 col-lg-3">
-    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
-      <div class="small text-muted text-uppercase">Full-time</div>
-      <div class="fs-5 fw-semibold">{{ kpi.full_time_count }}</div>
-      <div class="small text-muted">30–40 hrs/wk scheduled</div>
+    <div class="group-analytics-kpi border rounded p-2 p-md-3 h-100">
+      <div class="group-analytics-kpi-label">Full-time</div>
+      <div class="group-analytics-kpi-value fs-5">{{ kpi.full_time_count }}</div>
+      <div class="group-analytics-kpi-sub">30–40 hrs/wk scheduled</div>
     </div>
   </div>
   <div class="col-6 col-md-4 col-lg-3">
-    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
-      <div class="small text-muted text-uppercase">Part-time</div>
-      <div class="fs-5 fw-semibold">{{ kpi.part_time_count }}</div>
-      <div class="small text-muted">≤29 hrs/wk scheduled</div>
+    <div class="group-analytics-kpi border rounded p-2 p-md-3 h-100">
+      <div class="group-analytics-kpi-label">Part-time</div>
+      <div class="group-analytics-kpi-value fs-5">{{ kpi.part_time_count }}</div>
+      <div class="group-analytics-kpi-sub">≤29 hrs/wk scheduled</div>
     </div>
   </div>
   <div class="col-6 col-md-4 col-lg-3">
-    <div class="border rounded p-2 p-md-3 h-100 bg-dark-subtle">
-      <div class="small text-muted text-uppercase">Non-exempt in view</div>
-      <div class="fs-5 fw-semibold">{{ kpi.non_exempt_count }}</div>
-      <div class="small text-muted">Active employees counted</div>
+    <div class="group-analytics-kpi border rounded p-2 p-md-3 h-100">
+      <div class="group-analytics-kpi-label">Non-exempt in view</div>
+      <div class="group-analytics-kpi-value fs-5">{{ kpi.non_exempt_count }}</div>
+      <div class="group-analytics-kpi-sub">Active employees counted</div>
     </div>
   </div>
 </div>
