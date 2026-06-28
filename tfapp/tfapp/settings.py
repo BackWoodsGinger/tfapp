@@ -73,8 +73,10 @@ SESSION_ENGINE = "django.contrib.sessions.backends.db"
 SESSION_COOKIE_AGE = int(os.environ.get("SESSION_COOKIE_AGE", str(90 * 60)))
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-# False = fewer session DB writes (better under SQLite + concurrent requests). True = sliding expiry on every request.
-SESSION_SAVE_EVERY_REQUEST = _env_bool("DJANGO_SESSION_SAVE_EVERY_REQUEST", False)
+# True = extend expiry on each request (inactivity timeout). False = hard limit from login time.
+SESSION_SAVE_EVERY_REQUEST = _env_bool("DJANGO_SESSION_SAVE_EVERY_REQUEST", True)
+# Max simultaneous browser sessions per user (oldest invalidated when exceeded).
+MAX_SESSIONS_PER_USER = int(os.environ.get("DJANGO_MAX_SESSIONS_PER_USER", "3"))
 
 CACHES = {
     "default": {

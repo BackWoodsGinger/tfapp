@@ -1,9 +1,11 @@
+from django.conf import settings
 from django.contrib.sessions.backends.db import SessionStore
 
 from .models import UserSession
 
-# Oldest sessions beyond this count are deleted (Django session row + cookie invalidation).
-MAX_SESSIONS_PER_USER = 3
+
+def max_sessions_per_user() -> int:
+    return int(getattr(settings, "MAX_SESSIONS_PER_USER", 3))
 
 
 def register_user_session(user, session_key: str) -> None:
@@ -18,7 +20,8 @@ def register_user_session(user, session_key: str) -> None:
 
 
 def _trim_oldest_sessions(user, keep_session_key: str) -> None:
-    while UserSession.objects.filter(user=user).count() > MAX_SESSIONS_PER_USER:
+    limit = max_sessions_per_user()
+    while UserSession.objects.filter(user=user).count() > limit:
         victim = (
             UserSession.objects.filter(user=user)
             .exclude(session_key=keep_session_key)
