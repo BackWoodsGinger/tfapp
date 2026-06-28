@@ -502,7 +502,7 @@ def _group_report_analytics_cache_key(form: ReportFilterForm, user_ids: list[int
     cd = form.cleaned_data
     subtypes = ",".join(sorted(cd.get("subtype_filter") or []))
     return (
-        f"group_report_analytics:v3:{cd['start_date']}:{cd['end_date']}:"
+        f"group_report_analytics:v4:{cd['start_date']}:{cd['end_date']}:"
         f"{cd.get('report_group_by') or 'department'}:"
         f"{cd.get('planned_filter') or ''}:{subtypes}:{_user_ids_signature(user_ids)}"
     )

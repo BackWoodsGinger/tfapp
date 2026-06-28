@@ -5,6 +5,44 @@
   Full-time = 30–40 avg scheduled hrs/week; part-time = 29 or fewer.
 </p>
 
+<style>
+  /* Scoped here so preview styling applies when this fragment is injected via AJAX. */
+  #group-analytics-mount .group-analytics-kpi-grid .group-analytics-kpi,
+  #group-analytics-mount .group-analytics-kpi-grid .bg-dark-subtle {
+    background: linear-gradient(
+      145deg,
+      rgba(72, 78, 88, 0.38) 0%,
+      rgba(42, 58, 92, 0.52) 48%,
+      rgba(28, 38, 58, 0.62) 100%
+    ) !important;
+    border-color: rgba(100, 140, 210, 0.28) !important;
+    color: #f8f9fa !important;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.07),
+      0 2px 6px rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(2px);
+  }
+  #group-analytics-mount .group-analytics-kpi-grid .group-analytics-kpi-label {
+    color: rgba(200, 215, 240, 0.88);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    margin-bottom: 0.25rem;
+  }
+  #group-analytics-mount .group-analytics-kpi-grid .group-analytics-kpi-value {
+    color: #ffffff;
+    font-weight: 600;
+    line-height: 1.2;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+  #group-analytics-mount .group-analytics-kpi-grid .group-analytics-kpi-sub {
+    color: rgba(210, 220, 235, 0.78);
+    font-size: 0.8125rem;
+    margin-top: 0.25rem;
+  }
+</style>
+
 <div class="row g-2 g-md-3 mb-4 group-analytics-kpi-grid">
   <div class="col-6 col-md-4 col-lg-3">
     <div class="group-analytics-kpi border rounded p-2 p-md-3 h-100">
