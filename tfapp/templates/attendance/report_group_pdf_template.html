@@ -101,7 +101,7 @@
         .group-block {
             margin: 0 0 14px 0;
         }
-        .group-block:not(:first-child) {
+        .group-block-break {
             page-break-before: always;
         }
         .group-heading {
@@ -184,7 +184,7 @@
     <div class="detail-section">
         <p class="section-title">Detail by group and employee</p>
         {% for row in group_rows %}
-        <div class="group-block">
+        <div class="group-block{% if not forloop.first %} group-block-break{% endif %}">
             <div class="group-heading">
                 <h4>{{ row.group_label }}</h4>
                 <p class="muted">Group totals: {{ row.occurrence_count }} record(s), {{ row.total_hours|floatformat:2 }} hrs, PTO {{ row.pto_applied|floatformat:2 }}, personal {{ row.personal_applied|floatformat:2 }}</p>
