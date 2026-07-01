@@ -180,6 +180,29 @@ header #main-header {
   color: #212529;
 }
 
+/* Editable fields inside light table cells: avoid global dark input chrome + table dark text */
+.card-body .table .form-control,
+.card-body .table .form-select {
+  color: #212529 !important;
+  background-color: #ffffff !important;
+  border-color: #ced4da !important;
+  color-scheme: light;
+}
+
+.card-body .table .form-control:focus,
+.card-body .table .form-select:focus {
+  color: #212529 !important;
+  background-color: #ffffff !important;
+  border-color: #86b7fe !important;
+  box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+.card-body .table .form-control:read-only,
+.card-body .table .form-control[readonly] {
+  color: #212529 !important;
+  background-color: #e9ecef !important;
+}
+
 .card-body .table thead th,
 .card-body .table tfoot th,
 .card-body .pa-table-scroll-wrap thead th {
