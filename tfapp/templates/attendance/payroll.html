@@ -65,6 +65,9 @@
                 <div class="col-12 col-lg-auto">
                   <a class="btn btn-outline-secondary btn-sm w-100 w-lg-auto text-center" href="{% url 'attendance:payroll_schedule_csv_download' %}?week_ending={{ end_of_week|date:'Y-m-d' }}">Download template</a>
                 </div>
+                <div class="col-12 col-lg-auto">
+                  <a class="btn btn-outline-secondary btn-sm w-100 w-lg-auto text-center" href="{% url 'attendance:holiday_plans_index' %}?year={{ end_of_week.year }}">Holiday week plans</a>
+                </div>
                 <div class="col-12 col-lg min-w-0">
                   <form method="post" action="{% url 'attendance:payroll_schedule_csv_upload' %}" enctype="multipart/form-data" class="row g-2 align-items-center m-0">
                     {% csrf_token %}
@@ -79,6 +82,21 @@
                 </div>
               </div>
             </div>
+          </div>
+          {% endif %}
+
+          {% if missing_holiday_plans %}
+          <div class="alert alert-warning">
+            <strong>Holiday week plan required</strong>
+            <p class="mb-2 small">This payroll week includes a company holiday that needs a complete plan before you can close payroll:</p>
+            <ul class="mb-2 small">
+              {% for row in missing_holiday_plans %}
+              <li>
+                {{ row.name }} ({{ row.year }}) —
+                <a href="{% url 'attendance:holiday_plan_edit' row.year row.key %}">Configure plan</a>
+              </li>
+              {% endfor %}
+            </ul>
           </div>
           {% endif %}
 

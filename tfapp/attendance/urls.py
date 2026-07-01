@@ -46,6 +46,12 @@ urlpatterns = [
         views.payroll_schedule_csv_upload,
         name="payroll_schedule_csv_upload",
     ),
+    path("payroll/holiday-plans/", views.holiday_plans_index, name="holiday_plans_index"),
+    path(
+        "payroll/holiday-plans/<int:year>/<slug:holiday_key>/",
+        views.holiday_plan_edit,
+        name="holiday_plan_edit",
+    ),
     # Time off request and approval workflow
     path("timeoff/request/", views.request_time_off, name="request_time_off"),
     path("timeoff/mine/", views.my_time_off_requests, name="my_time_off_requests"),

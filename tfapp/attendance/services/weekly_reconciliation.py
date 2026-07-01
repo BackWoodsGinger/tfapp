@@ -19,6 +19,10 @@ from attendance.models import (
     TimeOffRequestStatus,
 )
 from attendance.schedule_utils import scheduled_duration_hours_for_day, scheduled_hours_for_range
+from attendance.services.holiday_plan_service import (
+    effective_scheduled_hours_for_range,
+    effective_work_hours_for_day,
+)
 from attendance.services.attendance_engine import (
     create_tardy_occurrences_for_week,
     revert_and_delete_orphan_time_off_for_exchange_week,
@@ -83,7 +87,7 @@ def sync_finalized_daily_summaries(users, week_start: date, week_ending: date, p
     for user in users:
         current = week_start
         while current <= week_ending:
-            scheduled = scheduled_duration_hours_for_day(user, current)
+            scheduled = effective_work_hours_for_day(user, current)
             entries_day = TimeEntry.objects.filter(user=user, date=current)
             worked = 0.0
             for e in entries_day:
@@ -141,7 +145,7 @@ def finalize_payroll_week(*, period, week_start: date, week_ending: date, finali
             if e.clock_in and e.clock_out:
                 total_worked_hours += e.payroll_credited_hours()
         user_total_worked[user.id] = total_worked_hours
-        user_total_scheduled[user.id] = scheduled_hours_for_range(user, week_start, week_ending)
+        user_total_scheduled[user.id] = effective_scheduled_hours_for_range(user, week_start, week_ending)
 
     create_tardy_occurrences_for_week(week_start, week_ending, period=period)
 
@@ -162,12 +166,12 @@ def finalize_payroll_week(*, period, week_start: date, week_ending: date, finali
 
     for user in users:
         total_worked_hours = user_total_worked.get(user.id, 0)
-        total_scheduled = scheduled_hours_for_range(user, week_start, week_ending)
+        total_scheduled = effective_scheduled_hours_for_range(user, week_start, week_ending)
         if total_scheduled <= 0:
             continue  # No schedule: do not create any variance
         current = week_start
         while current <= week_ending:
-            scheduled_day = scheduled_duration_hours_for_day(user, current)
+            scheduled_day = effective_work_hours_for_day(user, current)
             if scheduled_day <= 0:
                 current += timedelta(days=1)
                 continue

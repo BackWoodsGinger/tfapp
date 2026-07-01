@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}| {{ plan.name }} {{ plan.year }}{% endblock %}
+{% block content %}
+<div class="container-fluid mt-4 px-3 px-lg-4">
+  <div class="row justify-content-center">
+    <div class="col-sm-12 col-md-10 col-lg-9">
+      <div class="card mb-4">
+        <div class="card-body">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+            <div>
+              <h1 class="h4 mb-1">{{ plan.name }} ({{ plan.year }})</h1>
+              <p class="text-muted small mb-0">
+                Actual holiday: {{ plan.actual_holiday_date|date:"m/d/Y (D)" }} ·
+                Payroll week {{ plan.week_start|date:"m/d" }} – {{ plan.week_ending|date:"m/d/Y" }}
+              </p>
+            </div>
+            <a class="btn btn-outline-secondary btn-sm" href="{% url 'attendance:holiday_plans_index' %}?year={{ plan.year }}">All holidays</a>
+          </div>
+
+          {% if not editable %}
+          <div class="alert alert-warning py-2 small">
+            This payroll week is finalized. Unfinalize payroll for week ending {{ plan.week_ending|date:"m/d/Y" }} before editing.
+          </div>
+          {% endif %}
+
+          <p class="text-muted small">
+            4-day employees have no Friday schedule; 5-day employees have Friday scheduled hours.
+            Set <strong>Work hours</strong> for days they are expected to work and <strong>Holiday pay</strong> for paid holiday days (0 otherwise).
+          </p>
+
+          <form method="post" class="mt-3">
+            {% csrf_token %}
+            <div class="table-responsive">
+              <table class="table table-sm table-bordered align-middle mb-3">
+                <thead>
+                  <tr>
+                    <th rowspan="2">Date</th>
+                    {% for template_key, template_label in template_choices %}
+                    <th colspan="2" class="text-center">{{ template_label }}</th>
+                    {% endfor %}
+                  </tr>
+                  <tr>
+                    {% for template_key, template_label in template_choices %}
+                    <th class="text-center small">Work</th>
+                    <th class="text-center small">Holiday pay</th>
+                    {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in grid_rows %}
+                  <tr>
+                    <td class="text-nowrap">
+                      {{ row.date|date:"D m/d" }}
+                      {% if row.date == plan.actual_holiday_date %}
+                        <span class="badge bg-info text-dark">Holiday</span>
+                      {% endif %}
+                    </td>
+                    {% for cell in row.cells %}
+                    <td>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        class="form-control form-control-sm text-end"
+                        name="work_{{ cell.template_key }}_{{ row.date|date:'Y-m-d' }}"
+                        value="{{ cell.work_hours }}"
+                        {% if not editable %}readonly{% endif %}
+                      >
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        class="form-control form-control-sm text-end"
+                        name="holiday_{{ cell.template_key }}_{{ row.date|date:'Y-m-d' }}"
+                        value="{{ cell.holiday_pay_hours }}"
+                        {% if not editable %}readonly{% endif %}
+                      >
+                    </td>
+                    {% endfor %}
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            {% if editable %}
+            <button type="submit" class="btn btn-primary">Save plan</button>
+            {% endif %}
+            {% if plan.is_complete %}
+              <span class="badge bg-success ms-2">Complete</span>
+            {% else %}
+              <span class="badge bg-warning text-dark ms-2">Incomplete</span>
+            {% endif %}
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -853,6 +853,79 @@ class PayrollPeriodUserSnapshot(models.Model):
         return f"{self.period.week_ending} / {self.user} accrued {self.pto_accrued_hours}"
 
 
+class HolidayWeekPlanTemplate(models.TextChoices):
+    FOUR_DAY = "four_day", "4-day"
+    FIVE_DAY = "five_day", "5-day"
+
+
+class HolidayWeekPlan(models.Model):
+    """
+    Admin-configured expectations for a company holiday week (4-day vs 5-day templates).
+    Payroll close requires a complete plan when the week contains the actual holiday date.
+    """
+
+    year = models.IntegerField()
+    holiday_key = models.CharField(max_length=64)
+    name = models.CharField(max_length=64)
+    actual_holiday_date = models.DateField()
+    week_start = models.DateField()
+    week_ending = models.DateField()
+    is_complete = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="updated_holiday_week_plans",
+    )
+
+    class Meta:
+        ordering = ["-actual_holiday_date"]
+        constraints = [
+            UniqueConstraint(
+                fields=["year", "holiday_key"],
+                name="unique_holiday_week_plan_year_key",
+            ),
+        ]
+
+    def __str__(self):
+        status = "complete" if self.is_complete else "incomplete"
+        return f"{self.name} {self.year} ({status})"
+
+
+class HolidayWeekPlanDay(models.Model):
+    plan = models.ForeignKey(
+        HolidayWeekPlan,
+        on_delete=models.CASCADE,
+        related_name="days",
+    )
+    the_date = models.DateField()
+    template = models.CharField(max_length=16, choices=HolidayWeekPlanTemplate.choices)
+    work_hours = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        help_text="Expected work hours that day (0 = not a work day).",
+    )
+    holiday_pay_hours = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        help_text="Holiday pay hours that day (0 = none).",
+    )
+
+    class Meta:
+        ordering = ["the_date", "template"]
+        constraints = [
+            UniqueConstraint(
+                fields=["plan", "the_date", "template"],
+                name="unique_holiday_week_plan_day",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.plan.name} {self.the_date} {self.template}"
+
+
 class DailyAttendanceSummary(models.Model):
     """
     Interpreted workday state (provisional or finalized). Populated at payroll finalize;
@@ -969,20 +1042,22 @@ def get_company_holidays(year: int) -> dict[date, str]:
     return get_company_holidays_in_range(date(year, 1, 1), date(year, 12, 31))
 
 
-def _scheduled_bookend_days_for_holiday(user: CustomUser, holiday_date: date) -> tuple[date | None, date | None]:
-    """Last scheduled workday before and next scheduled workday after the holiday (7-day window)."""
-    day = holiday_date - timedelta(days=1)
+def _scheduled_bookend_days_for_holiday(user: CustomUser, holiday_pay_date: date) -> tuple[date | None, date | None]:
+    """Last effective workday before and next effective workday after the paid holiday date (7-day window)."""
+    from .services.holiday_plan_service import effective_work_hours_for_day
+
+    day = holiday_pay_date - timedelta(days=1)
     last_before = None
-    while (holiday_date - day).days <= 7 and day < holiday_date:
-        if user.schedules.filter(day=day.weekday()).exists():
+    while (holiday_pay_date - day).days <= 7 and day < holiday_pay_date:
+        if effective_work_hours_for_day(user, day) > 0:
             last_before = day
             break
         day -= timedelta(days=1)
 
-    day = holiday_date + timedelta(days=1)
+    day = holiday_pay_date + timedelta(days=1)
     next_after = None
-    while (day - holiday_date).days <= 7 and day > holiday_date:
-        if user.schedules.filter(day=day.weekday()).exists():
+    while (day - holiday_pay_date).days <= 7 and day > holiday_pay_date:
+        if effective_work_hours_for_day(user, day) > 0:
             next_after = day
             break
         day += timedelta(days=1)
@@ -998,10 +1073,10 @@ def _bookend_day_attendance_status(user: CustomUser, the_date: date, *, as_of: d
     if the_date > as_of:
         return "pending"
 
-    from .schedule_utils import scheduled_duration_hours_for_day
+    from .services.holiday_plan_service import effective_work_hours_for_day
     from timeclock.models import TimeEntry
 
-    scheduled = scheduled_duration_hours_for_day(user, the_date)
+    scheduled = effective_work_hours_for_day(user, the_date)
     if scheduled <= 0:
         return "eligible"
 
@@ -1065,17 +1140,19 @@ def _user_met_holiday_attendance_rule(user: CustomUser, holiday_date: date, *, a
 
 def ensure_holiday_occurrences_for_range(start_date: date, end_date: date, *, as_of: date | None = None):
     """
-    For each active, non-exempt, full-time user scheduled on an observed company holiday
-    within the given date range, create a HOLIDAY_PAID Occurrence when eligible.
-    Removes holiday pay for part-time users and when bookend attendance fails.
+    For each active, non-exempt, full-time user, create HOLIDAY_PAID occurrences from
+    complete holiday week plans when bookend attendance is satisfied.
+    No complete plan for a holiday week means no holiday pay for that week.
     """
     if start_date > end_date:
         return
 
     as_of = as_of or date.today()
-    holiday_dates = get_company_holidays_in_range(start_date, end_date)
-
-    from .schedule_utils import scheduled_duration_hours_for_day
+    from .services.holiday_plan_service import (
+        get_complete_plans_overlapping_range,
+        holiday_pay_hours_for_user_on_date,
+        list_company_holidays_for_year,
+    )
 
     Occurrence.objects.filter(
         date__range=[start_date, end_date],
@@ -1084,48 +1161,65 @@ def ensure_holiday_occurrences_for_range(start_date: date, end_date: date, *, as
         Q(user__is_part_time=True) | Q(user__is_exempt=True) | Q(user__is_active=False)
     ).delete()
 
-    users = CustomUser.objects.filter(is_active=True, is_exempt=False, is_part_time=False)
+    users = list(CustomUser.objects.filter(is_active=True, is_exempt=False, is_part_time=False))
 
-    for user in users:
-        current = start_date
-        while current <= end_date:
-            if current not in holiday_dates:
-                current += timedelta(days=1)
+    plans = get_complete_plans_overlapping_range(start_date, end_date)
+    plan_keys_with_complete = {(p.year, p.holiday_key) for p in plans}
+
+    for year in range(start_date.year - 1, end_date.year + 2):
+        for holiday in list_company_holidays_for_year(year):
+            week_start = holiday["week_start"]
+            week_ending = holiday["week_ending"]
+            if week_ending < start_date or week_start > end_date:
                 continue
-
-            daily_hours = scheduled_duration_hours_for_day(user, current)
-            if daily_hours <= 0:
-                current += timedelta(days=1)
+            if (holiday["year"], holiday["key"]) in plan_keys_with_complete:
                 continue
+            Occurrence.objects.filter(
+                date__range=[max(week_start, start_date), min(week_ending, end_date)],
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).delete()
 
-            status = holiday_attendance_status(user, current, as_of=as_of)
-            if status == "pending":
-                current += timedelta(days=1)
-                continue
+    for plan in plans:
+        plan_start = max(plan.week_start, start_date)
+        plan_end = min(plan.week_ending, end_date)
+        for user in users:
+            current = plan_start
+            while current <= plan_end:
+                pay_hours = holiday_pay_hours_for_user_on_date(user, current, plan=plan)
+                if pay_hours <= 0:
+                    Occurrence.objects.filter(
+                        user=user,
+                        date=current,
+                        subtype=OccurrenceSubtype.HOLIDAY_PAID,
+                    ).delete()
+                    current += timedelta(days=1)
+                    continue
 
-            if status == "ineligible":
-                Occurrence.objects.filter(
+                status = holiday_attendance_status(user, current, as_of=as_of)
+                if status == "pending":
+                    current += timedelta(days=1)
+                    continue
+
+                if status == "ineligible":
+                    Occurrence.objects.filter(
+                        user=user,
+                        date=current,
+                        subtype=OccurrenceSubtype.HOLIDAY_PAID,
+                    ).delete()
+                    current += timedelta(days=1)
+                    continue
+
+                occ, created = Occurrence.objects.get_or_create(
                     user=user,
                     date=current,
                     subtype=OccurrenceSubtype.HOLIDAY_PAID,
-                ).delete()
+                    defaults={
+                        "occurrence_type": OccurrenceType.PLANNED,
+                        "duration_hours": pay_hours,
+                    },
+                )
+                if not created and float(occ.duration_hours) != pay_hours:
+                    occ.duration_hours = pay_hours
+                    occ.save(update_fields=["duration_hours"])
+
                 current += timedelta(days=1)
-                continue
-
-            if Occurrence.objects.filter(
-                user=user,
-                date=current,
-                subtype=OccurrenceSubtype.HOLIDAY_PAID,
-            ).exists():
-                current += timedelta(days=1)
-                continue
-
-            Occurrence.objects.create(
-                user=user,
-                occurrence_type=OccurrenceType.PLANNED,
-                subtype=OccurrenceSubtype.HOLIDAY_PAID,
-                date=current,
-                duration_hours=daily_hours,
-            )
-
-            current += timedelta(days=1)

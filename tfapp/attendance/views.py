@@ -60,6 +60,11 @@ from .payroll_utils import (
     week_ending_for_date as _week_ending_for_date,
     is_payroll_week_finalized as _is_payroll_week_finalized,
 )
+from .services import holiday_plan_service
+from .services.holiday_plan_service import (
+    effective_scheduled_hours_for_range,
+    missing_holiday_plans_for_payroll_week,
+)
 from .services import attendance_engine
 from .services import weekly_reconciliation
 from .schedule_utils import (
@@ -689,7 +694,7 @@ def dashboard(request):
                 if entry.clock_in and entry.clock_out:
                     total_actual += entry.actual_worked_hours()
                     total_reported += entry.payroll_credited_hours()
-            total_scheduled = scheduled_hours_for_range(u, start_of_week, end_of_week)
+            total_scheduled = effective_scheduled_hours_for_range(u, start_of_week, end_of_week)
             delta = round(total_reported - total_scheduled, 2)
             weekly_totals.append((
                 u,
@@ -1272,7 +1277,7 @@ def payroll_view(request):
                 if entry.clock_in and entry.clock_out:
                     total_actual += entry.actual_worked_hours()
                     total_reported += entry.payroll_credited_hours()
-            total_scheduled = scheduled_hours_for_range(u, start_of_week, end_of_week)
+            total_scheduled = effective_scheduled_hours_for_range(u, start_of_week, end_of_week)
             pto_applied, personal_applied = pto_by_uid.get(u.id, (0.0, 0.0))
             weekly_totals.append((
                 u,
@@ -1336,6 +1341,11 @@ def payroll_view(request):
     payroll_close_review_groups = _build_payroll_close_review_groups(
         start_of_week, end_of_week, pending_override_entries
     )
+    missing_holiday_plans = (
+        missing_holiday_plans_for_payroll_week(start_of_week, end_of_week)
+        if request.user.is_staff
+        else []
+    )
 
     return render(request, "attendance/payroll.html", {
         "form": form,
@@ -1350,6 +1360,7 @@ def payroll_view(request):
         "payroll_finalized": payroll_finalized,
         "pending_override_entries": pending_override_entries,
         "payroll_close_review_groups": payroll_close_review_groups,
+        "missing_holiday_plans": missing_holiday_plans,
         "user_service_dates_json": json.dumps(user_service_dates),
         "today_iso": today.isoformat(),
     })
@@ -2104,6 +2115,18 @@ def close_payroll(request):
             disp = request.POST.get(f"lunch_disposition_{eid}")
             entry = TimeEntry.objects.get(pk=eid)
             _apply_payroll_lunch_disposition(entry, disp, request.user)
+
+    missing_plans = missing_holiday_plans_for_payroll_week(week_start, week_ending)
+    if missing_plans:
+        labels = ", ".join(
+            f"{row['name']} ({row['year']})" for row in missing_plans
+        )
+        messages.error(
+            request,
+            f"Cannot close payroll: holiday week plan required for {labels}. "
+            "Configure each holiday on the Holiday Week Plans page before closing.",
+        )
+        return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
 
     # Ensure holiday occurrences exist for this payroll week
     ensure_holiday_occurrences_for_range(week_start, week_ending)
@@ -2955,3 +2978,154 @@ def cancel_adjust_punch(request, slug):
     if next_url and next_url.startswith("/"):
         return redirect(next_url)
     return redirect("attendance:request_adjust_punch")
+
+
+@login_required
+def holiday_plans_index(request):
+    if not request.user.is_staff:
+        return redirect("attendance:dashboard")
+
+    year_param = request.GET.get("year")
+    try:
+        year = int(year_param) if year_param else localdate().year
+    except (TypeError, ValueError):
+        year = localdate().year
+
+    holidays = holiday_plan_service.list_company_holidays_for_year(year)
+    rows = []
+    for holiday in holidays:
+        plan = holiday_plan_service.get_plan_for_holiday(
+            year=holiday["year"],
+            holiday_key=holiday["key"],
+        )
+        if not plan:
+            holiday_plan_service.get_or_create_prefilled_plan(
+                year=holiday["year"],
+                holiday_key=holiday["key"],
+            )
+            plan = holiday_plan_service.get_plan_for_holiday(
+                year=holiday["year"],
+                holiday_key=holiday["key"],
+            )
+        rows.append(
+            {
+                **holiday,
+                "plan": plan,
+                "editable": plan and holiday_plan_service.is_plan_editable(plan),
+                "status": (
+                    "complete"
+                    if plan and plan.is_complete
+                    else "incomplete"
+                ),
+            }
+        )
+
+    year_choices = list(range(year - 1, year + 3))
+    return render(
+        request,
+        "attendance/holiday_plans_index.html",
+        {
+            "year": year,
+            "year_choices": year_choices,
+            "rows": rows,
+        },
+    )
+
+
+@login_required
+def holiday_plan_edit(request, year: int, holiday_key: str):
+    if not request.user.is_staff:
+        return redirect("attendance:dashboard")
+
+    plan, _ = holiday_plan_service.get_or_create_prefilled_plan(
+        year=year,
+        holiday_key=holiday_key,
+    )
+    if not plan:
+        messages.error(request, "Holiday not found.")
+        return redirect("attendance:holiday_plans_index")
+
+    editable = holiday_plan_service.is_plan_editable(plan)
+    plan_days = {
+        (day.the_date, day.template): day
+        for day in plan.days.all()
+    }
+
+    week_dates = []
+    current = plan.week_start
+    while current <= plan.week_ending:
+        week_dates.append(current)
+        current += timedelta(days=1)
+
+    from attendance.models import HolidayWeekPlanTemplate
+
+    template_choices = [
+        (HolidayWeekPlanTemplate.FOUR_DAY, "4-day employees"),
+        (HolidayWeekPlanTemplate.FIVE_DAY, "5-day employees"),
+    ]
+    grid_rows = []
+    for d in week_dates:
+        cells = []
+        for template_key, template_label in template_choices:
+            day = plan_days.get((d, template_key))
+            cells.append(
+                {
+                    "template_key": template_key,
+                    "template_label": template_label,
+                    "work_hours": day.work_hours if day else "0.00",
+                    "holiday_pay_hours": day.holiday_pay_hours if day else "0.00",
+                }
+            )
+        grid_rows.append({"date": d, "cells": cells})
+
+    if request.method == "POST":
+        if not editable:
+            messages.error(
+                request,
+                "This holiday week is finalized and cannot be edited. Unfinalize payroll to make changes.",
+            )
+            return redirect(
+                "attendance:holiday_plan_edit",
+                year=year,
+                holiday_key=holiday_key,
+            )
+
+        from attendance.models import HolidayWeekPlanTemplate
+
+        posted_rows = {}
+        for row in grid_rows:
+            iso = row["date"].isoformat()
+            for cell in row["cells"]:
+                template = cell["template_key"]
+                posted_rows[(iso, template)] = {
+                    "work": request.POST.get(f"work_{template}_{iso}"),
+                    "holiday_pay": request.POST.get(f"holiday_{template}_{iso}"),
+                }
+
+        ok, errors = holiday_plan_service.save_plan_from_post(
+            plan,
+            posted_rows=posted_rows,
+            updated_by=request.user,
+        )
+        if not ok:
+            for err in errors:
+                messages.error(request, err)
+        else:
+            messages.success(request, f"{plan.name} {plan.year} saved.")
+            plan.refresh_from_db()
+        return redirect(
+            "attendance:holiday_plan_edit",
+            year=year,
+            holiday_key=holiday_key,
+        )
+
+    return render(
+        request,
+        "attendance/holiday_plan_edit.html",
+        {
+            "plan": plan,
+            "grid_rows": grid_rows,
+            "template_choices": template_choices,
+            "editable": editable,
+        },
+    )

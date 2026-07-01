@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}| Holiday Week Plans{% endblock %}
+{% block content %}
+<div class="container-fluid mt-4 px-3 px-lg-4">
+  <div class="row justify-content-center">
+    <div class="col-sm-12 col-md-10 col-lg-9">
+      <div class="card mb-4">
+        <div class="card-body">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+            <h1 class="h4 mb-0">Holiday Week Plans</h1>
+            <a class="btn btn-outline-secondary btn-sm" href="{% url 'attendance:payroll' %}">Back to Payroll</a>
+          </div>
+          <p class="text-muted small">
+            Configure expected work and holiday pay hours for 4-day and 5-day employees for each company holiday week.
+            Payroll cannot close until every holiday in that week has a complete plan.
+          </p>
+
+          <form method="get" class="d-flex flex-wrap align-items-center gap-2 mb-4">
+            <label for="year" class="form-label mb-0 fw-bold">Year</label>
+            <select name="year" id="year" class="form-select form-select-sm" style="width: auto;">
+              {% for y in year_choices %}
+                <option value="{{ y }}" {% if y == year %}selected{% endif %}>{{ y }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-sm btn-outline-primary">View</button>
+          </form>
+
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Holiday</th>
+                  <th>Actual date</th>
+                  <th>Payroll week</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in rows %}
+                <tr>
+                  <td>{{ row.name }}</td>
+                  <td>{{ row.actual_date|date:"m/d/Y (D)" }}</td>
+                  <td>{{ row.week_start|date:"m/d" }} – {{ row.week_ending|date:"m/d/Y" }}</td>
+                  <td>
+                    {% if row.status == "complete" %}
+                      <span class="badge bg-success">Complete</span>
+                    {% else %}
+                      <span class="badge bg-warning text-dark">Incomplete</span>
+                    {% endif %}
+                    {% if not row.editable %}
+                      <span class="badge bg-secondary">Locked</span>
+                    {% endif %}
+                  </td>
+                  <td class="text-end">
+                    <a
+                      class="btn btn-sm {% if row.status == 'complete' %}btn-outline-primary{% else %}btn-primary{% endif %}"
+                      href="{% url 'attendance:holiday_plan_edit' row.year row.key %}"
+                    >Configure</a>
+                  </td>
+                </tr>
+                {% empty %}
+                <tr>
+                  <td colspan="5" class="text-muted">No holidays found for {{ year }}.</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

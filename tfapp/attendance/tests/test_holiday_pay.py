@@ -1,11 +1,14 @@
 """Tests for observed holidays and holiday pay bookend attendance rules."""
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
+from decimal import Decimal
 
 from django.test import TestCase
 from django.utils import timezone
 
 from attendance.models import (
     CustomUser,
+    HolidayWeekPlanDay,
+    HolidayWeekPlanTemplate,
     Occurrence,
     OccurrenceSubtype,
     OccurrenceType,
@@ -15,6 +18,7 @@ from attendance.models import (
     holiday_attendance_status,
     observed_company_holiday_date,
 )
+from attendance.services.holiday_plan_service import get_or_create_prefilled_plan
 from timeclock.models import TimeEntry
 
 
@@ -36,6 +40,22 @@ def _full_shift_entry(user, d: date):
     clock_in = timezone.make_aware(datetime.combine(d, time(5, 0)), tz)
     clock_out = timezone.make_aware(datetime.combine(d, time(15, 30)), tz)
     TimeEntry.objects.create(user=user, date=d, clock_in=clock_in, clock_out=clock_out)
+
+
+def _complete_independence_day_2026_plan(*, four_day_holiday_pay=Decimal("9.00")):
+    plan, _ = get_or_create_prefilled_plan(year=2026, holiday_key="independence_day")
+    HolidayWeekPlanDay.objects.filter(
+        plan=plan,
+        the_date=date(2026, 7, 2),
+        template=HolidayWeekPlanTemplate.FOUR_DAY,
+    ).update(
+        work_hours=Decimal("0.00"),
+        holiday_pay_hours=four_day_holiday_pay,
+    )
+    plan.is_complete = True
+    plan.save(update_fields=["is_complete"])
+    plan.refresh_from_db()
+    return plan
 
 
 class TestObservedHolidays(TestCase):
@@ -73,6 +93,8 @@ class TestHolidayPayEligibility(TestCase):
     AS_OF = date(2026, 7, 7)
 
     def setUp(self):
+        _complete_independence_day_2026_plan()
+
         self.ft_user = CustomUser.objects.create_user(
             username="ft_ok",
             password="test",
@@ -93,6 +115,21 @@ class TestHolidayPayEligibility(TestCase):
     def _seed_perfect_bookends(self, user):
         _full_shift_entry(user, self.LEADING)
         _full_shift_entry(user, self.TRAILING)
+
+    def test_no_plan_means_no_holiday_pay(self):
+        from attendance.models import HolidayWeekPlan
+
+        HolidayWeekPlan.objects.all().delete()
+        self._seed_perfect_bookends(self.ft_user)
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=self.AS_OF
+        )
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.ft_user,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).exists()
+        )
 
     def test_eligible_full_time_receives_holiday_pay(self):
         self._seed_perfect_bookends(self.ft_user)
