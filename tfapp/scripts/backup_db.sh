@@ -2,29 +2,22 @@
 
 set -e
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=_db_common.sh
+source "$SCRIPT_DIR/_db_common.sh"
+
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKUP_DIR="$PROJECT_DIR/backups"
 
 mkdir -p "$BACKUP_DIR"
 
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M")
 
-# Ask Django for the database settings
-eval "$(
-cd "$PROJECT_DIR"
-
-python manage.py shell -c "
-from django.conf import settings
-db = settings.DATABASES['default']
-print(f'export DB_NAME=\"{db[\"NAME\"]}\"')
-print(f'export DB_USER=\"{db[\"USER\"]}\"')
-print(f'export DB_PASSWORD=\"{db[\"PASSWORD\"]}\"')
-print(f'export DB_HOST=\"{db[\"HOST\"] or \"localhost\"}\"')
-print(f'export DB_PORT=\"{db[\"PORT\"] or \"5432\"}\"')
-"
-)"
+load_db_env "$PROJECT_DIR"
 
 export PGPASSWORD="$DB_PASSWORD"
+
+BACKUP_FILE="$BACKUP_DIR/${DB_NAME}_${TIMESTAMP}.dump"
 
 pg_dump \
     -h "$DB_HOST" \
@@ -32,10 +25,10 @@ pg_dump \
     -U "$DB_USER" \
     -F c \
     -b \
-    -v \
-    -f "$BACKUP_DIR/${DB_NAME}_${TIMESTAMP}.dump" \
+    -f "$BACKUP_FILE" \
     "$DB_NAME"
 
 find "$BACKUP_DIR" -name "*.dump" -mtime +30 -delete
 
-echo "$(date): Backup completed successfully."
+SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+echo "$(date): Backup completed: $(basename "$BACKUP_FILE") ($SIZE)"

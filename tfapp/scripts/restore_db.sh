@@ -21,22 +21,13 @@ if [ ! -f "$BACKUP_FILE" ]; then
     exit 1
 fi
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=_db_common.sh
+source "$SCRIPT_DIR/_db_common.sh"
 
-# Get database settings directly from Django
-eval "$(
-cd "$PROJECT_DIR"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-python manage.py shell -c "
-from django.conf import settings
-db = settings.DATABASES['default']
-print(f'export DB_NAME=\"{db[\"NAME\"]}\"')
-print(f'export DB_USER=\"{db[\"USER\"]}\"')
-print(f'export DB_PASSWORD=\"{db[\"PASSWORD\"]}\"')
-print(f'export DB_HOST=\"{db[\"HOST\"] or \"localhost\"}\"')
-print(f'export DB_PORT=\"{db[\"PORT\"] or \"5432\"}\"')
-"
-)"
+load_db_env "$PROJECT_DIR"
 
 export PGPASSWORD="$DB_PASSWORD"
 
