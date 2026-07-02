@@ -115,6 +115,9 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
     story.append(Paragraph("Policy Under Test", h2))
     for item in [
         "Part-time employees are not eligible for holiday pay.",
+        "Full-time employees in their first 90 days (from hire or service date) are not eligible.",
+        "Holiday pay hours follow each employee's prevailing shift length from their schedule, "
+        "not the numeric value entered in the holiday plan grid (any value > 0 marks a paid day).",
         "Full-time employees must fully cover the last scheduled shift before and "
         "the first scheduled shift after the paid holiday (work or planned leave).",
         "Any unplanned absence (full or partial) on a bookend shift removes holiday pay.",

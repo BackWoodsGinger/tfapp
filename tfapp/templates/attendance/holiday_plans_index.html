@@ -11,8 +11,9 @@
             <a class="btn btn-outline-secondary btn-sm" href="{% url 'attendance:payroll' %}">Back to Payroll</a>
           </div>
           <p class="text-muted small">
-            Configure expected work and holiday pay hours for 4-day and 5-day employees for each company holiday week.
-            Payroll cannot close until every holiday in that week has a complete plan.
+            Configure expected work during each company holiday week for 4-day and 5-day templates.
+            Holiday pay amounts are calculated from each employee's schedule (not the grid value).
+            Full-time employees in their first 90 days are not eligible for holiday pay.
           </p>
 
           <form method="get" class="d-flex flex-wrap align-items-center gap-2 mb-4">

@@ -53,6 +53,37 @@ def user_holiday_schedule_template(user) -> str:
     return HolidayWeekPlanTemplate.FOUR_DAY
 
 
+_REFERENCE_WEEK_MONDAY = date(2020, 1, 6)
+
+
+def prevailing_schedule_shift_hours(user) -> float:
+    """Typical paid hours per work day (max scheduled length across the week)."""
+    best = 0.0
+    for offset in range(7):
+        d = _REFERENCE_WEEK_MONDAY + timedelta(days=offset)
+        hours = scheduled_duration_hours_for_day(user, d)
+        if hours > best:
+            best = hours
+    return round(best, 2)
+
+
+def user_eligible_for_holiday_pay(user, holiday_date: date) -> bool:
+    """Full-time, non-exempt, active, and past the 90-day probation window on the holiday date."""
+    if not user.is_active or user.is_exempt or user.is_part_time:
+        return False
+    if user.is_date_in_probation_period(holiday_date):
+        return False
+    return True
+
+
+def plan_marks_paid_holiday_for_user_on_date(user, the_date: date, *, plan=None) -> bool:
+    plan = plan or get_complete_plan_covering_date(the_date)
+    if not plan:
+        return False
+    template = user_holiday_schedule_template(user)
+    return plan_holiday_pay_hours(plan, the_date=the_date, template=template) > 0
+
+
 def list_company_holidays_for_year(year: int) -> list[dict]:
     """Holidays for a calendar year with payroll week bounds (actual calendar date, not observed)."""
     from attendance.models import _actual_company_holidays
@@ -137,21 +168,25 @@ def plan_holiday_pay_hours(plan, *, the_date: date, template: str) -> float:
 
 
 def effective_work_hours_for_day(user, the_date: date) -> float:
+    normal = scheduled_duration_hours_for_day(user, the_date)
     plan = get_complete_plan_covering_date(the_date)
-    if plan:
-        template = user_holiday_schedule_template(user)
-        hours = plan_work_hours(plan, the_date=the_date, template=template)
-        if hours is not None:
-            return hours
-    return scheduled_duration_hours_for_day(user, the_date)
+    if not plan:
+        return normal
+    template = user_holiday_schedule_template(user)
+    plan_hours = plan_work_hours(plan, the_date=the_date, template=template)
+    if plan_hours is None:
+        return normal
+    if plan_hours <= 0 or normal <= 0:
+        return 0.0
+    return min(plan_hours, normal)
 
 
 def holiday_pay_hours_for_user_on_date(user, the_date: date, *, plan=None) -> float:
-    plan = plan or get_complete_plan_covering_date(the_date)
-    if not plan:
+    if not user_eligible_for_holiday_pay(user, the_date):
         return 0.0
-    template = user_holiday_schedule_template(user)
-    return plan_holiday_pay_hours(plan, the_date=the_date, template=template)
+    if not plan_marks_paid_holiday_for_user_on_date(user, the_date, plan=plan):
+        return 0.0
+    return prevailing_schedule_shift_hours(user)
 
 
 def effective_scheduled_hours_for_range(user, week_start: date, week_ending: date) -> float:

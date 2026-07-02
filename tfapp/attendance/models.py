@@ -910,7 +910,7 @@ class HolidayWeekPlanDay(models.Model):
     holiday_pay_hours = models.DecimalField(
         max_digits=6,
         decimal_places=2,
-        help_text="Holiday pay hours that day (0 = none).",
+        help_text="Mark a paid holiday when > 0; actual pay hours come from each employee's schedule.",
     )
 
     class Meta:
@@ -1119,7 +1119,11 @@ def holiday_attendance_status(user: CustomUser, holiday_date: date, *, as_of: da
     Whether a full-time employee qualifies for holiday pay based on bookend shifts.
     Returns ``eligible``, ``ineligible``, or ``pending`` (trailing/leading day not yet passed).
     """
+    from .services.holiday_plan_service import user_eligible_for_holiday_pay
+
     as_of = as_of or date.today()
+    if not user_eligible_for_holiday_pay(user, holiday_date):
+        return "ineligible"
     last_before, next_after = _scheduled_bookend_days_for_holiday(user, holiday_date)
     if not last_before or not next_after:
         return "eligible"
@@ -1140,8 +1144,9 @@ def _user_met_holiday_attendance_rule(user: CustomUser, holiday_date: date, *, a
 
 def ensure_holiday_occurrences_for_range(start_date: date, end_date: date, *, as_of: date | None = None):
     """
-    For each active, non-exempt, full-time user, create HOLIDAY_PAID occurrences from
-    complete holiday week plans when bookend attendance is satisfied.
+    For each active, non-exempt, full-time user past 90-day probation, create HOLIDAY_PAID
+    occurrences from complete holiday week plans when bookend attendance is satisfied.
+    Paid hours follow each employee's prevailing shift length, not the plan grid amount.
     No complete plan for a holiday week means no holiday pay for that week.
     """
     if start_date > end_date:
@@ -1152,6 +1157,7 @@ def ensure_holiday_occurrences_for_range(start_date: date, end_date: date, *, as
         get_complete_plans_overlapping_range,
         holiday_pay_hours_for_user_on_date,
         list_company_holidays_for_year,
+        user_eligible_for_holiday_pay,
     )
 
     Occurrence.objects.filter(
@@ -1160,6 +1166,13 @@ def ensure_holiday_occurrences_for_range(start_date: date, end_date: date, *, as
     ).filter(
         Q(user__is_part_time=True) | Q(user__is_exempt=True) | Q(user__is_active=False)
     ).delete()
+
+    for occ in Occurrence.objects.filter(
+        date__range=[start_date, end_date],
+        subtype=OccurrenceSubtype.HOLIDAY_PAID,
+    ).select_related("user"):
+        if not user_eligible_for_holiday_pay(occ.user, occ.date):
+            occ.delete()
 
     users = list(CustomUser.objects.filter(is_active=True, is_exempt=False, is_part_time=False))
 
@@ -1185,6 +1198,15 @@ def ensure_holiday_occurrences_for_range(start_date: date, end_date: date, *, as
         for user in users:
             current = plan_start
             while current <= plan_end:
+                if not user_eligible_for_holiday_pay(user, current):
+                    Occurrence.objects.filter(
+                        user=user,
+                        date=current,
+                        subtype=OccurrenceSubtype.HOLIDAY_PAID,
+                    ).delete()
+                    current += timedelta(days=1)
+                    continue
+
                 pay_hours = holiday_pay_hours_for_user_on_date(user, current, plan=plan)
                 if pay_hours <= 0:
                     Occurrence.objects.filter(

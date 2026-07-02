@@ -18,7 +18,11 @@ from attendance.models import (
     holiday_attendance_status,
     observed_company_holiday_date,
 )
-from attendance.services.holiday_plan_service import get_or_create_prefilled_plan
+from attendance.services.holiday_plan_service import (
+    effective_work_hours_for_day,
+    get_or_create_prefilled_plan,
+    prevailing_schedule_shift_hours,
+)
 from timeclock.models import TimeEntry
 
 
@@ -142,7 +146,65 @@ class TestHolidayPayEligibility(TestCase):
             subtype=OccurrenceSubtype.HOLIDAY_PAID,
         ).first()
         self.assertIsNotNone(occ)
-        self.assertGreater(occ.duration_hours, 0)
+        self.assertAlmostEqual(occ.duration_hours, 9.0, places=2)
+
+    def test_probation_employee_denied_holiday_pay(self):
+        self.ft_user.hire_date = date(2026, 6, 1)
+        self.ft_user.save(update_fields=["hire_date"])
+        self._seed_perfect_bookends(self.ft_user)
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=self.AS_OF
+        )
+        self.assertFalse(
+            Occurrence.objects.filter(
+                user=self.ft_user,
+                subtype=OccurrenceSubtype.HOLIDAY_PAID,
+            ).exists()
+        )
+        self.assertEqual(
+            holiday_attendance_status(self.ft_user, self.HOLIDAY, as_of=self.AS_OF),
+            "ineligible",
+        )
+
+    def test_holiday_pay_uses_prevailing_schedule_hours(self):
+        short_user = CustomUser.objects.create_user(
+            username="short_shift",
+            password="test",
+            hire_date=date(2020, 1, 1),
+            payroll_lastname="Short",
+            payroll_firstname="Shift",
+        )
+        for weekday in range(4):
+            WorkSchedule.objects.create(
+                user=short_user,
+                day=weekday,
+                start_time=time(7, 15),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        tz = timezone.get_current_timezone()
+        for bookend in (self.LEADING, self.TRAILING):
+            clock_in = timezone.make_aware(datetime.combine(bookend, time(7, 15)), tz)
+            clock_out = timezone.make_aware(datetime.combine(bookend, time(15, 30)), tz)
+            TimeEntry.objects.create(
+                user=short_user,
+                date=bookend,
+                clock_in=clock_in,
+                clock_out=clock_out,
+                lunch_out=timezone.make_aware(datetime.combine(bookend, time(11, 0)), tz),
+                lunch_in=timezone.make_aware(datetime.combine(bookend, time(11, 30)), tz),
+            )
+        ensure_holiday_occurrences_for_range(
+            self.WEEK_START, self.WEEK_END, as_of=self.AS_OF
+        )
+        occ = Occurrence.objects.filter(
+            user=short_user,
+            date=self.HOLIDAY,
+            subtype=OccurrenceSubtype.HOLIDAY_PAID,
+        ).first()
+        self.assertIsNotNone(occ)
+        self.assertAlmostEqual(occ.duration_hours, 7.75, places=2)
 
     def test_part_time_never_receives_holiday_pay(self):
         self._seed_perfect_bookends(self.pt_user)
@@ -263,3 +325,51 @@ class TestHolidayPayEligibility(TestCase):
             holiday_attendance_status(self.ft_user, self.HOLIDAY, as_of=self.AS_OF),
             "ineligible",
         )
+
+
+class TestHolidayPlanScheduleIntersection(TestCase):
+    def setUp(self):
+        get_or_create_prefilled_plan(year=2026, holiday_key="independence_day")
+
+    def test_three_day_mon_wed_no_thursday_expectation(self):
+        user = CustomUser.objects.create_user(username="mw", password="test")
+        for weekday in (0, 1, 2):
+            WorkSchedule.objects.create(
+                user=user,
+                day=weekday,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        thursday = date(2026, 7, 2)
+        self.assertAlmostEqual(
+            effective_work_hours_for_day(user, thursday),
+            0.0,
+            places=2,
+        )
+        self.assertAlmostEqual(prevailing_schedule_shift_hours(user), 9.0, places=2)
+
+
+class TestHolidayPlanScheduleIntersection(TestCase):
+    def setUp(self):
+        get_or_create_prefilled_plan(year=2026, holiday_key="independence_day")
+
+    def test_three_day_mon_wed_no_thursday_expectation(self):
+        user = CustomUser.objects.create_user(username="mw", password="test")
+        for weekday in (0, 1, 2):
+            WorkSchedule.objects.create(
+                user=user,
+                day=weekday,
+                start_time=time(5, 0),
+                lunch_out=time(11, 0),
+                lunch_in=time(11, 30),
+                end_time=time(15, 30),
+            )
+        thursday = date(2026, 7, 2)
+        self.assertAlmostEqual(
+            effective_work_hours_for_day(user, thursday),
+            0.0,
+            places=2,
+        )
+        self.assertAlmostEqual(prevailing_schedule_shift_hours(user), 9.0, places=2)
