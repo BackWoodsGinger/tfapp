@@ -3,6 +3,7 @@ from django.contrib import messages
 from django.db import transaction, IntegrityError
 from .models import TimeEntry
 from .forms import TimeEntryForm
+from .kiosk import get_client_ip, is_timeclock_kiosk
 from attendance.models import CustomUser, RoleChoices
 from attendance.payroll_utils import week_ending_for_date, is_payroll_week_finalized
 from .tardy_sync import sync_tardy_occurrences_for_time_entry
@@ -43,20 +44,54 @@ def _is_valid_clock_in_approver(u: CustomUser) -> bool:
     )
 
 
+def _resolve_timeclock_user(request, login, pin, *, is_kiosk: bool):
+    """
+    Resolve employee for a punch.
+    Kiosk (registered IP): login only (barcode). All others: login + PIN.
+    Returns (user, error_message). error_message is set when resolution fails.
+    """
+    login = (login or "").strip()
+    pin = (pin or "").strip()
+    if not login:
+        return None, "missing_credentials"
+    try:
+        if is_kiosk:
+            user = CustomUser.objects.get(timeclock_login=login, is_active=True)
+        else:
+            if not pin:
+                return None, "missing_credentials"
+            user = CustomUser.objects.get(
+                timeclock_login=login, timeclock_pin=pin, is_active=True
+            )
+    except CustomUser.DoesNotExist:
+        return None, "invalid_credentials"
+    except CustomUser.MultipleObjectsReturned:
+        return None, "ambiguous_login"
+    return user, None
+
+
+def _credential_error_message(code: str, *, is_kiosk: bool) -> str:
+    if code == "ambiguous_login":
+        return "Multiple employees share this login. Contact a supervisor."
+    if is_kiosk:
+        return "Invalid badge / login."
+    return "Invalid login or pin."
+
+
 @require_POST
 def check_clock_in(request):
     """
     Returns whether clock-in requires a manager override (unscheduled or >15 min before start).
     Used by the timeclock UI before submitting the clock-in punch.
     """
-    login = (request.POST.get("login") or "").strip()
-    pin = (request.POST.get("pin") or "").strip()
-    if not login or not pin:
+    is_kiosk = is_timeclock_kiosk(request)
+    login = request.POST.get("login")
+    pin = request.POST.get("pin")
+    user, err = _resolve_timeclock_user(request, login, pin, is_kiosk=is_kiosk)
+    if err == "missing_credentials":
         return JsonResponse({"error": "missing_credentials"}, status=400)
-    try:
-        user = CustomUser.objects.get(timeclock_login=login, timeclock_pin=pin)
-    except CustomUser.DoesNotExist:
-        return JsonResponse({"error": "invalid_credentials"}, status=401)
+    if err:
+        return JsonResponse({"error": err}, status=401)
 
     now = timezone.now()
     today = now.date()
@@ -71,16 +106,16 @@ def check_clock_in(request):
 
 def timeclock_home(request):
     clock_in_approvers = _clock_in_approver_queryset()
+    is_kiosk = is_timeclock_kiosk(request)
 
     if request.method == "POST":
         login = request.POST.get("login")
         pin = request.POST.get("pin")
         action = request.POST.get("action")
 
-        try:
-            user = CustomUser.objects.get(timeclock_login=login, timeclock_pin=pin)
-        except CustomUser.DoesNotExist:
-            messages.error(request, "Invalid login or pin.")
+        user, err = _resolve_timeclock_user(request, login, pin, is_kiosk=is_kiosk)
+        if err:
+            messages.error(request, _credential_error_message(err, is_kiosk=is_kiosk))
             return redirect("timeclock:timeclock_home")
 
         now = timezone.now()
@@ -168,10 +203,22 @@ def timeclock_home(request):
         )
         return redirect("timeclock:timeclock_home")
 
+    show_client_ip = bool(
+        getattr(request.user, "is_authenticated", False)
+        and (
+            getattr(request.user, "is_staff", False)
+            or getattr(request.user, "is_superuser", False)
+        )
+    )
     return render(
         request,
         "timeclock/timeclock_home.html",
-        {"clock_in_approvers": clock_in_approvers},
+        {
+            "clock_in_approvers": clock_in_approvers,
+            "is_kiosk": is_kiosk,
+            "client_ip": get_client_ip(request) if show_client_ip else None,
+            "show_client_ip": show_client_ip,
+        },
     )
 
 

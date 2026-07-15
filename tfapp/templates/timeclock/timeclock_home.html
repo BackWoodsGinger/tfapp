@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block site_navbar %}
+{% if not is_kiosk %}
 {% include "partials/_navbar_minimal.html" %}
+{% endif %}
+{% endblock %}
+{% block site_footer %}
+{% if not is_kiosk %}
+{% include "partials/_footer.html" %}
+{% endif %}
 {% endblock %}
 {% block content %}
 <style>
@@ -39,6 +46,19 @@
     min-height: 4.25rem;
     width: 100%;
   }
+  {% if is_kiosk %}
+  .kiosk-scan-status {
+    min-height: 3rem;
+    font-size: 1.5rem;
+  }
+  .kiosk-login-input {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+  }
+  {% endif %}
 </style>
 
 <div class="container-fluid h-100 bg-light">
@@ -48,6 +68,13 @@
         <div class="card-body d-flex flex-column justify-content-center align-items-center">
 
           <h1 id="clock" class="display-1 fw-bold text-center mt-5 mb-5"></h1>
+
+          {% if show_client_ip %}
+          <p class="text-muted small text-center mb-3">
+            Client IP (staff): <code>{{ client_ip|default:"unknown" }}</code>
+            {% if is_kiosk %}· kiosk mode active{% else %}· standard mode{% endif %}
+          </p>
+          {% endif %}
 
           {% if messages %}
           <div aria-live="polite" role="alert" class="mb-4 w-100 text-center">
@@ -61,6 +88,14 @@
 
           <form method="post" class="w-100" style="max-width: 800px;" id="timeclock-form">
             {% csrf_token %}
+            {% if is_kiosk %}
+            <div class="text-center mb-4">
+              <p class="fs-3 mb-2 text-dark">Scan your badge, then select a punch</p>
+              <p id="kiosk-scan-status" class="kiosk-scan-status text-secondary mb-0">Waiting for barcode scan…</p>
+              <input type="text" id="login" name="login" maxlength="4" class="kiosk-login-input"
+                autocomplete="off" inputmode="numeric" pattern="\d*" required autofocus>
+            </div>
+            {% else %}
             <div class="row justify-content-center mb-4">
               <div class="col-md-3 col-6">
                 <input type="password" id="login" name="login" maxlength="4" placeholder="Login"
@@ -97,6 +132,7 @@
                 </div>
               </div>
             </div>
+            {% endif %}
 
             <div class="timeclock-actions mt-5">
               <button type="button" id="btn-clock-in" class="btn btn-success btn-xl">Clock In</button>
@@ -158,6 +194,66 @@
   updateClock();
 </script>
 
+{% if is_kiosk %}
+<script>
+  (function () {
+    const loginInput = document.getElementById('login');
+    const statusEl = document.getElementById('kiosk-scan-status');
+    const form = document.getElementById('timeclock-form');
+
+    function setStatus(text, ready) {
+      if (!statusEl) return;
+      statusEl.textContent = text;
+      statusEl.classList.toggle('text-success', !!ready);
+      statusEl.classList.toggle('text-secondary', !ready);
+    }
+
+    function normalizeDigits(value) {
+      return (value || '').replace(/\D/g, '').slice(0, 4);
+    }
+
+    function syncFromScan() {
+      const digits = normalizeDigits(loginInput.value);
+      loginInput.value = digits;
+      if (digits.length === 4) {
+        setStatus('Badge scanned — select Clock In, Lunch, or Clock Out', true);
+      } else if (digits.length > 0) {
+        setStatus('Scanning…', false);
+      } else {
+        setStatus('Waiting for barcode scan…', false);
+      }
+    }
+
+    if (loginInput) {
+      loginInput.focus();
+      loginInput.addEventListener('input', syncFromScan);
+      // Keep focus on the scan field for keyboard-wedge scanners.
+      document.addEventListener('click', function () {
+        if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
+        if (document.activeElement && document.activeElement.tagName === 'BUTTON') return;
+        loginInput.focus();
+      });
+    }
+
+    if (form) {
+      form.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          syncFromScan();
+        }
+      });
+      form.addEventListener('submit', function (e) {
+        syncFromScan();
+        if (!loginInput || loginInput.value.length !== 4) {
+          e.preventDefault();
+          alert('Scan your badge before punching.');
+          if (loginInput) loginInput.focus();
+        }
+      });
+    }
+  })();
+</script>
+{% else %}
 <script>
   let activeField = 'login';
   const loginInput = document.getElementById('login');
@@ -191,6 +287,7 @@
     field.value = '';
   }
 </script>
+{% endif %}
 
 <script>
 /**
@@ -199,6 +296,7 @@
  * other script blocks do not share const scope with this block.
  */
 document.addEventListener('DOMContentLoaded', function () {
+  const isKiosk = {{ is_kiosk|yesno:"true,false" }};
   const form = document.getElementById('timeclock-form');
   const btnClockIn = document.getElementById('btn-clock-in');
   const modalEl = document.getElementById('clockInOverrideModal');
@@ -287,14 +385,21 @@ document.addEventListener('DOMContentLoaded', function () {
     const pinEl = document.getElementById('pin');
     const login = loginEl ? loginEl.value.trim() : '';
     const pin = pinEl ? pinEl.value.trim() : '';
-    if (login.length !== 4 || pin.length !== 4) {
+    if (isKiosk) {
+      if (login.length !== 4) {
+        alert('Scan your badge before clocking in.');
+        return;
+      }
+    } else if (login.length !== 4 || pin.length !== 4) {
       alert('Enter your 4-digit login and PIN.');
       return;
     }
 
     const fd = new FormData();
     fd.append('login', login);
-    fd.append('pin', pin);
+    if (!isKiosk) {
+      fd.append('pin', pin);
+    }
     fd.append('csrfmiddlewaretoken', getCsrfToken());
 
     try {
@@ -305,7 +410,7 @@ document.addEventListener('DOMContentLoaded', function () {
         credentials: 'same-origin',
       });
       if (r.status === 401) {
-        alert('Invalid login or PIN.');
+        alert(isKiosk ? 'Invalid badge / login.' : 'Invalid login or PIN.');
         return;
       }
       if (!r.ok) {

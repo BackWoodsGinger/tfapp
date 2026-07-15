@@ -5,8 +5,38 @@ from django.db import transaction
 from attendance.models import CustomUser, revert_tardy_occurrences_for_adjust_punch
 from attendance.payroll_utils import week_ending_for_date, is_payroll_week_finalized
 
-from .models import TimeEntry
+from .models import MAX_TIMECLOCK_KIOSKS, TimeclockKioskIP, TimeEntry
 from .tardy_sync import sync_tardy_occurrences_for_time_entry
+
+
+class TimeclockKioskIPAdminForm(forms.ModelForm):
+    class Meta:
+        model = TimeclockKioskIP
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        # Enforce max count on create (model.clean also runs via full_clean).
+        if self.instance.pk is None:
+            if TimeclockKioskIP.objects.count() >= MAX_TIMECLOCK_KIOSKS:
+                raise forms.ValidationError(
+                    f"At most {MAX_TIMECLOCK_KIOSKS} kiosk IPs can be configured."
+                )
+        return cleaned
+
+
+@admin.register(TimeclockKioskIP)
+class TimeclockKioskIPAdmin(admin.ModelAdmin):
+    form = TimeclockKioskIPAdminForm
+    list_display = ("ip_address", "label", "is_active", "created_at")
+    list_filter = ("is_active",)
+    search_fields = ("ip_address", "label")
+    ordering = ("ip_address",)
+
+    def has_add_permission(self, request):
+        if TimeclockKioskIP.objects.count() >= MAX_TIMECLOCK_KIOSKS:
+            return False
+        return super().has_add_permission(request)
 
 
 class TimeEntryAdminForm(forms.ModelForm):

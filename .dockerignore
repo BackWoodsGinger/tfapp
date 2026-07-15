@@ -1,0 +1,25 @@
+.git
+.gitignore
+**/.DS_Store
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+env/
+venv/
+.env
+.env.*
+!.env.example
+
+# Local DB and uploads (use volumes in Docker)
+tfapp/db.sqlite3
+tfapp/media/
+tfapp/staticfiles/
+
+# Frontend build deps; compiled CSS/JS are in tfapp/static/
+tfapp/static/node_modules/
+
+# IDE
+.vscode/
+.idea/

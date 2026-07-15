@@ -1,4 +1,5 @@
 from decimal import Decimal, ROUND_DOWN
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
@@ -14,6 +15,49 @@ from attendance.schedule_utils import (
     scheduled_lunch_datetimes_for_entry,
     work_through_lunch_approved_for_day,
 )
+
+# Raspberry Pi barcode kiosks: up to this many static IPs may be registered.
+MAX_TIMECLOCK_KIOSKS = 5
+
+
+class TimeclockKioskIP(models.Model):
+    """Static IP of a barcode timeclock kiosk; requests from these skip PIN entry."""
+
+    ip_address = models.GenericIPAddressField(
+        protocol="IPv4",
+        unique=True,
+        help_text="Static IPv4 address of the kiosk machine (e.g. 192.168.1.50).",
+    )
+    label = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Optional name, e.g. \"Break room\" or \"Plant floor\".",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Inactive kiosks use the normal login + PIN timeclock.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["ip_address"]
+        verbose_name = "Timeclock kiosk IP"
+        verbose_name_plural = "Timeclock kiosk IPs"
+
+    def clean(self):
+        super().clean()
+        qs = TimeclockKioskIP.objects.all()
+        if self.pk:
+            qs = qs.exclude(pk=self.pk)
+        if qs.count() >= MAX_TIMECLOCK_KIOSKS:
+            raise ValidationError(
+                f"At most {MAX_TIMECLOCK_KIOSKS} kiosk IPs can be configured."
+            )
+
+    def __str__(self):
+        if self.label:
+            return f"{self.label} ({self.ip_address})"
+        return self.ip_address
 
 
 class TimeEntry(models.Model):
