@@ -1,11 +1,12 @@
 from django import forms
+from django.conf import settings
 from django.contrib import admin, messages
 from django.db import transaction
 
 from attendance.models import CustomUser, revert_tardy_occurrences_for_adjust_punch
 from attendance.payroll_utils import week_ending_for_date, is_payroll_week_finalized
 
-from .models import MAX_TIMECLOCK_KIOSKS, TimeclockKioskIP, TimeEntry
+from .models import MAX_TIMECLOCK_KIOSKS, TimeclockKioskIP, TimeclockKioskToken, TimeEntry
 from .tardy_sync import sync_tardy_occurrences_for_time_entry
 
 
@@ -37,6 +38,60 @@ class TimeclockKioskIPAdmin(admin.ModelAdmin):
         if TimeclockKioskIP.objects.count() >= MAX_TIMECLOCK_KIOSKS:
             return False
         return super().has_add_permission(request)
+
+
+class TimeclockKioskTokenAdminForm(forms.ModelForm):
+    class Meta:
+        model = TimeclockKioskToken
+        fields = ("label", "is_active")
+
+    def clean(self):
+        cleaned = super().clean()
+        if self.instance.pk is None:
+            if TimeclockKioskToken.objects.count() >= MAX_TIMECLOCK_KIOSKS:
+                raise forms.ValidationError(
+                    f"At most {MAX_TIMECLOCK_KIOSKS} kiosk tokens can be configured."
+                )
+        return cleaned
+
+
+@admin.register(TimeclockKioskToken)
+class TimeclockKioskTokenAdmin(admin.ModelAdmin):
+    form = TimeclockKioskTokenAdminForm
+    list_display = ("label", "token", "is_active", "kiosk_url_hint", "created_at")
+    list_filter = ("is_active",)
+    search_fields = ("label", "token")
+    readonly_fields = ("token", "created_at", "kiosk_url_hint")
+    ordering = ("-created_at",)
+    actions = ("regenerate_tokens",)
+
+    @admin.display(description="Kiosk URL")
+    def kiosk_url_hint(self, obj):
+        if not obj or not obj.token:
+            return ""
+        base = "https://tfapp.freedomwoods.online"
+        for o in getattr(settings, "CSRF_TRUSTED_ORIGINS", []) or []:
+            if o.startswith("https://"):
+                base = o.rstrip("/")
+                break
+        return f"{base}/timeclock/?kiosk={obj.token}"
+
+    def has_add_permission(self, request):
+        if TimeclockKioskToken.objects.count() >= MAX_TIMECLOCK_KIOSKS:
+            return False
+        return super().has_add_permission(request)
+
+    @admin.action(description="Regenerate selected kiosk tokens")
+    def regenerate_tokens(self, request, queryset):
+        n = 0
+        for obj in queryset:
+            obj.regenerate_token()
+            n += 1
+        self.message_user(
+            request,
+            f"Regenerated {n} token(s). Update each Pi homepage URL.",
+            level=messages.WARNING,
+        )
 
 
 class TimeEntryAdminForm(forms.ModelForm):

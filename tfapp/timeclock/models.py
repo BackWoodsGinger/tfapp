@@ -1,4 +1,5 @@
 from decimal import Decimal, ROUND_DOWN
+import secrets
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.conf import settings
@@ -16,8 +17,12 @@ from attendance.schedule_utils import (
     work_through_lunch_approved_for_day,
 )
 
-# Raspberry Pi barcode kiosks: up to this many static IPs may be registered.
+# Raspberry Pi barcode kiosks: up to this many IPs and this many tokens.
 MAX_TIMECLOCK_KIOSKS = 5
+
+
+def _generate_kiosk_token() -> str:
+    return secrets.token_urlsafe(24)
 
 
 class TimeclockKioskIP(models.Model):
@@ -58,6 +63,56 @@ class TimeclockKioskIP(models.Model):
         if self.label:
             return f"{self.label} ({self.ip_address})"
         return self.ip_address
+
+
+class TimeclockKioskToken(models.Model):
+    """
+    Secret token for remote/Cloudflare kiosks (badge scan, no PIN).
+
+    Pi bookmarks /timeclock/?kiosk=<token>; the app sets a cookie and redirects.
+    """
+
+    token = models.CharField(
+        max_length=64,
+        unique=True,
+        default=_generate_kiosk_token,
+        editable=False,
+        help_text="Secret value for ?kiosk= on the timeclock URL.",
+    )
+    label = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Optional name, e.g. \"Work plant Pi\".",
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Inactive tokens no longer enable kiosk mode.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Timeclock kiosk token"
+        verbose_name_plural = "Timeclock kiosk tokens"
+
+    def clean(self):
+        super().clean()
+        qs = TimeclockKioskToken.objects.all()
+        if self.pk:
+            qs = qs.exclude(pk=self.pk)
+        if qs.count() >= MAX_TIMECLOCK_KIOSKS:
+            raise ValidationError(
+                f"At most {MAX_TIMECLOCK_KIOSKS} kiosk tokens can be configured."
+            )
+
+    def regenerate_token(self):
+        self.token = _generate_kiosk_token()
+        self.save(update_fields=["token"])
+
+    def __str__(self):
+        if self.label:
+            return self.label
+        return f"Kiosk token {self.token[:8]}…"
 
 
 class TimeEntry(models.Model):

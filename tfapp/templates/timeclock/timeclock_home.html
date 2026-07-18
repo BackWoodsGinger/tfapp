@@ -72,6 +72,7 @@
           {% if show_client_ip %}
           <p class="text-muted small text-center mb-3">
             Client IP (staff): <code>{{ client_ip|default:"unknown" }}</code>
+            · kiosk auth: <code>{{ kiosk_auth_method|default:"off" }}</code>
             {% if is_kiosk %}· kiosk mode active{% else %}· standard mode{% endif %}
           </p>
           {% endif %}

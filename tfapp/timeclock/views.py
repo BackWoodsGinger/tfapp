@@ -3,7 +3,13 @@ from django.contrib import messages
 from django.db import transaction, IntegrityError
 from .models import TimeEntry
 from .forms import TimeEntryForm
-from .kiosk import get_client_ip, is_timeclock_kiosk
+from .kiosk import (
+    get_client_ip,
+    is_timeclock_kiosk,
+    kiosk_auth_method,
+    kiosk_token_from_query,
+    set_kiosk_cookie,
+)
 from attendance.models import CustomUser, RoleChoices
 from attendance.payroll_utils import week_ending_for_date, is_payroll_week_finalized
 from .tardy_sync import sync_tardy_occurrences_for_time_entry
@@ -47,7 +53,7 @@ def _is_valid_clock_in_approver(u: CustomUser) -> bool:
 def _resolve_timeclock_user(request, login, pin, *, is_kiosk: bool):
     """
     Resolve employee for a punch.
-    Kiosk (registered IP): login only (barcode). All others: login + PIN.
+    Kiosk (registered IP or token): login only (barcode). All others: login + PIN.
     Returns (user, error_message). error_message is set when resolution fails.
     """
     login = (login or "").strip()
@@ -106,6 +112,22 @@ def check_clock_in(request):
 
 def timeclock_home(request):
     clock_in_approvers = _clock_in_approver_queryset()
+
+    # Activate remote kiosk via ?kiosk=<token> → set cookie → clean URL.
+    if request.method == "GET" and "kiosk" in request.GET:
+        raw = (request.GET.get("kiosk") or "").strip()
+        valid = kiosk_token_from_query(request)
+        if valid:
+            response = redirect("timeclock:timeclock_home")
+            set_kiosk_cookie(response, valid, request)
+            return response
+        if raw:
+            messages.error(
+                request,
+                "Invalid or inactive kiosk token. Using the standard timeclock.",
+            )
+            return redirect("timeclock:timeclock_home")
+
     is_kiosk = is_timeclock_kiosk(request)
 
     if request.method == "POST":
@@ -218,6 +240,7 @@ def timeclock_home(request):
             "is_kiosk": is_kiosk,
             "client_ip": get_client_ip(request) if show_client_ip else None,
             "show_client_ip": show_client_ip,
+            "kiosk_auth_method": kiosk_auth_method(request) if show_client_ip else None,
         },
     )
 
