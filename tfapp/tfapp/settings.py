@@ -31,7 +31,7 @@ ALLOWED_HOSTS = [
     h.strip()
     for h in os.environ.get(
         "DJANGO_ALLOWED_HOSTS",
-        "localhost,tfapp.freedomwoods.online,127.0.0.1",
+        "localhost,tfapp.freedomwoods.online,127.0.0.1,192.168.1.192",
     ).split(",")
     if h.strip()
 ]
@@ -40,7 +40,7 @@ CSRF_TRUSTED_ORIGINS = [
     o.strip()
     for o in os.environ.get(
         "DJANGO_CSRF_TRUSTED_ORIGINS",
-        "https://tfapp.freedomwoods.online",
+        "https://tfapp.freedomwoods.online,http://192.168.1.192:8000",
     ).split(",")
     if o.strip()
 ]
