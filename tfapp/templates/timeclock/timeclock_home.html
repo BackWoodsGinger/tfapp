@@ -90,7 +90,7 @@
             {% csrf_token %}
             {% if is_kiosk %}
             <div class="text-center mb-4">
-              <p class="fs-3 mb-2 text-dark">Scan your badge, then select a punch</p>
+              <p class="fs-3 mb-2 text-light">Scan your badge, then select a punch</p>
               <p id="kiosk-scan-status" class="kiosk-scan-status text-secondary mb-0">Waiting for barcode scan…</p>
               <input type="text" id="login" name="login" maxlength="4" class="kiosk-login-input"
                 autocomplete="off" inputmode="numeric" pattern="\d*" required autofocus>
