@@ -19,7 +19,7 @@ def _cell_style(base, *, bold: bool = False) -> ParagraphStyle:
         fontName="Helvetica-Bold" if bold else "Helvetica",
         fontSize=9,
         leading=11,
-        wordWrap="CJK",
+        splitLongWords=False,
     )
 
 
@@ -103,7 +103,7 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
 
     story.append(Paragraph("Holiday Pay Manual Test Plan", title_style))
     story.append(Paragraph("Independence Day 2026 — Payroll week ending July 4", body))
-    story.append(Paragraph("Holiday week plans · CSV upload · Close payroll", body))
+    story.append(Paragraph("Holiday week plans · CSV upload · Holiday pay review at close", body))
     story.append(Spacer(1, 0.15 * inch))
 
     story.append(Paragraph("Overview", h2))
@@ -118,6 +118,15 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
             body,
         )
     )
+    story.append(
+        Paragraph(
+            "The two halves of the system are tested separately. The <b>holiday week plan</b> sets the "
+            "work hours attendance is measured against, and it applies automatically. <b>Holiday pay</b> "
+            "is not automatic: the Close Payroll modal lists a suggestion per employee, and payroll "
+            "approves or denies each one. Nothing is created or removed until you finalize.",
+            body,
+        )
+    )
 
     story.append(Paragraph("Company schedule rules (this holiday)", h2))
     for item in [
@@ -129,17 +138,23 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
         "Actual pay amounts come from each employee's schedule, not the number in the grid.",
         "Bookends use each employee's <b>effective</b> work days during the holiday week "
         "(plan intersected with their real schedule).",
+        "Setting 5-day Thursday work to 4 hr is what stops a 4-hour Thursday from being recorded "
+        "as an early departure against the normal 9-hour day.",
     ]:
         story.append(Paragraph(f"• {item}", bullet))
 
     story.append(Paragraph("Policy Under Test", h2))
     for item in [
-        "Part-time employees are not eligible for holiday pay.",
-        "Full-time employees in their first 90 days (hire or service date) are not eligible.",
         "Payroll close is blocked until the Independence Day 2026 holiday week plan is complete.",
-        "No complete plan for the holiday week means no holiday pay is created.",
-        "Full-time employees must fully cover bookend shifts (work or planned leave).",
-        "Any unplanned absence (full or partial) on a bookend shift removes holiday pay.",
+        "With no complete plan, the week produces no holiday pay suggestions at all.",
+        "Part-time employees are suggested for denial and labelled Part-time.",
+        "Full-time employees in their first 90 days are suggested for denial and labelled Under 90 days.",
+        "Full-time employees must fully cover bookend shifts (work or planned leave); an unplanned "
+        "absence (full or partial) on a bookend flags the row as a Miss and defaults it to Deny.",
+        "Holiday pay appears only for rows approved in the modal, and a denied row also removes any "
+        "holiday pay already recorded for that day.",
+        "Payroll can override any default in either direction — approving a flagged row or denying "
+        "an otherwise eligible one.",
         "PTO applies only to missed bookend hours, not to the holiday itself.",
     ]:
         story.append(Paragraph(f"• {item}", bullet))
@@ -156,7 +171,7 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
                 ["Jul 6", "Mon", "Trailing bookend", "Trailing bookend"],
                 ["Jul 7", "Tue", "Recommended payroll close", "Same"],
             ],
-            [0.95 * inch, 0.6 * inch, 2.2 * inch, 2.25 * inch],
+            [1.05 * inch, 0.75 * inch, 2.5 * inch, 2.5 * inch],
             styles,
         )
     )
@@ -182,7 +197,7 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
                 ["FT-NEW", "Full-time", "Mon–Thu, 10 hr", "Hire &lt; 90 days on Jul 2 → no holiday"],
                 ["PT", "Part-time", "Mon–Thu", "Never eligible"],
             ],
-            [0.7 * inch, 0.8 * inch, 1.35 * inch, 3.15 * inch],
+            [0.9 * inch, 0.85 * inch, 1.45 * inch, 3.6 * inch],
             styles,
         )
     )
@@ -199,8 +214,9 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
         Paragraph(
             "Payroll → <b>Holiday week plans</b> → Independence Day (2026). "
             "Set work and holiday-pay columns for the 4-day and 5-day templates. "
-            "Use any value &gt; 0 in Holiday pay to mark a paid day; amounts are calculated from "
-            "each employee's schedule at close.",
+            "<b>Work</b> is what attendance is measured against. <b>Holiday pay</b> only marks which "
+            "dates produce a suggestion (any value &gt; 0); the amount offered at close comes from "
+            "each employee's own schedule.",
             body,
         )
     )
@@ -212,7 +228,7 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
                 ["Fri Jul 3", "0", "0", "0", "&gt; 0 (marks paid)"],
                 ["Other days", "Per normal template", "0 unless paid", "Per normal template", "0 unless paid"],
             ],
-            [0.85 * inch, 0.95 * inch, 1.15 * inch, 0.95 * inch, 1.15 * inch],
+            [1.0 * inch, 1.15 * inch, 1.35 * inch, 1.15 * inch, 1.35 * inch],
             styles,
         )
     )
@@ -268,30 +284,69 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
         )
     )
 
-    story.append(Paragraph("Step 3 — Close Payroll (Tue Jul 7)", h2))
+    story.append(Paragraph("Step 3 — Review Holiday Pay and Close (Tue Jul 7)", h2))
     for item in [
         "Open Payroll → Week Ending 2026-07-04.",
         "Confirm no holiday-plan warning banner (plan must be complete).",
         "Resolve override / lunch review items in the Close Payroll modal.",
+        "Scroll to <b>Holiday pay review</b> and check the suggested defaults against the table below "
+        "before changing anything — the defaults themselves are part of the test.",
+        "Leave FT-4DAY, FT-5DAY, and FT-PTO on <b>Approve</b>; confirm FT-LEAD, FT-TRAIL, FT-NEW, and "
+        "PT are already on <b>Deny</b>.",
+        "Note the warning on FT rows that the trailing bookend Mon Jul 6 falls in the next payroll week.",
+        "Try the <b>Approve all eligible</b> and <b>Deny all with bookend miss</b> buttons, then reset "
+        "the rows to the decisions above.",
         "Close Payroll and save the exported CSV.",
-        "Verify Holiday - Paid occurrences: correct <b>date</b> and <b>hours</b> per employee schedule.",
+        "Verify Holiday - Paid occurrences: correct <b>date</b> and <b>hours</b> per employee schedule, "
+        "and that denied employees have none.",
     ]:
         story.append(Paragraph(f"• {item}", bullet))
 
-    story.append(Paragraph("Expected Results", h2))
+    story.append(Paragraph("Expected Suggestions Before You Decide", h2))
+    story.append(
+        _table(
+            [
+                ["Employee", "Paid date", "Hours offered", "Bookends", "Eligibility", "Default"],
+                ["FT-4DAY", "Thu Jul 2", "~10 hr", "Both OK", "Eligible", "Approve"],
+                ["FT-5DAY", "Fri Jul 3", "~9 hr", "Both OK", "Eligible", "Approve"],
+                ["FT-LEAD", "Thu Jul 2", "~10 hr", "Wed Jul 1 Miss", "Eligible", "Deny"],
+                ["FT-TRAIL", "Thu Jul 2", "~10 hr", "Mon Jul 6 Miss", "Eligible", "Deny"],
+                ["FT-PTO", "Thu Jul 2", "~10 hr", "Both OK (PTO counts)", "Eligible", "Approve"],
+                ["FT-NEW", "Thu Jul 2", "~10 hr", "Both OK", "Under 90 days", "Deny"],
+                ["PT", "Thu Jul 2", "Per schedule", "Both OK", "Part-time", "Deny"],
+            ],
+            [0.9 * inch, 0.85 * inch, 1.0 * inch, 1.6 * inch, 1.05 * inch, 0.85 * inch],
+            styles,
+        )
+    )
+    story.append(Spacer(1, 0.1 * inch))
+    story.append(
+        Paragraph(
+            "If a row is missing, has the wrong paid date, or offers hours that do not match the "
+            "employee's shift length, stop and fix the holiday week plan or the schedule before closing.",
+            body,
+        )
+    )
+
+    story.append(Paragraph("Expected Results After Close", h2))
     story.append(
         _table(
             [
                 ["Employee", "Holiday pay", "Worked in week", "Notes"],
                 ["FT-4DAY", "~10 hr on Jul 2", "Mon–Wed only", "From schedule; perfect bookends"],
-                ["FT-5DAY", "~9 hr on Jul 3", "Mon–Wed + 4 hr Thu Jul 2", "Thu worked; Fri paid holiday"],
-                ["FT-LEAD", "0", "As entered", "Leading unplanned miss on Wed Jul 1"],
-                ["FT-TRAIL", "0", "As entered", "Trailing unplanned miss on Mon Jul 6"],
+                [
+                    "FT-5DAY",
+                    "~9 hr on Jul 3",
+                    "Mon–Wed + 4 hr Thu Jul 2",
+                    "Thu worked short by plan — confirm <b>no Exchange variance</b> on Jul 2",
+                ],
+                ["FT-LEAD", "0", "As entered", "Denied for leading unplanned miss on Wed Jul 1"],
+                ["FT-TRAIL", "0", "As entered", "Denied for trailing unplanned miss on Mon Jul 6"],
                 ["FT-PTO", "~10 hr on Jul 2", "Mon–Tue + PTO Wed", "Planned bookend OK"],
-                ["FT-NEW", "0", "As entered", "Under 90 days on holiday date"],
-                ["PT", "0", "Per schedule", "Part-time ineligible"],
+                ["FT-NEW", "0", "As entered", "Denied: under 90 days on holiday date"],
+                ["PT", "0", "Per schedule", "Denied: part-time"],
             ],
-            [0.75 * inch, 1.15 * inch, 1.35 * inch, 2.75 * inch],
+            [0.9 * inch, 1.15 * inch, 1.45 * inch, 3.3 * inch],
             styles,
         )
     )
@@ -305,8 +360,12 @@ def write_holiday_test_plan_pdf(output_path: Path) -> None:
                 ["Before Jul 1", "Create test employees; approve FT-PTO time-off for Wed Jul 1"],
                 ["Mon Jul 6", "Upload week ending 2026-07-11 CSV (Mon bookend punches)"],
                 ["Mon–Tue Jun 29–Jul 1", "Upload week ending 2026-07-04 CSV"],
-                ["Tue Jul 7", "Re-upload Jul 4 CSV if needed; Close Payroll for 2026-07-04"],
-                ["After close", "Compare Holiday - Paid dates/hours to Expected Results"],
+                [
+                    "Tue Jul 7",
+                    "Re-upload Jul 4 CSV if needed; review the Holiday pay table, then Close Payroll "
+                    "for 2026-07-04",
+                ],
+                ["After close", "Compare Holiday - Paid dates/hours to Expected Results After Close"],
             ],
             [1.25 * inch, USABLE_WIDTH - 1.25 * inch],
             styles,

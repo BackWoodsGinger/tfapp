@@ -43,7 +43,6 @@ from .models import (
     AdjustPunchField,
     revert_tardy_occurrences_for_adjust_punch,
     apply_past_due_occurrences,
-    ensure_holiday_occurrences_for_range,
     OccurrenceSubtype,
     user_eligible_for_perfect_attendance_new_hire_month,
     ABSENCE_REPORT_FMLA_SUBTYPE,
@@ -62,6 +61,8 @@ from .payroll_utils import (
 )
 from .services import holiday_plan_service
 from .services.holiday_plan_service import (
+    apply_approved_holiday_pay,
+    build_holiday_pay_suggestions,
     effective_scheduled_hours_for_range,
     missing_holiday_plans_for_payroll_week,
 )
@@ -1346,6 +1347,11 @@ def payroll_view(request):
         if request.user.is_staff
         else []
     )
+    holiday_pay_review_rows = (
+        build_holiday_pay_suggestions(start_of_week, end_of_week)
+        if request.user.is_staff
+        else []
+    )
 
     return render(request, "attendance/payroll.html", {
         "form": form,
@@ -1361,6 +1367,7 @@ def payroll_view(request):
         "pending_override_entries": pending_override_entries,
         "payroll_close_review_groups": payroll_close_review_groups,
         "missing_holiday_plans": missing_holiday_plans,
+        "holiday_pay_review_rows": holiday_pay_review_rows,
         "user_service_dates_json": json.dumps(user_service_dates),
         "today_iso": today.isoformat(),
     })
@@ -1916,6 +1923,47 @@ def _build_payroll_close_review_groups(
     return groups
 
 
+def _parse_holiday_pay_decisions(request, suggestions) -> tuple[list[dict], list[str]]:
+    """
+    Read the approve/deny choice and hours for each holiday pay row in the Close Payroll POST.
+    Rows the admin left untouched fall back to the suggested default.
+    """
+    decisions = []
+    errors = []
+    for row in suggestions:
+        choice = (request.POST.get(f"holiday_pay_decision_{row['key']}") or "").strip().lower()
+        if choice not in ("approve", "deny"):
+            choice = "approve" if row["default_approve"] else "deny"
+
+        hours = row["suggested_hours"]
+        hours_raw = (request.POST.get(f"holiday_pay_hours_{row['key']}") or "").strip()
+        if choice == "approve" and hours_raw:
+            try:
+                hours = round(float(hours_raw), 2)
+            except ValueError:
+                errors.append(
+                    f"Invalid holiday pay hours for {row['user'].payroll_display_name()} "
+                    f"on {row['date']:%m/%d/%Y}. Use a number such as 9 or 9.5."
+                )
+                continue
+        if choice == "approve" and hours <= 0:
+            errors.append(
+                f"Holiday pay hours must be greater than zero for {row['user'].payroll_display_name()} "
+                f"on {row['date']:%m/%d/%Y}, or deny the row instead."
+            )
+            continue
+
+        decisions.append(
+            {
+                "user_id": row["user_id"],
+                "date": row["date"],
+                "approve": choice == "approve",
+                "hours": hours,
+            }
+        )
+    return decisions, errors
+
+
 def _apply_close_payroll_time_adjustments(request, week_start, week_ending) -> bool:
     """Apply adjust_clock_in_{id} etc. from Close Payroll POST. Returns False on validation error."""
     for entry in TimeEntry.objects.filter(date__range=[week_start, week_ending]).select_related("user"):
@@ -2128,8 +2176,14 @@ def close_payroll(request):
         )
         return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
 
-    # Ensure holiday occurrences exist for this payroll week
-    ensure_holiday_occurrences_for_range(week_start, week_ending)
+    holiday_decisions, holiday_errors = _parse_holiday_pay_decisions(
+        request, build_holiday_pay_suggestions(week_start, week_ending)
+    )
+    if holiday_errors:
+        for error in holiday_errors:
+            messages.error(request, error)
+        return redirect(f"{reverse('attendance:payroll')}?week_ending={week_ending.isoformat()}")
+    apply_approved_holiday_pay(holiday_decisions)
 
     incomplete_entries = [
         e

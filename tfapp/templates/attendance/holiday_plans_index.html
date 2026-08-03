@@ -11,9 +11,11 @@
             <a class="btn btn-outline-secondary btn-sm" href="{% url 'attendance:payroll' %}">Back to Payroll</a>
           </div>
           <p class="text-muted small">
-            Configure expected work during each company holiday week for 4-day and 5-day templates.
-            Holiday pay amounts are calculated from each employee's schedule (not the grid value).
-            Full-time employees in their first 90 days are not eligible for holiday pay.
+            Configure expected work during each company holiday week for 4-day and 5-day templates. These
+            expectations are what attendance and variance are measured against during the holiday week.
+            Marking a date as a paid holiday only creates a suggestion — payroll approves or denies holiday
+            pay per employee in the Close Payroll modal, and approved amounts come from each employee's own
+            schedule (not the grid value). Full-time employees in their first 90 days are not eligible.
           </p>
 
           <form method="get" class="d-flex flex-wrap align-items-center gap-2 mb-4">

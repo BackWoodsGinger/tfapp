@@ -88,7 +88,11 @@
           {% if missing_holiday_plans %}
           <div class="alert alert-warning">
             <strong>Holiday week plan required</strong>
-            <p class="mb-2 small">This payroll week includes a company holiday that needs a complete plan before you can close payroll:</p>
+            <p class="mb-2 small">
+              This payroll week includes a company holiday that needs a complete plan before you can close payroll.
+              The plan sets the work hours attendance is measured against; holiday pay itself is approved per
+              employee in the Close Payroll modal.
+            </p>
             <ul class="mb-2 small">
               {% for row in missing_holiday_plans %}
               <li>
@@ -247,6 +251,92 @@
                     {% else %}
                     <p class="small text-muted mb-0">No clock-in overrides or lunch import reviews are pending for this week. You can still finalize.</p>
                     {% endif %}
+
+                    {% if holiday_pay_review_rows %}
+                    <div class="card border mt-3 mb-0 shadow-sm" id="holidayPayReview">
+                      <div class="card-header py-2 bg-body-secondary border-bottom">
+                        <span class="fw-semibold text-body-emphasis">Holiday pay review</span>
+                      </div>
+                      <div class="card-body p-2 pt-2">
+                        <p class="small text-muted mb-2">
+                          Holiday pay is recorded only for the rows you approve here. Defaults follow the holiday
+                          week plan, employee eligibility, and bookend attendance. Denying a row also removes any
+                          holiday pay already recorded for that day.
+                        </p>
+                        <div class="d-flex flex-wrap gap-2 mb-2">
+                          <button type="button" class="btn btn-outline-secondary btn-sm" data-holiday-bulk="approve-eligible">Approve all eligible</button>
+                          <button type="button" class="btn btn-outline-secondary btn-sm" data-holiday-bulk="deny-bookend-miss">Deny all with bookend miss</button>
+                        </div>
+                        <div class="table-responsive">
+                          <table class="table table-sm table-bordered align-middle mb-0 bg-white payroll-close-review-table">
+                            <thead class="table-light">
+                              <tr>
+                                <th>Employee</th>
+                                <th>Schedule</th>
+                                <th>Paid date</th>
+                                <th style="min-width: 6rem;">Hours</th>
+                                <th>Leading bookend</th>
+                                <th>Trailing bookend</th>
+                                <th>Eligibility</th>
+                                <th style="min-width: 11rem;">Decision</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {% for row in holiday_pay_review_rows %}
+                              <tr data-holiday-row
+                                  data-holiday-eligible="{{ row.eligible|yesno:'1,0' }}"
+                                  data-holiday-bookend-miss="{{ row.bookend_miss|yesno:'1,0' }}">
+                                <td class="small text-dark">{{ row.user.payroll_display_name }}</td>
+                                <td class="small">{{ row.template_label }}</td>
+                                <td class="small text-nowrap">{{ row.date|date:"m/d/Y" }}<div class="text-muted">{{ row.holiday_name }}</div></td>
+                                <td>
+                                  <input type="number" step="0.25" min="0" class="form-control form-control-sm"
+                                         name="holiday_pay_hours_{{ row.key }}" value="{{ row.suggested_hours }}">
+                                </td>
+                                <td class="small text-nowrap">
+                                  {% if row.leading_date %}
+                                    {{ row.leading_date|date:"m/d" }}
+                                    {% if row.leading_status == "eligible" %}<span class="badge bg-success">OK</span>
+                                    {% elif row.leading_status == "pending" %}<span class="badge bg-secondary">Pending</span>
+                                    {% else %}<span class="badge bg-danger">Miss</span>{% endif %}
+                                  {% else %}
+                                    <span class="text-muted">None</span>
+                                  {% endif %}
+                                </td>
+                                <td class="small text-nowrap">
+                                  {% if row.trailing_date %}
+                                    {{ row.trailing_date|date:"m/d" }}
+                                    {% if row.trailing_status == "eligible" %}<span class="badge bg-success">OK</span>
+                                    {% elif row.trailing_status == "pending" %}<span class="badge bg-secondary">Pending</span>
+                                    {% else %}<span class="badge bg-danger">Miss</span>{% endif %}
+                                    {% if row.trailing_outside_week %}<div class="text-warning-emphasis">Next payroll week — verify attendance before approving.</div>{% endif %}
+                                  {% else %}
+                                    <span class="text-muted">None</span>
+                                  {% endif %}
+                                </td>
+                                <td class="small">
+                                  {% if row.eligible %}
+                                    <span class="text-success">Eligible</span>
+                                  {% else %}
+                                    <span class="text-danger">{{ row.ineligible_reasons|join:", " }}</span>
+                                  {% endif %}
+                                </td>
+                                <td class="small text-nowrap">
+                                  <label class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" name="holiday_pay_decision_{{ row.key }}" value="approve" {% if row.default_approve %}checked{% endif %}> Approve
+                                  </label>
+                                  <label class="form-check form-check-inline">
+                                    <input class="form-check-input" type="radio" name="holiday_pay_decision_{{ row.key }}" value="deny" {% if not row.default_approve %}checked{% endif %}> Deny
+                                  </label>
+                                </td>
+                              </tr>
+                              {% endfor %}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                    {% endif %}
                     <p class="small text-muted mt-3 mb-0">Finalizes the week, applies PTO accrual (0–2 yr), tardy absences, variance PTO, then exports CSV.</p>
                   </div>
                   <div class="modal-footer">
@@ -304,6 +394,29 @@
       </div>
 
       <script>
+        (function () {
+          var review = document.getElementById("holidayPayReview");
+          if (!review) return;
+
+          function setDecision(row, value) {
+            var input = row.querySelector('input[type="radio"][value="' + value + '"]');
+            if (input) input.checked = true;
+          }
+
+          review.addEventListener("click", function (event) {
+            var button = event.target.closest("[data-holiday-bulk]");
+            if (!button) return;
+            var action = button.getAttribute("data-holiday-bulk");
+            review.querySelectorAll("[data-holiday-row]").forEach(function (row) {
+              if (action === "approve-eligible" && row.dataset.holidayEligible === "1") {
+                setDecision(row, "approve");
+              } else if (action === "deny-bookend-miss" && row.dataset.holidayBookendMiss === "1") {
+                setDecision(row, "deny");
+              }
+            });
+          });
+        })();
+
         (function () {
           function esc(s) {
             return String(s == null ? "" : s)
