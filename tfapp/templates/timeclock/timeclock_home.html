@@ -21,6 +21,9 @@
   #clockInOverrideModal .modal-content .form-label {
     color: #212529 !important;
   }
+  #clockInOverrideModal .modal-content .modal-body p#override-error {
+    color: #b02a37 !important;
+  }
 </style>
 <style>
   html, body {
@@ -58,6 +61,32 @@
     height: 1px;
     opacity: 0;
   }
+  /* 7" DSI panel is 800x480: clock, prompt, and punch buttons must fit without scrolling. */
+  #clock {
+    font-size: 4.5rem;
+  }
+  .btn-xl {
+    padding: 1rem 0.75rem;
+    font-size: 1.75rem;
+  }
+  .timeclock-actions .btn {
+    min-height: 3.75rem;
+  }
+  #kioskMessageModal .modal-content,
+  #kioskMessageModal .modal-content .modal-body,
+  #kioskMessageModal .modal-content .modal-body p {
+    color: #212529 !important;
+  }
+  #kioskMessageModal .kiosk-msg-success {
+    color: #146c43 !important;
+  }
+  #kioskMessageModal .kiosk-msg-error,
+  #kioskMessageModal .kiosk-msg-danger {
+    color: #b02a37 !important;
+  }
+  #kioskMessageModal .kiosk-msg-warning {
+    color: #8a6100 !important;
+  }
   {% endif %}
 </style>
 
@@ -67,7 +96,7 @@
       <div class="card border-0 rounded-0 h-100">
         <div class="card-body d-flex flex-column justify-content-center align-items-center">
 
-          <h1 id="clock" class="display-1 fw-bold text-center mt-5 mb-5"></h1>
+          <h1 id="clock" class="display-1 fw-bold text-center {% if is_kiosk %}mt-3 mb-4{% else %}mt-5 mb-5{% endif %}"></h1>
 
           {% if show_client_ip %}
           <p class="text-muted small text-center mb-3">
@@ -77,7 +106,8 @@
           </p>
           {% endif %}
 
-          {% if messages %}
+          {# Kiosk messages render in #kioskMessageModal instead, so punch buttons never shift off a 7" screen. #}
+          {% if messages and not is_kiosk %}
           <div aria-live="polite" role="alert" class="mb-4 w-100 text-center">
             {% for message in messages %}
             <div class="alert alert-{{ message.tags }} fs-4 w-100">
@@ -135,7 +165,7 @@
             </div>
             {% endif %}
 
-            <div class="timeclock-actions mt-5">
+            <div class="timeclock-actions {% if is_kiosk %}mt-4{% else %}mt-5{% endif %}">
               <button type="button" id="btn-clock-in" class="btn btn-success btn-xl">Clock In</button>
               <button type="submit" name="action" value="lunch_out" class="btn btn-warning btn-xl">Lunch Out</button>
               <button type="submit" name="action" value="lunch_in" class="btn btn-info btn-xl">Lunch In</button>
@@ -168,6 +198,7 @@
                         <option value="{{ a.pk }}">{{ a.payroll_display_name }}</option>
                         {% endfor %}
                       </select>
+                      <p id="override-error" class="fw-semibold mt-2 mb-0 d-none">Select who authorized this clock-in.</p>
                       <button type="button" class="btn btn-success mt-3 w-100" id="override-record-btn">Record clock in</button>
                     </div>
                   </div>
@@ -181,6 +212,26 @@
     </div>
   </div>
 </div>
+
+{% if is_kiosk %}
+{# Outside the form: an overlay keeps the punch buttons in place on the fixed kiosk screen. #}
+<div class="modal fade" id="kioskMessageModal" tabindex="-1" aria-labelledby="kioskMessageModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content bg-white text-dark">
+      <div class="modal-body text-center p-4">
+        <h2 class="visually-hidden" id="kioskMessageModalLabel">Timeclock message</h2>
+        <div id="kiosk-message-body" aria-live="polite" role="alert">
+          {% for message in messages %}
+          <p class="fs-4 mb-2 kiosk-msg-{{ message.tags|default:'info' }}">{{ message }}</p>
+          {% endfor %}
+        </div>
+        <button type="button" class="btn btn-primary btn-lg w-100 py-3 mt-3" id="kiosk-message-clear"
+          data-bs-dismiss="modal">OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <script>
   function updateClock() {
@@ -201,6 +252,14 @@
     const loginInput = document.getElementById('login');
     const statusEl = document.getElementById('kiosk-scan-status');
     const form = document.getElementById('timeclock-form');
+    const msgModalEl = document.getElementById('kioskMessageModal');
+    const msgBody = document.getElementById('kiosk-message-body');
+    // Auto-clear so an unattended message never blocks the next employee's punch.
+    const MESSAGE_TIMEOUT_MS = 10000;
+    let msgModal = null;
+    let messageOpen = false;
+    let startFreshScan = false;
+    let dismissTimer = null;
 
     function setStatus(text, ready) {
       if (!statusEl) return;
@@ -225,16 +284,93 @@
       }
     }
 
+    // bootstrap.bundle.min.js loads at the end of base.html, so build the modal lazily.
+    function getMessageModal() {
+      if (!msgModalEl || typeof bootstrap === 'undefined') return null;
+      if (!msgModal) {
+        msgModal = new bootstrap.Modal(msgModalEl, { backdrop: 'static', keyboard: false });
+      }
+      return msgModal;
+    }
+
+    function openMessageModal() {
+      const m = getMessageModal();
+      if (!m) {
+        window.alert(msgBody ? msgBody.textContent.trim() : '');
+        return;
+      }
+      m.show();
+    }
+
+    function hideMessageModal() {
+      const m = getMessageModal();
+      if (m) m.hide();
+    }
+
+    function showMessage(text, level) {
+      if (!msgBody) return;
+      const p = document.createElement('p');
+      p.className = 'fs-4 mb-2 kiosk-msg-' + (level || 'info');
+      p.textContent = text;
+      msgBody.innerHTML = '';
+      msgBody.appendChild(p);
+      openMessageModal();
+    }
+
+    if (msgModalEl) {
+      msgModalEl.addEventListener('shown.bs.modal', function () {
+        messageOpen = true;
+        startFreshScan = true;
+        clearTimeout(dismissTimer);
+        dismissTimer = setTimeout(hideMessageModal, MESSAGE_TIMEOUT_MS);
+      });
+      msgModalEl.addEventListener('hidden.bs.modal', function () {
+        messageOpen = false;
+        clearTimeout(dismissTimer);
+        if (loginInput) loginInput.focus();
+      });
+    }
+
+    // While the modal holds focus, route scanner digits into the badge field so a scan is
+    // never swallowed: the first digit clears the message and starts a new entry.
+    document.addEventListener('keydown', function (e) {
+      if (!messageOpen || !loginInput) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        return;
+      }
+      if (!/^[0-9]$/.test(e.key)) return;
+      e.preventDefault();
+      if (startFreshScan) {
+        loginInput.value = '';
+        startFreshScan = false;
+      }
+      loginInput.value = normalizeDigits(loginInput.value + e.key);
+      syncFromScan();
+      hideMessageModal();
+    }, true);
+
+    window.kioskNotify = showMessage;
+
     if (loginInput) {
       loginInput.focus();
       loginInput.addEventListener('input', syncFromScan);
       // Keep focus on the scan field for keyboard-wedge scanners.
       document.addEventListener('click', function () {
+        if (messageOpen) return;
         if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
         if (document.activeElement && document.activeElement.tagName === 'BUTTON') return;
         loginInput.focus();
       });
     }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      if (msgBody && msgBody.children.length) {
+        openMessageModal();
+      } else if (loginInput) {
+        loginInput.focus();
+      }
+    });
 
     if (form) {
       form.addEventListener('keydown', function (e) {
@@ -247,8 +383,7 @@
         syncFromScan();
         if (!loginInput || loginInput.value.length !== 4) {
           e.preventDefault();
-          alert('Scan your badge before punching.');
-          if (loginInput) loginInput.focus();
+          showMessage('Scan your badge before punching.', 'warning');
         }
       });
     }
@@ -308,6 +443,15 @@ document.addEventListener('DOMContentLoaded', function () {
     return csrfInput ? csrfInput.value : '';
   }
 
+  // Kiosks show messages in an overlay; other visitors keep the native dialog.
+  function notify(text, level) {
+    if (isKiosk && typeof window.kioskNotify === 'function') {
+      window.kioskNotify(text, level || 'error');
+      return;
+    }
+    alert(text);
+  }
+
   function submitClockIn() {
     const existing = form.querySelector('input[name="action"][data-js-clock-in="1"]');
     if (existing) existing.remove();
@@ -351,11 +495,14 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
+  const overrideError = document.getElementById('override-error');
+
   function resetOverrideModal() {
     hideOverrideMessages();
     if (stepWarning) stepWarning.classList.remove('d-none');
     if (stepApprover) stepApprover.classList.add('d-none');
     if (approverSelect) approverSelect.value = '';
+    if (overrideError) overrideError.classList.add('d-none');
   }
 
   if (modalEl) {
@@ -372,9 +519,11 @@ document.addEventListener('DOMContentLoaded', function () {
   if (recordBtn && approverSelect) {
     recordBtn.addEventListener('click', function () {
       if (!approverSelect.value) {
-        alert('Select who authorized this clock-in.');
+        // Shown inside the open override modal to avoid stacking a second overlay.
+        if (overrideError) overrideError.classList.remove('d-none');
         return;
       }
+      if (overrideError) overrideError.classList.add('d-none');
       const m = getModal();
       if (m) m.hide();
       submitClockIn();
@@ -388,11 +537,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const pin = pinEl ? pinEl.value.trim() : '';
     if (isKiosk) {
       if (login.length !== 4) {
-        alert('Scan your badge before clocking in.');
+        notify('Scan your badge before clocking in.', 'warning');
         return;
       }
     } else if (login.length !== 4 || pin.length !== 4) {
-      alert('Enter your 4-digit login and PIN.');
+      notify('Enter your 4-digit login and PIN.', 'warning');
       return;
     }
 
@@ -411,12 +560,12 @@ document.addEventListener('DOMContentLoaded', function () {
         credentials: 'same-origin',
       });
       if (r.status === 401) {
-        alert(isKiosk ? 'Invalid badge / login.' : 'Invalid login or PIN.');
+        notify(isKiosk ? 'Invalid badge / login.' : 'Invalid login or PIN.', 'error');
         return;
       }
       if (!r.ok) {
         const err = await r.json().catch(function () { return {}; });
-        alert(err.error ? 'Unable to verify clock-in. Check your entries.' : 'Unable to verify clock-in. Try again.');
+        notify(err.error ? 'Unable to verify clock-in. Check your entries.' : 'Unable to verify clock-in. Try again.', 'error');
         return;
       }
       const data = await r.json();
@@ -429,7 +578,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const m = getModal();
       if (m) m.show();
     } catch (e) {
-      alert('Could not verify clock-in. Check your connection and try again.');
+      notify('Could not verify clock-in. Check your connection and try again.', 'error');
     }
   });
 });
