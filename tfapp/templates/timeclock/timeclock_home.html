@@ -258,7 +258,6 @@
     const MESSAGE_TIMEOUT_MS = 10000;
     let msgModal = null;
     let messageOpen = false;
-    let startFreshScan = false;
     let dismissTimer = null;
 
     function setStatus(text, ready) {
@@ -293,7 +292,16 @@
       return msgModal;
     }
 
+    function resetScan() {
+      if (!loginInput) return;
+      loginInput.value = '';
+      syncFromScan();
+    }
+
+    // Discard the badge that triggered the message: 401s and client-side warnings do not
+    // reload the page, so a stale 4-digit value would swallow every following scan.
     function openMessageModal() {
+      resetScan();
       const m = getMessageModal();
       if (!m) {
         window.alert(msgBody ? msgBody.textContent.trim() : '');
@@ -320,7 +328,6 @@
     if (msgModalEl) {
       msgModalEl.addEventListener('shown.bs.modal', function () {
         messageOpen = true;
-        startFreshScan = true;
         clearTimeout(dismissTimer);
         dismissTimer = setTimeout(hideMessageModal, MESSAGE_TIMEOUT_MS);
       });
@@ -331,8 +338,8 @@
       });
     }
 
-    // While the modal holds focus, route scanner digits into the badge field so a scan is
-    // never swallowed: the first digit clears the message and starts a new entry.
+    // While the modal holds focus, route scanner digits into the (already cleared) badge
+    // field so a scan arriving during a message is not swallowed.
     document.addEventListener('keydown', function (e) {
       if (!messageOpen || !loginInput) return;
       if (e.key === 'Enter') {
@@ -341,10 +348,6 @@
       }
       if (!/^[0-9]$/.test(e.key)) return;
       e.preventDefault();
-      if (startFreshScan) {
-        loginInput.value = '';
-        startFreshScan = false;
-      }
       loginInput.value = normalizeDigits(loginInput.value + e.key);
       syncFromScan();
       hideMessageModal();
@@ -355,9 +358,10 @@
     if (loginInput) {
       loginInput.focus();
       loginInput.addEventListener('input', syncFromScan);
-      // Keep focus on the scan field for keyboard-wedge scanners.
+      // Keep focus on the scan field for keyboard-wedge scanners, but never pull focus out
+      // of an open modal (it fights Bootstrap's focus trap).
       document.addEventListener('click', function () {
-        if (messageOpen) return;
+        if (document.querySelector('.modal.show')) return;
         if (document.activeElement && document.activeElement.tagName === 'SELECT') return;
         if (document.activeElement && document.activeElement.tagName === 'BUTTON') return;
         loginInput.focus();
