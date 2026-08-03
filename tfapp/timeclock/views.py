@@ -76,6 +76,51 @@ def _resolve_timeclock_user(request, login, pin, *, is_kiosk: bool):
     return user, None
 
 
+def _punch_sequence_error(entry, action):
+    """
+    Message explaining why a punch cannot be recorded, or None when it is allowed.
+
+    Punches must arrive in order (clock in, lunch out, lunch in, clock out) and once per day.
+    `entry` may be None when nothing has been punched yet, so a badge scan cannot register a
+    clock out for a shift that was never started.
+    """
+    clock_in = getattr(entry, "clock_in", None)
+    lunch_out = getattr(entry, "lunch_out", None)
+    lunch_in = getattr(entry, "lunch_in", None)
+    clock_out = getattr(entry, "clock_out", None)
+    already_out = "You are already clocked out for today. See a supervisor to correct your time."
+
+    if action == "clock_in":
+        if clock_in is not None:
+            return "You are already clocked in for today."
+        return None
+    if action == "lunch_out":
+        if lunch_out is not None:
+            return "Lunch out already recorded for today."
+        if clock_in is None:
+            return "You are not clocked in for today. Clock in before recording lunch out."
+        if clock_out is not None:
+            return already_out
+        return None
+    if action == "lunch_in":
+        if lunch_in is not None:
+            return "Lunch in already recorded for today."
+        if clock_in is None:
+            return "You are not clocked in for today. Clock in before recording lunch in."
+        if lunch_out is None:
+            return "Record lunch out before lunch in."
+        if clock_out is not None:
+            return already_out
+        return None
+    if action == "clock_out":
+        if clock_out is not None:
+            return "You are already clocked out for today."
+        if clock_in is None:
+            return "You are not clocked in for today. Clock in before clocking out."
+        return None
+    return "Select a punch type, then try again."
+
+
 def _credential_error_message(code: str, *, is_kiosk: bool) -> str:
     if code == "ambiguous_login":
         return "Multiple employees share this login. Contact a supervisor."
@@ -156,23 +201,16 @@ def timeclock_home(request):
                 entry = TimeEntry.objects.select_for_update().filter(
                     user=user, date=today
                 ).first()
+
+                # Checked before creating the entry so a rejected punch leaves no empty row.
+                sequence_error = _punch_sequence_error(entry, action)
+                if sequence_error:
+                    messages.warning(request, sequence_error)
+                    return redirect("timeclock:timeclock_home")
+
                 if entry is None:
                     entry = TimeEntry(user=user, date=today)
                     entry.save()
-
-                # Guard: prevent duplicate punches for the same action on the same day
-                if action == "clock_in" and entry.clock_in is not None:
-                    messages.warning(request, "You are already clocked in for today.")
-                    return redirect("timeclock:timeclock_home")
-                if action == "lunch_out" and entry.lunch_out is not None:
-                    messages.warning(request, "Lunch out already recorded for today.")
-                    return redirect("timeclock:timeclock_home")
-                if action == "lunch_in" and entry.lunch_in is not None:
-                    messages.warning(request, "Lunch in already recorded for today.")
-                    return redirect("timeclock:timeclock_home")
-                if action == "clock_out" and entry.clock_out is not None:
-                    messages.warning(request, "You are already clocked out for today.")
-                    return redirect("timeclock:timeclock_home")
 
                 if action == "clock_in":
                     requires_approver, _reason = clock_in_requires_approver(user, now, today)

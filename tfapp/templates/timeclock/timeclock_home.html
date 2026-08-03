@@ -354,6 +354,7 @@
     }, true);
 
     window.kioskNotify = showMessage;
+    window.kioskResetScan = resetScan;
 
     if (loginInput) {
       loginInput.focus();
@@ -509,8 +510,17 @@ document.addEventListener('DOMContentLoaded', function () {
     if (overrideError) overrideError.classList.add('d-none');
   }
 
+  // Set while recording so the badge is kept for the submit; a cancelled override clears it.
+  let overrideRecording = false;
+
   if (modalEl) {
-    modalEl.addEventListener('hidden.bs.modal', resetOverrideModal);
+    modalEl.addEventListener('hidden.bs.modal', function () {
+      resetOverrideModal();
+      if (!overrideRecording && isKiosk && typeof window.kioskResetScan === 'function') {
+        window.kioskResetScan();
+      }
+      overrideRecording = false;
+    });
   }
 
   if (continueBtn && stepWarning && stepApprover) {
@@ -528,6 +538,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       if (overrideError) overrideError.classList.add('d-none');
+      overrideRecording = true;
       const m = getModal();
       if (m) m.hide();
       submitClockIn();
