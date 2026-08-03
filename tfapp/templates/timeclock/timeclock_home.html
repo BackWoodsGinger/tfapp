@@ -87,6 +87,52 @@
   #kioskMessageModal .kiosk-msg-warning {
     color: #8a6100 !important;
   }
+  /*
+   * Approver picker: colors are set outright because this page sits in a dark .card-body,
+   * where inherited --bs-body-color would render light text on the light modal.
+   */
+  .kiosk-approver-list {
+    max-height: 52vh;
+    overflow-y: auto;
+    border: 1px solid #ced4da;
+    border-radius: 0.375rem;
+    background-color: #ffffff;
+  }
+  .kiosk-approver-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.6rem 1rem;
+    font-size: 1.15rem;
+    border: 0;
+    border-bottom: 1px solid #dee2e6;
+    border-radius: 0;
+    color: #212529 !important;
+    background-color: #ffffff !important;
+  }
+  .kiosk-approver-option:last-child {
+    border-bottom: 0;
+  }
+  .kiosk-approver-option.active {
+    color: #ffffff !important;
+    background-color: #0d6efd !important;
+  }
+  /* Wide scrollbar so the panel shows there is more of the list below. */
+  .kiosk-approver-list::-webkit-scrollbar {
+    width: 16px;
+  }
+  .kiosk-approver-list::-webkit-scrollbar-track {
+    background: #e9ecef;
+  }
+  .kiosk-approver-list::-webkit-scrollbar-thumb {
+    background: #868e96;
+    border-radius: 8px;
+  }
+  /* Larger dismiss target without growing the header. */
+  #clockInOverrideModal .modal-header .btn-close {
+    padding: 0.75rem;
+    margin: -0.5rem -0.5rem -0.5rem auto;
+  }
   {% endif %}
 </style>
 
@@ -191,6 +237,18 @@
                       <button type="button" class="btn btn-primary" id="override-continue-btn">Continue to select authorizer</button>
                     </div>
                     <div id="override-step-approver" class="d-none">
+                      {% if is_kiosk %}
+                      {# A native select popup renders outside the panel and cannot be scrolled by touch. #}
+                      <div class="form-label" id="approver-list-label">Who authorized this clock-in?</div>
+                      <input type="hidden" name="clock_in_approver" id="clock_in_approver">
+                      <div id="approver-list" class="kiosk-approver-list" role="listbox"
+                        aria-labelledby="approver-list-label">
+                        {% for a in clock_in_approvers %}
+                        <button type="button" class="kiosk-approver-option" role="option" aria-selected="false"
+                          data-approver-id="{{ a.pk }}">{{ a.payroll_display_name }}</button>
+                        {% endfor %}
+                      </div>
+                      {% else %}
                       <label for="clock_in_approver" class="form-label">Who authorized this clock-in?</label>
                       <select name="clock_in_approver" id="clock_in_approver" class="form-select form-select-lg">
                         <option value="">— Select executive, manager, supervisor, or group lead —</option>
@@ -198,6 +256,7 @@
                         <option value="{{ a.pk }}">{{ a.payroll_display_name }}</option>
                         {% endfor %}
                       </select>
+                      {% endif %}
                       <p id="override-error" class="fw-semibold mt-2 mb-0 d-none">Select who authorized this clock-in.</p>
                       <button type="button" class="btn btn-success mt-3 w-100" id="override-record-btn">Record clock in</button>
                     </div>
@@ -484,7 +543,19 @@ document.addEventListener('DOMContentLoaded', function () {
   const stepApprover = document.getElementById('override-step-approver');
   const continueBtn = document.getElementById('override-continue-btn');
   const recordBtn = document.getElementById('override-record-btn');
+  // Kiosk uses a tappable list writing into a hidden input that shares the select's id,
+  // so approver reads and resets below work the same in both modes.
   const approverSelect = document.getElementById('clock_in_approver');
+  const approverList = document.getElementById('approver-list');
+
+  function clearApproverHighlight() {
+    if (!approverList) return;
+    const chosen = approverList.querySelectorAll('.active');
+    for (let i = 0; i < chosen.length; i++) {
+      chosen[i].classList.remove('active');
+      chosen[i].setAttribute('aria-selected', 'false');
+    }
+  }
 
   function hideOverrideMessages() {
     if (msgUnscheduled) msgUnscheduled.classList.add('d-none');
@@ -508,6 +579,20 @@ document.addEventListener('DOMContentLoaded', function () {
     if (stepApprover) stepApprover.classList.add('d-none');
     if (approverSelect) approverSelect.value = '';
     if (overrideError) overrideError.classList.add('d-none');
+    clearApproverHighlight();
+    if (approverList) approverList.scrollTop = 0;
+  }
+
+  if (approverList && approverSelect) {
+    approverList.addEventListener('click', function (e) {
+      const option = e.target.closest('[data-approver-id]');
+      if (!option) return;
+      clearApproverHighlight();
+      option.classList.add('active');
+      option.setAttribute('aria-selected', 'true');
+      approverSelect.value = option.getAttribute('data-approver-id');
+      if (overrideError) overrideError.classList.add('d-none');
+    });
   }
 
   // Set while recording so the badge is kept for the submit; a cancelled override clears it.
