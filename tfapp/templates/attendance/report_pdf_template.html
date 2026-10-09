@@ -29,14 +29,14 @@
         <p class="small"><em>{{ subtype_filter_note }}</em></p>
         {% endif %}
         <p>
-            <strong>PTO used:</strong> {{ pto_used|floatformat:1 }} hours
-            &nbsp; <strong>Personal used:</strong> {{ personal_used|floatformat:1 }} hours
-            &nbsp; <strong>PTO remaining:</strong> {{ pto_remaining|floatformat:1 }} hours
+            <strong>PTO used:</strong> {{ pto_used|floatformat:2 }} hours
+            &nbsp; <strong>Personal used:</strong> {{ personal_used|floatformat:2 }} hours
+            &nbsp; <strong>PTO remaining:</strong> {{ pto_remaining|floatformat:2 }} hours
         </p>
         <p>
-            <strong>FMLA used:</strong> {{ fmla_used_hours|floatformat:1 }} hours
-            &nbsp; <strong>FMLA — PTO applied:</strong> {{ fmla_pto_applied_total|floatformat:1 }} hours
-            &nbsp; <strong>Grace time used:</strong> {{ grace_time_used|floatformat:1 }} hours
+            <strong>FMLA used:</strong> {{ fmla_used_hours|floatformat:2 }} hours
+            &nbsp; <strong>FMLA — PTO applied:</strong> {{ fmla_pto_applied_total|floatformat:2 }} hours
+            &nbsp; <strong>Grace time used:</strong> {{ grace_time_used|floatformat:2 }} hours
         </p>
     </div>
 
