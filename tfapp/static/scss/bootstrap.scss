@@ -1,5 +1,7 @@
 $primary: #313198;
 
-$font-family-base: Merlo, serif;
+$font-family-sans-serif: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+$font-family-base: var(--bs-font-sans-serif);
 
+@import 'ibm-plex-sans';
 @import '../node_modules/bootstrap/scss/bootstrap.scss';
