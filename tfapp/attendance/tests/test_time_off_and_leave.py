@@ -311,6 +311,18 @@ class LeaveOfAbsenceTests(TestCase):
         self.assertEqual(other.pto_balance, 50.0)
         self.assertTrue(disability.occurrences.exists())
 
+    def test_layoff_creates_daily_absences_without_drawing_balances(self):
+        layoff = LeaveOfAbsence(user=self.user, subtype=OccurrenceSubtype.LAYOFF, start_date=self.start)
+        layoff.full_clean()
+        layoff.save()
+        sync_leave(layoff, today=self.today)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.pto_balance, 100.0)
+        self.assertEqual(
+            set(layoff.occurrences.values_list("subtype", flat=True)), {OccurrenceSubtype.LAYOFF}
+        )
+        self.assertEqual(layoff.occurrences.count(), len(self._scheduled_days(self.start, self.today)))
+
     def test_end_leave_removes_and_refunds_later_days(self):
         leave = LeaveOfAbsence.objects.create(
             user=self.user, subtype=OccurrenceSubtype.LEAVE_OF_ABSENCE, start_date=self.start

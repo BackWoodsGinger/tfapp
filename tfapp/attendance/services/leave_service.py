@@ -1,5 +1,5 @@
 """
-Ongoing leave (FMLA, Leave of Absence, Disability): generate one absence per scheduled work day
+Ongoing leave or lay-off (FMLA, Leave of Absence, Disability, Lay-Off): generate one absence per scheduled work day
 while the leave is active, and remove/refund generated absences outside the leave's dates.
 
 Every function here is idempotent, so it is safe to run from cron, payroll close, and admin saves.

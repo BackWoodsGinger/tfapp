@@ -764,12 +764,13 @@ LEAVE_SUBTYPE_CHOICES = [
     (OccurrenceSubtype.FMLA.value, OccurrenceSubtype.FMLA.label),
     (OccurrenceSubtype.LEAVE_OF_ABSENCE.value, OccurrenceSubtype.LEAVE_OF_ABSENCE.label),
     (OccurrenceSubtype.DISABILITY.value, OccurrenceSubtype.DISABILITY.label),
+    (OccurrenceSubtype.LAYOFF.value, OccurrenceSubtype.LAYOFF.label),
 ]
 
 
 class LeaveOfAbsence(models.Model):
     """
-    An ongoing leave (FMLA, Leave of Absence, or Disability) managed by a site admin.
+    An ongoing leave or lay-off (FMLA, Leave of Absence, Disability, or Lay-Off) managed by a site admin.
     While active, one absence of ``subtype`` is generated for each scheduled work day from
     ``start_date`` through today (or ``end_date`` once the leave is switched off).
     """
@@ -808,8 +809,8 @@ class LeaveOfAbsence(models.Model):
 
     class Meta:
         ordering = ["-start_date"]
-        verbose_name = "Leave of absence"
-        verbose_name_plural = "Leaves of absence"
+        verbose_name = "Leave or lay-off"
+        verbose_name_plural = "Leaves and lay-offs"
 
     def __str__(self):
         end = self.end_date.isoformat() if self.end_date else "ongoing"

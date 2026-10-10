@@ -232,7 +232,7 @@ class LeaveOccurrenceInline(admin.TabularInline):
         return False
 
 
-@admin.action(description="Switch off: employee returns today (last leave day is yesterday)")
+@admin.action(description="Switch off: employee returns to work today (last leave day is yesterday)")
 def end_leave_returning_today(modeladmin, request, queryset):
     from .services.leave_service import LeaveSyncResult, end_leave
 

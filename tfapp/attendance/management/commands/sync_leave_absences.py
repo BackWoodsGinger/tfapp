@@ -5,7 +5,7 @@ from attendance.services.leave_service import sync_all_leaves
 
 class Command(BaseCommand):
     help = (
-        "Create the daily absence for every ongoing leave (FMLA, Leave of Absence, Disability) "
+        "Create the daily absence for every ongoing leave or lay-off (FMLA, Leave of Absence, Disability, Lay-Off) "
         "through today. Safe to run repeatedly; schedule nightly from cron."
     )
 
