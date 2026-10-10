@@ -10,6 +10,8 @@ from .models import (
     CustomUser,
     PayrollPeriod,
     TimeOffRequest,
+    TimeOffRequestDay,
+    TimeOffRequestKind,
     TimeOffRequestStatus,
     WorkThroughLunchRequest,
 )
@@ -165,23 +167,99 @@ class ReportFilterForm(forms.Form):
         return cleaned
 
 
+TIME_OFF_MULTIPLE_DAYS_MAX = 31
+_TIME_INPUT_FORMATS = ["%H:%M", "%H:%M:%S"]
+
+
+def _time_input(**attrs):
+    return forms.TimeInput(
+        attrs={"type": "time", "class": "form-control", "step": "900", **attrs},
+        format="%H:%M",
+    )
+
+
+def _payroll_week_start(d: date) -> date:
+    """Sunday that starts the payroll week (Sunday–Saturday) containing ``d``."""
+    return d - timedelta(days=(d.weekday() + 1) % 7)
+
+
+def weekly_schedule_for_time_off_form(user) -> dict:
+    """
+    The user's default shift per weekday (Monday=0), for pre-filling time selectors:
+    ``{"0": {"start": "07:00", "end": "15:30", "lunch_out": "11:00", "lunch_in": "11:30",
+    "hours": 8.0}, ...}``. Lunch keys are null on no-lunch days; unscheduled weekdays are omitted.
+    """
+    from .schedule_utils import (
+        get_scheduled_end_time_for_day,
+        get_scheduled_lunch_in_for_day,
+        get_scheduled_lunch_out_for_day,
+        get_scheduled_start_for_day,
+        scheduled_duration_hours_for_day,
+    )
+
+    def _fmt(t):
+        return t.strftime("%H:%M") if t else None
+
+    reference_monday = date(2020, 1, 6)
+    out = {}
+    for wd in range(7):
+        d = reference_monday + timedelta(days=wd)
+        start = get_scheduled_start_for_day(user, d)
+        end = get_scheduled_end_time_for_day(user, d)
+        hours = scheduled_duration_hours_for_day(user, d)
+        if start and end and hours > 0:
+            out[str(wd)] = {
+                "start": _fmt(start),
+                "end": _fmt(end),
+                "lunch_out": _fmt(get_scheduled_lunch_out_for_day(user, d)),
+                "lunch_in": _fmt(get_scheduled_lunch_in_for_day(user, d)),
+                "hours": round(hours, 2),
+            }
+    return out
+
+
 class TimeOffRequestForm(forms.ModelForm):
     """
-    User requests full scheduled days off between start_date and end_date.
-    Absence type (subtype) and optional comments. Validation enforces:
-    - start_date <= end_date
-    - all days within a single payroll week
-    - PTO hours for that week do not exceed 40.
+    Time off request in one of three shapes, chosen first via ``request_kind``:
+
+    - Partial day: one date plus from/to times inside the scheduled shift.
+    - Full day: one date; the whole scheduled shift.
+    - Multiple days: a date range. Each scheduled day in the range can be left out or narrowed
+      to partial times (posted as ``day_<YYYY-MM-DD>_include`` / ``_start`` / ``_end``).
+
+    Absence type and comments apply to the whole request. Requested hours per payroll week
+    (including other pending/approved requests) may not exceed 40.
     """
+
+    request_kind = forms.ChoiceField(
+        label="What kind of time off is this?",
+        choices=TimeOffRequestKind.choices,
+        widget=forms.RadioSelect,
+    )
+    partial_date = forms.DateField(
+        label="Date", required=False, widget=forms.DateInput(attrs={"type": "date", "class": "form-control"})
+    )
+    partial_start = forms.TimeField(
+        label="From", required=False, input_formats=_TIME_INPUT_FORMATS, widget=_time_input()
+    )
+    partial_end = forms.TimeField(
+        label="To", required=False, input_formats=_TIME_INPUT_FORMATS, widget=_time_input()
+    )
+    full_date = forms.DateField(
+        label="Date", required=False, widget=forms.DateInput(attrs={"type": "date", "class": "form-control"})
+    )
+    multi_start = forms.DateField(
+        label="First day", required=False, widget=forms.DateInput(attrs={"type": "date", "class": "form-control"})
+    )
+    multi_end = forms.DateField(
+        label="Last day", required=False, widget=forms.DateInput(attrs={"type": "date", "class": "form-control"})
+    )
 
     class Meta:
         model = TimeOffRequest
-        fields = ["start_date", "end_date", "partial_day", "partial_hours", "subtype", "comments"]
+        fields = ["subtype", "comments"]
+        labels = {"subtype": "Absence type"}
         widgets = {
-            "start_date": forms.DateInput(attrs={"type": "date"}),
-            "end_date": forms.DateInput(attrs={"type": "date"}),
-            "partial_day": forms.CheckboxInput(attrs={"class": "form-check-input"}),
-            "partial_hours": forms.NumberInput(attrs={"step": 0.25, "min": 0.25, "class": "form-control"}),
             "subtype": forms.Select(attrs={"class": "form-select"}),
             "comments": forms.Textarea(attrs={"rows": 3, "class": "form-control", "placeholder": "Optional"}),
         }
@@ -193,112 +271,185 @@ class TimeOffRequestForm(forms.ModelForm):
         self.fields["subtype"].choices = [
             (v, lbl) for v, lbl in OccurrenceSubtype.choices if v not in excl
         ]
-        self.helper = FormHelper()
-        self.helper.form_tag = False
-        self.helper.form_method = "post"
-        self.helper.form_class = "form-horizontal"
-        self.helper.label_class = "form-label"
-        self.helper.field_class = "mb-3"
-        self.helper.layout = Layout(
-            Row(
-                Column("start_date", css_class="col-md-6"),
-                Column("end_date", css_class="col-md-6"),
-            ),
-            Row(
-                Column("partial_day", css_class="col-md-3"),
-                Column("partial_hours", css_class="col-md-3"),
-            ),
-            "subtype",
-            "comments",
+        self.day_rows: list[dict] = []
+
+    def submitted_day_inputs(self) -> dict:
+        """Per-day values posted for a multiple-day request, keyed by ISO date (for re-rendering)."""
+        out = {}
+        if not self.is_bound:
+            return out
+        for key in self.data:
+            if key.startswith("day_") and key.count("_") == 2:
+                _, iso, part = key.split("_")
+                out.setdefault(iso, {})[part] = self.data.get(key)
+        return out
+
+    def _parse_time(self, raw):
+        if not raw:
+            return None
+        try:
+            return forms.TimeField(input_formats=_TIME_INPUT_FORMATS).to_python(raw)
+        except forms.ValidationError:
+            return None
+
+    def _timed_day(self, d: date, from_t, to_t) -> dict | None:
+        """Validate from/to times on ``d`` against the shift and return a day row, or add an error."""
+        from .schedule_utils import (
+            requested_window_for_day,
+            scheduled_hours_between,
+            scheduled_shift_window_for_day,
         )
+
+        label = d.strftime("%a %b %d")
+        window = scheduled_shift_window_for_day(self.request_user, d)
+        if window is None:
+            self.add_error(None, f"{label}: you are not scheduled to work that day.")
+            return None
+        if from_t is None or to_t is None:
+            self.add_error(None, f"{label}: enter both a from and a to time.")
+            return None
+        req_start, req_end = requested_window_for_day(window, d, from_t, to_t)
+        if req_start < window["start"] or req_end > window["end"]:
+            shift = f"{window['start'].strftime('%H:%M')}–{window['end'].strftime('%H:%M')}"
+            self.add_error(None, f"{label}: times must fall within your scheduled shift ({shift}).")
+            return None
+        hours = scheduled_hours_between(self.request_user, d, from_t, to_t)
+        if hours <= 0:
+            self.add_error(None, f"{label}: the selected times do not include any scheduled work hours.")
+            return None
+        return {"date": d, "start_time": from_t, "end_time": to_t, "hours": hours}
+
+    def _full_day(self, d: date) -> dict | None:
+        from .schedule_utils import scheduled_duration_hours_for_day
+
+        hours = scheduled_duration_hours_for_day(self.request_user, d)
+        if hours <= 0:
+            return None
+        return {"date": d, "start_time": None, "end_time": None, "hours": round(hours, 2)}
+
+    def _build_partial(self, cd):
+        d = cd.get("partial_date")
+        if not d:
+            self.add_error("partial_date", "Choose the date.")
+            return
+        if not cd.get("partial_start"):
+            self.add_error("partial_start", "Choose a start time.")
+        if not cd.get("partial_end"):
+            self.add_error("partial_end", "Choose an end time.")
+        if not (cd.get("partial_start") and cd.get("partial_end")):
+            return
+        row = self._timed_day(d, cd["partial_start"], cd["partial_end"])
+        if row:
+            self.day_rows = [row]
+
+    def _build_full(self, cd):
+        d = cd.get("full_date")
+        if not d:
+            self.add_error("full_date", "Choose the date.")
+            return
+        row = self._full_day(d)
+        if row is None:
+            self.add_error("full_date", "You are not scheduled to work that day.")
+            return
+        self.day_rows = [row]
+
+    def _build_multiple(self, cd):
+        first, last = cd.get("multi_start"), cd.get("multi_end")
+        if not first:
+            self.add_error("multi_start", "Choose the first day.")
+        if not last:
+            self.add_error("multi_end", "Choose the last day.")
+        if not (first and last):
+            return
+        if first > last:
+            self.add_error("multi_end", "The last day cannot be before the first day.")
+            return
+        if (last - first).days + 1 > TIME_OFF_MULTIPLE_DAYS_MAX:
+            self.add_error(
+                "multi_end",
+                f"Requests are limited to {TIME_OFF_MULTIPLE_DAYS_MAX} days. "
+                "For longer leave, contact your supervisor.",
+            )
+            return
+
+        per_day = self.submitted_day_inputs()
+        days_rendered = bool(self.data.get("days_rendered"))
+        rows = []
+        d = first
+        while d <= last:
+            full = self._full_day(d)
+            if full is not None:
+                posted = per_day.get(d.isoformat(), {})
+                include = (not days_rendered) or posted.get("include") == "on"
+                if include:
+                    from_t = self._parse_time(posted.get("start"))
+                    to_t = self._parse_time(posted.get("end"))
+                    if from_t is None and to_t is None:
+                        rows.append(full)
+                    else:
+                        row = self._timed_day(d, from_t, to_t)
+                        if row:
+                            rows.append(row)
+            d += timedelta(days=1)
+        if not rows and not self.errors:
+            self.add_error(None, "None of the selected dates are scheduled work days.")
+        self.day_rows = rows
+
+    def _check_weekly_cap(self):
+        from .models import TimeOffRequestStatus
+
+        new_by_week: dict[date, float] = {}
+        for row in self.day_rows:
+            ws = _payroll_week_start(row["date"])
+            new_by_week[ws] = new_by_week.get(ws, 0.0) + row["hours"]
+        for week_start, new_hours in sorted(new_by_week.items()):
+            week_end = week_start + timedelta(days=6)
+            existing = TimeOffRequest.objects.filter(
+                user=self.request_user,
+                start_date__lte=week_end,
+                end_date__gte=week_start,
+                status__in=[TimeOffRequestStatus.PENDING, TimeOffRequestStatus.APPROVED],
+            )
+            existing_hours = sum(r.requested_hours_in_range(week_start, week_end) for r in existing)
+            if existing_hours + new_hours > 40:
+                self.add_error(
+                    None,
+                    f"Total time off requested for the payroll week of {week_start:%b %d} "
+                    f"would be {existing_hours + new_hours:.2f} hours, over the 40-hour weekly limit.",
+                )
 
     def clean(self):
         cleaned_data = super().clean()
-        start_date = cleaned_data.get("start_date")
-        end_date = cleaned_data.get("end_date")
-        partial_day = cleaned_data.get("partial_day")
-        partial_hours = cleaned_data.get("partial_hours")
         subtype = cleaned_data.get("subtype")
-
         if subtype and str(subtype) in {s.value for s in TIME_OFF_REQUEST_SUBTYPE_EXCLUDE}:
-            self.add_error(
-                "subtype",
-                "That absence type is not available for employee time off requests.",
-            )
+            self.add_error("subtype", "That absence type is not available for employee time off requests.")
 
-        if not start_date or not end_date:
+        kind = cleaned_data.get("request_kind")
+        if not kind or not self.request_user:
             return cleaned_data
+        if kind == TimeOffRequestKind.PARTIAL_DAY:
+            self._build_partial(cleaned_data)
+        elif kind == TimeOffRequestKind.FULL_DAY:
+            self._build_full(cleaned_data)
+        else:
+            self._build_multiple(cleaned_data)
+        if self.day_rows and not self.errors:
+            self._check_weekly_cap()
 
-        if start_date > end_date:
-            raise forms.ValidationError("Start date cannot be after end date.")
-
-        # Restrict to a single payroll week (Sunday–Saturday) for simplicity
-        # to make the 40-hour weekly PTO cap unambiguous.
-        start_week_start = start_date - timedelta(days=(start_date.weekday() + 1) % 7)
-        end_week_start = end_date - timedelta(days=(end_date.weekday() + 1) % 7)
-        if start_week_start != end_week_start:
-            raise forms.ValidationError(
-                "Time off requests cannot span multiple payroll weeks. "
-                "Please submit separate requests for each week."
-            )
-
-        if partial_day:
-            if start_date != end_date:
-                raise forms.ValidationError(
-                    "Partial-day requests must be for a single date."
-                )
-            if partial_hours is None or partial_hours <= 0:
-                raise forms.ValidationError(
-                    "Enter partial-day hours greater than 0."
-                )
-
-        user = self.request_user
-        if not user:
-            return cleaned_data
-
-        if partial_day:
-            # Ensure partial hours do not exceed the scheduled hours for that date.
-            temp_request = TimeOffRequest(user=user, start_date=start_date, end_date=end_date)
-            scheduled_hours = temp_request.compute_requested_hours()
-            if scheduled_hours <= 0:
-                raise forms.ValidationError(
-                    "You do not have scheduled hours on that date."
-                )
-            if float(partial_hours) > float(scheduled_hours):
-                raise forms.ValidationError(
-                    f"Partial-day hours cannot exceed scheduled hours ({scheduled_hours:.2f}) for that date."
-                )
-
-        from .models import TimeOffRequestStatus
-
-        week_start = start_week_start
-        week_end = week_start + timedelta(days=6)
-
-        # Compute hours for this new request based on the user's schedule
-        temp_request = TimeOffRequest(user=user, start_date=start_date, end_date=end_date)
-        new_hours = temp_request.compute_requested_hours()
-
-        # Sum hours for existing approved or pending requests in that same week
-        existing_requests = TimeOffRequest.objects.filter(
-            user=user,
-            start_date__lte=week_end,
-            end_date__gte=week_start,
-            status__in=[
-                TimeOffRequestStatus.PENDING,
-                TimeOffRequestStatus.APPROVED,
-            ],
-        )
-
-        existing_hours = 0.0
-        for req in existing_requests:
-            existing_hours += req.compute_requested_hours()
-
-        if existing_hours + new_hours > 40:
-            raise forms.ValidationError(
-                "Total PTO requested for this payroll week would exceed 40 hours."
-            )
-
+        if self.day_rows:
+            inst = self.instance
+            inst.request_kind = kind
+            inst.start_date = self.day_rows[0]["date"]
+            inst.end_date = self.day_rows[-1]["date"]
+            inst.partial_day = kind == TimeOffRequestKind.PARTIAL_DAY
+            inst.partial_hours = self.day_rows[0]["hours"] if inst.partial_day else None
         return cleaned_data
+
+    def save_days(self, time_off_request):
+        """Create the per-day rows; call after the request itself has been saved."""
+        TimeOffRequestDay.objects.bulk_create(
+            [TimeOffRequestDay(request=time_off_request, **row) for row in self.day_rows]
+        )
 
 
 def _week_ending_saturday_for_date(d: date) -> date:

@@ -429,6 +429,14 @@ class Occurrence(models.Model):
         related_name="occurrences_created",
         help_text="Set when this absence was created at payroll finalize (variance or tardy); used to revert on unfinalize.",
     )
+    leave = models.ForeignKey(
+        "LeaveOfAbsence",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="occurrences",
+        help_text="Set when this absence was generated automatically by an ongoing leave.",
+    )
 
     class Meta:
         verbose_name = "Absence"
@@ -449,7 +457,15 @@ class Occurrence(models.Model):
                 condition=Q(subtype=OccurrenceSubtype.TARDY_OUT_OF_GRACE),
                 name="unique_tardy_out_of_grace_per_user_date",
             ),
+            UniqueConstraint(
+                fields=["leave", "date"],
+                condition=Q(leave__isnull=False),
+                name="unique_leave_occurrence_per_date",
+            ),
         ]
+
+    def __str__(self):
+        return f"{self.user} {self.get_subtype_display()} {self.date}"
 
     def _subtype_uses_pto(self):
         """True if this subtype deducts from user PTO/personal time balance."""
@@ -519,10 +535,20 @@ class TimeOffRequestStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class TimeOffRequestKind(models.TextChoices):
+    PARTIAL_DAY = "partial", "Partial day"
+    FULL_DAY = "full", "Full day"
+    MULTIPLE_DAYS = "multiple", "Multiple days"
+
+
 class TimeOffRequest(models.Model):
     """
     A user-initiated request to use PTO for one or more scheduled work days.
     Approval will create one or more Occurrence records and apply PTO.
+
+    Requests submitted with a ``request_kind`` store one ``TimeOffRequestDay`` per requested
+    date (with the requested times and hours). Older requests have no day rows and are sized
+    from ``partial_hours`` or the user's schedule.
     """
 
     slug = models.SlugField(max_length=48, unique=True, editable=False, db_index=True)
@@ -537,6 +563,12 @@ class TimeOffRequest(models.Model):
         default=TimeOffRequestStatus.PENDING,
     )
     planned = models.BooleanField(default=False)
+    request_kind = models.CharField(
+        max_length=16,
+        choices=TimeOffRequestKind.choices,
+        blank=True,
+        default="",
+    )
     partial_day = models.BooleanField(default=False)
     partial_hours = models.FloatField(null=True, blank=True)
     approver = models.ForeignKey(
@@ -570,18 +602,40 @@ class TimeOffRequest(models.Model):
         Compute total scheduled hours for this request window from weekly_schedule JSON
         and/or WorkSchedule (including half-day rows with no lunch).
         """
+        return self.requested_hours_in_range(self.start_date, self.end_date)
+
+    def requested_hours_in_range(self, range_start: date, range_end: date) -> float:
+        """Requested hours for dates of this request that fall within ``range_start``..``range_end``."""
         from .schedule_utils import scheduled_duration_hours_for_day
 
+        if self.pk and self.days.exists():
+            total = self.days.filter(date__range=(range_start, range_end)).aggregate(t=Sum("hours"))["t"]
+            return round(float(total or 0.0), 2)
         if self.partial_day:
-            return max(float(self.partial_hours or 0), 0.0)
+            if range_start <= self.start_date <= range_end:
+                return max(float(self.partial_hours or 0), 0.0)
+            return 0.0
         total = 0.0
-        current = self.start_date
-        while current <= self.end_date:
+        current = max(self.start_date, range_start)
+        last = min(self.end_date, range_end)
+        while current <= last:
             h = scheduled_duration_hours_for_day(self.user, current)
             if h > 0:
                 total += h
             current += timedelta(days=1)
         return total
+
+    def day_lines(self) -> list[str]:
+        """Human-readable per-day breakdown, e.g. ``Mon Oct 12: 07:00–11:30 (4.50 h)``."""
+        lines = []
+        for day in self.days.all():
+            label = day.date.strftime("%a %b %d")
+            if day.start_time and day.end_time:
+                times = f"{day.start_time.strftime('%H:%M')}–{day.end_time.strftime('%H:%M')}"
+                lines.append(f"{label}: {times} ({day.hours:.2f} h)")
+            else:
+                lines.append(f"{label}: {day.hours:.2f} h")
+        return lines
 
     def mark_planned_or_unplanned(self):
         """
@@ -608,6 +662,21 @@ class TimeOffRequest(models.Model):
         )
 
         from .schedule_utils import scheduled_duration_hours_for_day
+
+        subtype = getattr(self, "subtype", OccurrenceSubtype.TIME_OFF)
+        day_rows = list(self.days.all())
+        if day_rows:
+            for day in day_rows:
+                if day.hours > 0:
+                    Occurrence.objects.create(
+                        user=self.user,
+                        occurrence_type=occurrence_type,
+                        subtype=subtype,
+                        date=day.date,
+                        duration_hours=day.hours,
+                        time_off_request=self,
+                    )
+            return
 
         current = self.start_date
         while current <= self.end_date:
@@ -670,6 +739,99 @@ class TimeOffRequest(models.Model):
             u.save()
         self.status = TimeOffRequestStatus.CANCELLED
         self.save()
+
+
+class TimeOffRequestDay(models.Model):
+    """One requested date within a time off request. Times are blank for full scheduled days."""
+
+    request = models.ForeignKey(TimeOffRequest, on_delete=models.CASCADE, related_name="days")
+    date = models.DateField()
+    start_time = models.TimeField(null=True, blank=True)
+    end_time = models.TimeField(null=True, blank=True)
+    hours = models.FloatField()
+
+    class Meta:
+        ordering = ["date"]
+        constraints = [
+            UniqueConstraint(fields=["request", "date"], name="unique_time_off_request_day"),
+        ]
+
+    def __str__(self):
+        return f"{self.request_id} {self.date} {self.hours}h"
+
+
+LEAVE_SUBTYPE_CHOICES = [
+    (OccurrenceSubtype.FMLA.value, OccurrenceSubtype.FMLA.label),
+    (OccurrenceSubtype.LEAVE_OF_ABSENCE.value, OccurrenceSubtype.LEAVE_OF_ABSENCE.label),
+    (OccurrenceSubtype.DISABILITY.value, OccurrenceSubtype.DISABILITY.label),
+]
+
+
+class LeaveOfAbsence(models.Model):
+    """
+    An ongoing leave (FMLA, Leave of Absence, or Disability) managed by a site admin.
+    While active, one absence of ``subtype`` is generated for each scheduled work day from
+    ``start_date`` through today (or ``end_date`` once the leave is switched off).
+    """
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="leaves")
+    subtype = models.CharField("Leave type", max_length=50, choices=LEAVE_SUBTYPE_CHOICES)
+    start_date = models.DateField()
+    end_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Last day of leave. Leave blank while the leave is ongoing.",
+    )
+    notes = models.TextField(blank=True)
+    generated_through = models.DateField(
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Last date already processed; absences deleted by hand on or before it are not recreated.",
+    )
+    created_by = models.ForeignKey(
+        CustomUser,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="leaves_created",
+    )
+    ended_by = models.ForeignKey(
+        CustomUser,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="leaves_ended",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-start_date"]
+        verbose_name = "Leave of absence"
+        verbose_name_plural = "Leaves of absence"
+
+    def __str__(self):
+        end = self.end_date.isoformat() if self.end_date else "ongoing"
+        return f"{self.user} {self.get_subtype_display()} {self.start_date}–{end}"
+
+    @property
+    def is_active(self) -> bool:
+        return self.end_date is None or self.end_date >= date.today()
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.end_date and self.start_date and self.end_date < self.start_date:
+            raise ValidationError({"end_date": "End date cannot be before the start date."})
+        if not self.user_id or not self.start_date:
+            return
+        overlapping = LeaveOfAbsence.objects.filter(user_id=self.user_id).exclude(pk=self.pk)
+        overlapping = overlapping.filter(Q(end_date__isnull=True) | Q(end_date__gte=self.start_date))
+        if self.end_date:
+            overlapping = overlapping.filter(start_date__lte=self.end_date)
+        if overlapping.exists():
+            raise ValidationError("This employee already has a leave covering some of these dates.")
 
 
 class WorkThroughLunchRequest(models.Model):

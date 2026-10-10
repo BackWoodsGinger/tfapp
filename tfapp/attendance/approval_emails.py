@@ -111,11 +111,14 @@ def notify_time_off_submitted(tor) -> None:
         f"Dates: {tor.start_date} to {tor.end_date}",
         f"Absence type: {tor.get_subtype_display()}",
     ]
-    if tor.partial_day:
+    if tor.request_kind:
+        lines.append(f"Request: {tor.get_request_kind_display()}")
+        lines.extend(f"  {line}" for line in tor.day_lines())
+    elif tor.partial_day:
         lines.append(f"Partial day: {tor.partial_hours} hours")
     try:
         hrs = tor.compute_requested_hours()
-        lines.append(f"Requested hours (scheduled): {hrs:.2f}")
+        lines.append(f"Requested hours: {hrs:.2f}")
     except Exception:
         pass
     if (tor.comments or "").strip():

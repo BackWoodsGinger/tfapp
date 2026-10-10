@@ -17,10 +17,13 @@ from attendance.services.time_processing import (  # noqa: F401
     get_scheduled_shift_end_datetime,
     get_scheduled_start_for_day,
     monday_typical_shift_label,
+    requested_window_for_day,
     schedule_row_has_lunch,
     scheduled_duration_hours_for_day,
+    scheduled_hours_between,
     scheduled_hours_for_range,
     scheduled_lunch_datetimes_for_entry,
+    scheduled_shift_window_for_day,
     suggested_punch_times_for_day,
     work_through_lunch_approved_for_day,
 )

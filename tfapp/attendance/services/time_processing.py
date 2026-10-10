@@ -419,6 +419,66 @@ def clock_in_requires_approver_for_entry(entry) -> tuple[bool, str | None]:
     return False, None
 
 
+def scheduled_shift_window_for_day(user, d: date) -> dict | None:
+    """
+    Naive datetimes for the shift that starts on ``d``: ``start``, ``end``, and optional
+    ``lunch_out`` / ``lunch_in`` (None when the day has no lunch). None when not scheduled.
+    Overnight shifts end (and may take lunch) on d+1.
+    """
+    start_t = get_scheduled_start_for_day(user, d)
+    end_t = get_scheduled_end_time_for_day(user, d)
+    if start_t is None or end_t is None:
+        return None
+    start = datetime.combine(d, start_t)
+    end = datetime.combine(d, end_t)
+    if crosses_midnight_for_day(user, d) or end <= start:
+        end += timedelta(days=1)
+    lunch_out = lunch_in = None
+    lo_t = get_scheduled_lunch_out_for_day(user, d)
+    li_t = get_scheduled_lunch_in_for_day(user, d)
+    if lo_t and li_t:
+        lunch_out = datetime.combine(d, lo_t)
+        if lunch_out < start:
+            lunch_out += timedelta(days=1)
+        lunch_in = datetime.combine(lunch_out.date(), li_t)
+        if lunch_in <= lunch_out:
+            lunch_in += timedelta(days=1)
+    return {"start": start, "end": end, "lunch_out": lunch_out, "lunch_in": lunch_in}
+
+
+def requested_window_for_day(window: dict, d: date, from_t, to_t) -> tuple[datetime, datetime]:
+    """
+    Place clock times ``from_t``/``to_t`` on the shift that starts on ``d``. Times earlier than
+    the shift start belong to the next morning (overnight shifts); ``to`` is always after ``from``.
+    """
+    req_start = datetime.combine(d, from_t)
+    if req_start < window["start"] and window["end"].date() > d:
+        req_start += timedelta(days=1)
+    req_end = datetime.combine(req_start.date(), to_t)
+    if req_end <= req_start:
+        req_end += timedelta(days=1)
+    return req_start, req_end
+
+
+def scheduled_hours_between(user, d: date, from_t, to_t) -> float:
+    """
+    Scheduled (paid) hours inside ``from_t``–``to_t`` for the shift that starts on ``d``,
+    excluding any overlap with the scheduled lunch. 0 when not scheduled or no overlap.
+    """
+    window = scheduled_shift_window_for_day(user, d)
+    if window is None or from_t is None or to_t is None:
+        return 0.0
+    req_start, req_end = requested_window_for_day(window, d, from_t, to_t)
+
+    def _overlap(a_start, a_end, b_start, b_end) -> float:
+        return max(0.0, (min(a_end, b_end) - max(a_start, b_start)).total_seconds())
+
+    seconds = _overlap(req_start, req_end, window["start"], window["end"])
+    if window["lunch_out"] and window["lunch_in"]:
+        seconds -= _overlap(req_start, req_end, window["lunch_out"], window["lunch_in"])
+    return round(max(seconds, 0.0) / 3600, 2)
+
+
 def suggested_punch_times_for_day(user, d: date) -> dict:
     """
     Expected local clock times for payroll CSV export when no TimeEntry exists yet.

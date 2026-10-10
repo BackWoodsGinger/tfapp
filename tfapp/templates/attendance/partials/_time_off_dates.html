@@ -1,0 +1,13 @@
+{{ r.start_date }}{% if r.end_date != r.start_date %} – {{ r.end_date }}{% endif %}
+{% if r.request_kind == "multiple" %}
+    <details class="small text-muted">
+        <summary>{{ r.get_request_kind_display }} · {{ r.compute_requested_hours|floatformat:2 }} hrs</summary>
+        {% for line in r.day_lines %}<div>{{ line }}</div>{% endfor %}
+    </details>
+{% elif r.request_kind %}
+    {% for line in r.day_lines %}
+        <br><small class="text-muted">{{ r.get_request_kind_display }} · {{ line }}</small>
+    {% endfor %}
+{% elif r.partial_day %}
+    <br><small class="text-muted">Partial: {{ r.partial_hours|floatformat:2 }} hrs</small>
+{% endif %}

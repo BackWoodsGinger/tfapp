@@ -54,7 +54,14 @@ from .group_report_charts import (
     group_report_pie_pair_uris,
 )
 from .group_analytics import compute_group_analytics
-from .forms import ReportFilterForm, TimeOffRequestForm, WorkThroughLunchRequestForm, AdjustPunchRequestForm
+from .forms import (
+    TIME_OFF_MULTIPLE_DAYS_MAX,
+    AdjustPunchRequestForm,
+    ReportFilterForm,
+    TimeOffRequestForm,
+    WorkThroughLunchRequestForm,
+    weekly_schedule_for_time_off_form,
+)
 from .payroll_utils import (
     week_ending_for_date as _week_ending_for_date,
     is_payroll_week_finalized as _is_payroll_week_finalized,
@@ -2604,28 +2611,39 @@ def perfect_attendance_pdf(request):
 @login_required
 def request_time_off(request):
     """
-    Allow a user to request PTO for full scheduled days within a single payroll week.
+    Request time off as a partial day (date + from/to times), a full day, or multiple days
+    (date range with per-day times defaulting to the user's schedule).
     """
     user = request.user
 
     if request.method == "POST":
         form = TimeOffRequestForm(request.POST, request_user=user)
         if form.is_valid():
-            tor = form.save(commit=False)
-            tor.user = user
-            tor.save()
+            with transaction.atomic():
+                tor = form.save(commit=False)
+                tor.user = user
+                tor.save()
+                form.save_days(tor)
             approval_emails.notify_time_off_submitted(tor)
             messages.success(request, "Time off request submitted.")
             return redirect("attendance:my_time_off_requests")
     else:
         form = TimeOffRequestForm(request_user=user)
 
-    my_requests = TimeOffRequest.objects.filter(user=user).order_by("-created_at")
+    my_requests = (
+        TimeOffRequest.objects.filter(user=user).prefetch_related("days").order_by("-created_at")
+    )
 
     return render(
         request,
         "attendance/request_time_off.html",
-        {"form": form, "my_requests": my_requests},
+        {
+            "form": form,
+            "my_requests": my_requests,
+            "weekly_schedule": weekly_schedule_for_time_off_form(user),
+            "submitted_days": form.submitted_day_inputs(),
+            "multiple_days_max": TIME_OFF_MULTIPLE_DAYS_MAX,
+        },
     )
 
 
@@ -2635,7 +2653,9 @@ def my_time_off_requests(request):
     Simple list view for a user to see their own requests and statuses.
     """
     user = request.user
-    my_requests = TimeOffRequest.objects.filter(user=user).order_by("-created_at")
+    my_requests = (
+        TimeOffRequest.objects.filter(user=user).prefetch_related("days").order_by("-created_at")
+    )
     return render(
         request,
         "attendance/my_time_off_requests.html",
@@ -2662,7 +2682,7 @@ def team_time_off_requests(request):
     pending = TimeOffRequest.objects.filter(status=TimeOffRequestStatus.PENDING)
     # Filter to only those the current user can approve
     manageable = [r.id for r in pending if can_approve_time_off(approver, r.user)]
-    pending = pending.filter(id__in=manageable)
+    pending = pending.filter(id__in=manageable).prefetch_related("days")
 
     pending_wtl = WorkThroughLunchRequest.objects.filter(status=TimeOffRequestStatus.PENDING)
     manageable_wtl = [r.id for r in pending_wtl if can_approve_time_off(approver, r.user)]

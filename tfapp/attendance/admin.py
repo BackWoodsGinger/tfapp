@@ -3,10 +3,12 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.shortcuts import redirect, get_object_or_404
 from django.urls import path
 from django.contrib import messages
+from datetime import date, timedelta
 from decimal import Decimal
 from .models import (
     CustomUser,
     DailyAttendanceSummary,
+    LeaveOfAbsence,
     Occurrence,
     WorkSchedule,
     OccurrenceSubtype,
@@ -187,7 +189,7 @@ class OccurrenceAdmin(admin.ModelAdmin):
     list_display = ('user', 'date', 'occurrence_type', 'subtype', 'duration_hours', 'pto_applied')
     list_filter = ('occurrence_type', 'subtype', 'date')
     search_fields = ('user__username', 'subtype', 'occurrence_type')
-    readonly_fields = ("pto_applied", "probation_grace_hours_applied")
+    readonly_fields = ("pto_applied", "probation_grace_hours_applied", "leave")
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
@@ -204,6 +206,112 @@ class OccurrenceAdmin(admin.ModelAdmin):
             OccurrenceSubtype.GRACE_TIME,
         ]:
             obj.apply_pto()
+
+
+def _leave_sync_message(result) -> str:
+    parts = [f"{result.created} absence(s) created", f"{result.removed} removed and refunded"]
+    if result.skipped_finalized:
+        parts.append(
+            f"{result.skipped_finalized} day(s) left unchanged because the payroll week is finalized"
+        )
+    return "; ".join(parts) + "."
+
+
+class LeaveOccurrenceInline(admin.TabularInline):
+    model = Occurrence
+    fk_name = "leave"
+    extra = 0
+    can_delete = False
+    ordering = ("-date",)
+    fields = ("date", "subtype", "duration_hours", "pto_hours_applied", "pto_applied")
+    readonly_fields = fields
+    verbose_name = "generated absence"
+    verbose_name_plural = "Generated absences"
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.action(description="Switch off: employee returns today (last leave day is yesterday)")
+def end_leave_returning_today(modeladmin, request, queryset):
+    from .services.leave_service import LeaveSyncResult, end_leave
+
+    yesterday = date.today() - timedelta(days=1)
+    total = LeaveSyncResult()
+    ended = 0
+    for leave in queryset:
+        if leave.end_date is not None and leave.end_date <= yesterday:
+            continue
+        total = total + end_leave(leave, max(yesterday, leave.start_date), ended_by=request.user)
+        ended += 1
+    modeladmin.message_user(request, f"Switched off {ended} leave(s): {_leave_sync_message(total)}")
+
+
+@admin.action(description="Generate any missing daily absences now")
+def sync_selected_leaves(modeladmin, request, queryset):
+    from .services.leave_service import LeaveSyncResult, sync_leave
+
+    total = LeaveSyncResult()
+    for leave in queryset:
+        total = total + sync_leave(leave)
+    modeladmin.message_user(request, _leave_sync_message(total))
+
+
+@admin.action(description="Delete leave and refund its generated absences")
+def delete_leaves_with_absences(modeladmin, request, queryset):
+    from .services.leave_service import delete_leave_with_absences
+
+    for leave in queryset:
+        ok, msg = delete_leave_with_absences(leave)
+        modeladmin.message_user(request, msg, level=messages.SUCCESS if ok else messages.ERROR)
+
+
+@admin.register(LeaveOfAbsence)
+class LeaveOfAbsenceAdmin(admin.ModelAdmin):
+    """
+    Start a leave by picking the employee, leave type, and start date. One absence per scheduled
+    work day is created automatically until the leave is switched off (end date set).
+    """
+
+    list_display = ("user", "subtype", "start_date", "end_date", "status", "absence_count")
+    list_filter = ("subtype", ("end_date", admin.EmptyFieldListFilter))
+    search_fields = ("user__payroll_lastname", "user__payroll_firstname", "user__username")
+    autocomplete_fields = ("user",)
+    fields = ("user", "subtype", "start_date", "end_date", "notes", "created_by", "ended_by")
+    readonly_fields = ("created_by", "ended_by")
+    inlines = [LeaveOccurrenceInline]
+    actions = [end_leave_returning_today, sync_selected_leaves, delete_leaves_with_absences]
+
+    @admin.display(description="Status")
+    def status(self, obj):
+        return "Active" if obj.is_active else "Ended"
+
+    @admin.display(description="Absences")
+    def absence_count(self, obj):
+        return obj.occurrences.count()
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj is not None:
+            return self.readonly_fields + ("user", "subtype")
+        return self.readonly_fields
+
+    def has_delete_permission(self, request, obj=None):
+        # Generated absences are protected; use the "Delete leave and refund" action instead.
+        return False
+
+    def save_model(self, request, obj, form, change):
+        from .services.leave_service import sync_leave
+
+        if not change:
+            obj.created_by = request.user
+        else:
+            if "end_date" in form.changed_data and obj.end_date is not None:
+                obj.ended_by = request.user
+            if "start_date" in form.changed_data:
+                obj.generated_through = None
+        super().save_model(request, obj, form, change)
+        result = sync_leave(obj)
+        messages.info(request, _leave_sync_message(result))
 
 
 @admin.register(DailyAttendanceSummary)

@@ -27,6 +27,7 @@ from attendance.services.attendance_engine import (
     create_tardy_occurrences_for_week,
     revert_and_delete_orphan_time_off_for_exchange_week,
 )
+from attendance.services.leave_service import sync_all_leaves
 from timeclock.models import TimeEntry
 
 
@@ -135,6 +136,8 @@ def finalize_payroll_week(*, period, week_start: date, week_ending: date, finali
     if period.is_finalized:
         return
 
+    sync_all_leaves()
+
     # Build total worked (time entries only) and total scheduled per user for the week
     user_total_worked = {}
     user_total_scheduled = {}
@@ -154,9 +157,9 @@ def finalize_payroll_week(*, period, week_start: date, week_ending: date, finali
     for user in users:
         approved_time_off_by_user_date[user.id] = {}
         qs = Occurrence.objects.filter(
+            Q(time_off_request__status=TimeOffRequestStatus.APPROVED) | Q(leave__isnull=False),
             user=user,
             date__range=[week_start, week_ending],
-            time_off_request__status=TimeOffRequestStatus.APPROVED,
         )
         for occ in qs.values("date", "duration_hours"):
             d = occ["date"]

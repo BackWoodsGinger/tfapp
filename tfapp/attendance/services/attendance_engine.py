@@ -223,6 +223,9 @@ def apply_past_due_occurrences(user):
     Call from dashboard or when loading user balance so that when a future approved date passes,
     the balance is updated on next view.
     """
+    from attendance.services.leave_service import sync_all_leaves
+
+    sync_all_leaves(user=user)
     today = date.today()
     past_due = Occurrence.objects.filter(
         user=user,

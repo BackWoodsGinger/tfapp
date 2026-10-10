@@ -370,6 +370,22 @@ button:hover, .btn:hover {
   transform: scale(1.05); /* Slight zoom effect */
 }
 
+/* Choice toggles (e.g. time off request kind): unselected outlined, selected filled */
+.choice-toggle > .btn-check + .btn {
+  background-color: transparent;
+  border-color: #7a78d6;
+  color: #ffffff;
+}
+.choice-toggle > .btn-check + .btn:hover {
+  background-color: #555555;
+}
+.choice-toggle > .btn-check:checked + .btn {
+  background-color: #3c3aaf;
+  border-color: #b3b2ff;
+  font-weight: 600;
+  box-shadow: inset 0 -3px 0 #b3b2ff;
+}
+
 /* Links */
 a {
   color: #bb86fc; /* Modern purple for links */
