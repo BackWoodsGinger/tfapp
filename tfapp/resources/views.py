@@ -18,19 +18,52 @@ def _is_executive(user):
     return user.is_authenticated and getattr(user, "role", None) == RoleChoices.EXECUTIVE
 
 
+def _profile_photo_url(user):
+    try:
+        photo = user.profile.photo
+    except UserProfile.DoesNotExist:
+        return ""
+    return photo.url if photo else ""
+
+
+def _org_chart_people(users):
+    people = []
+    for u in users:
+        people.append(
+            {
+                "id": u.pk,
+                "name": u.payroll_display_name(),
+                "department": (u.department or "").strip(),
+                "role": u.get_role_display() if u.role != RoleChoices.USER else "",
+                "supervisor_id": u.supervisor_id,
+                "url": reverse("resources:user_detail", args=[u.public_slug]),
+                "photo": _profile_photo_url(u),
+            }
+        )
+    return people
+
+
 @login_required
 def resources_home(request):
-    users = (
+    users = list(
         CustomUser.objects.filter(is_active=True)
+        .select_related("profile")
         .order_by("payroll_lastname", "payroll_firstname", "last_name", "first_name", "username")
     )
     policies = Policy.objects.all().order_by("title")
     handbook = EmployeeHandbook.objects.filter(pk=1).first()
+    org_people = _org_chart_people(users)
+    org_departments = sorted({p["department"] for p in org_people if p["department"]}, key=str.lower)
     return render(
         request,
         "resources/home.html",
         {
             "directory_users": users,
+            "org_chart_people": org_people,
+            "org_chart_departments": org_departments,
+            "org_chart_has_unassigned": any(not p["department"] for p in org_people),
+            "org_chart_viewer_id": request.user.pk,
+            "org_chart_viewer_department": (request.user.department or "").strip(),
             "policies": policies,
             "handbook": handbook,
             "is_executive": _is_executive(request.user),

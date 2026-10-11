@@ -12,11 +12,44 @@
   <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-4">
     <h1 class="h2 mb-0">Resources</h1>
     <nav class="d-flex flex-wrap gap-2" aria-label="Resources sections">
+      <a class="btn btn-sm btn-outline-secondary" href="#org-chart">Org chart</a>
       <a class="btn btn-sm btn-outline-secondary" href="#directory">Directory</a>
       <a class="btn btn-sm btn-outline-secondary" href="#events">Events</a>
       <a class="btn btn-sm btn-outline-secondary" href="#policies">Policies</a>
     </nav>
   </div>
+
+  <section id="org-chart" class="card mb-5">
+    <div class="card-header">
+      <h2 class="h5 mb-0">Org chart</h2>
+    </div>
+    <div class="card-body">
+      <p class="text-muted small">Reporting lines by supervisor. Choose a department, use the arrows to show or hide someone’s team, and select a name to view their profile.</p>
+      <div class="d-flex flex-wrap align-items-end gap-2 mb-3">
+        <div>
+          <label for="org-chart-department" class="form-label small text-muted mb-0">Department</label>
+          <select id="org-chart-department" class="form-select form-select-sm w-auto">
+            <option value="">All departments</option>
+            {% for d in org_chart_departments %}
+            <option value="{{ d }}"{% if d == org_chart_viewer_department %} selected{% endif %}>{{ d }}</option>
+            {% endfor %}
+            {% if org_chart_has_unassigned %}
+            <option value="__none__">No department</option>
+            {% endif %}
+          </select>
+        </div>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Expand or collapse the chart">
+          <button type="button" class="btn btn-outline-secondary" id="org-chart-expand">Expand all</button>
+          <button type="button" class="btn btn-outline-secondary" id="org-chart-collapse">Collapse all</button>
+        </div>
+        <p class="small text-muted mb-0 ms-md-auto" id="org-chart-count" aria-live="polite"></p>
+      </div>
+      <div class="org-chart-scroll" role="region" aria-label="Organization chart" tabindex="0">
+        <div id="org-chart-root" class="org-chart"></div>
+      </div>
+      <noscript><p class="text-muted small mb-0">Turn on JavaScript to view the org chart.</p></noscript>
+    </div>
+  </section>
 
   <section id="directory" class="card mb-5">
     <div class="card-header">
@@ -107,4 +140,7 @@
 </style>
 <div id="resources-calendar-bootstrap" data-feed-url="{% url 'resources:events_feed' %}" hidden></div>
 <script src="{% static 'js/resources-calendar.js' %}"></script>
+{{ org_chart_people|json_script:"org-chart-people" }}
+<div id="org-chart-bootstrap" data-viewer-id="{{ org_chart_viewer_id }}" hidden></div>
+<script src="{% static 'js/resources-org-chart.js' %}?v=20261011"></script>
 {% endblock %}

@@ -577,6 +577,181 @@ input[type="date"].form-control {
   margin-top: 0.25rem;
 }
 
+/* Resources org chart: top-down tree, connector lines drawn with pseudo-elements */
+.org-chart-scroll {
+  overflow: auto;
+  max-height: 75vh;
+  padding-bottom: 0.5rem;
+  -webkit-overflow-scrolling: touch;
+}
+.org-chart {
+  --org-line: rgba(255, 255, 255, 0.35);
+  --org-gap: 1.25rem;
+  width: max-content;
+  min-width: 100%;
+}
+.org-chart ul {
+  display: flex;
+  justify-content: center;
+  position: relative;
+  margin: 0;
+  padding: var(--org-gap) 0 0;
+  list-style: none;
+}
+.org-chart ul[hidden] {
+  display: none;
+}
+.org-chart ul.org-chart-top {
+  flex-wrap: wrap;
+  gap: 1.5rem 1rem;
+  padding-top: 0;
+}
+.org-chart li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--org-gap) 0.4rem 0;
+}
+.org-chart ul.org-chart-top > li {
+  padding-top: 0;
+}
+.org-chart li::before,
+.org-chart li::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 50%;
+  width: 50%;
+  height: var(--org-gap);
+  border-top: 1px solid var(--org-line);
+}
+.org-chart li::after {
+  right: auto;
+  left: 50%;
+  border-left: 1px solid var(--org-line);
+}
+.org-chart li:first-child::before,
+.org-chart li:last-child::after {
+  border: 0 none;
+}
+.org-chart li:last-child::before {
+  border-right: 1px solid var(--org-line);
+  border-top-right-radius: 6px;
+}
+.org-chart li:first-child::after {
+  border-top-left-radius: 6px;
+}
+.org-chart li:only-child::before {
+  display: none;
+}
+.org-chart li:only-child::after {
+  border-top: 0 none;
+  border-radius: 0;
+}
+.org-chart ul.org-chart-top > li::before,
+.org-chart ul.org-chart-top > li::after {
+  display: none;
+}
+.org-chart ul ul::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: var(--org-gap);
+  border-left: 1px solid var(--org-line);
+}
+/* A manager whose reports have no reports of their own: stack them in one column */
+.org-chart ul.org-chart-stack {
+  flex-direction: column;
+  align-items: center;
+}
+.org-chart ul.org-chart-stack > li {
+  padding-top: 0.6rem;
+}
+.org-chart ul.org-chart-stack > li::before {
+  display: none;
+}
+.org-chart ul.org-chart-stack > li::after {
+  left: 50%;
+  width: 0;
+  height: 0.6rem;
+  border: 0 none;
+  border-left: 1px solid var(--org-line);
+  border-radius: 0;
+}
+.org-chart-card {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 13.5rem;
+  padding: 0.5rem 0.65rem;
+  text-align: left;
+  background-color: #3a3939;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.org-chart-card.is-viewer {
+  border-color: #8f8df0;
+  box-shadow: 0 0 0 2px rgba(143, 141, 240, 0.45);
+}
+.org-chart-avatar {
+  flex: 0 0 2.5rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.org-chart-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #3c3aaf;
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.org-chart-card-body {
+  min-width: 0;
+  line-height: 1.25;
+}
+.org-chart-name {
+  display: block;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.org-chart-meta {
+  font-size: 0.75rem;
+  color: var(--bs-secondary-color);
+  overflow-wrap: anywhere;
+}
+.org-chart-you {
+  color: #b9b8ff;
+  font-weight: 600;
+}
+.org-chart-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+  padding: 0 0.45rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  border-radius: 999px;
+}
+.org-chart-toggle-icon {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+.org-chart-toggle[aria-expanded="true"] .org-chart-toggle-icon {
+  transform: translateY(-0.1rem) rotate(45deg);
+}
+
 /* Narrow phones: slightly smaller root size so layouts and tables read better */
 @media (max-width: 575.98px) {
   html {
