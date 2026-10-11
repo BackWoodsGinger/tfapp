@@ -19,6 +19,8 @@
   var countEl = document.getElementById("org-chart-count");
   var expandBtn = document.getElementById("org-chart-expand");
   var collapseBtn = document.getElementById("org-chart-collapse");
+  var exportLink = document.getElementById("org-chart-export");
+  var pdfUrl = boot ? boot.getAttribute("data-pdf-url") : "";
 
   var NO_DEPARTMENT = "__none__";
   var ALL_DEPTH_EXPANDED = 2;
@@ -281,13 +283,20 @@
   if (expandBtn) expandBtn.addEventListener("click", function () { setAll(true); });
   if (collapseBtn) collapseBtn.addEventListener("click", function () { setAll(false); });
 
+  function syncExportLink() {
+    if (!exportLink || !pdfUrl) return;
+    exportLink.href = deptSelect.value ? pdfUrl + "?dept=" + encodeURIComponent(deptSelect.value) : pdfUrl;
+  }
+
   deptSelect.addEventListener("change", function () {
     var url = new URL(window.location.href);
     if (deptSelect.value === "") url.searchParams.delete("dept");
     else url.searchParams.set("dept", deptSelect.value);
     history.replaceState(null, "", url.pathname + url.search + url.hash);
+    syncExportLink();
     render();
   });
 
+  syncExportLink();
   render();
 })();

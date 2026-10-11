@@ -54,3 +54,69 @@ def visible_ids(people, dept):
                 queue.append(ancestor)
 
     return visible
+
+
+def department_label(dept):
+    if dept == "":
+        return "All departments"
+    if dept == NO_DEPARTMENT:
+        return "No department"
+    return dept
+
+
+def build_forest(people, dept):
+    """Roots and children map for the department filter (same rules as the page script)."""
+    visible = visible_ids(people, dept)
+    members = [p for p in people if p["id"] in visible]
+    member_ids = {p["id"] for p in members}
+    children = {}
+    roots = []
+    for person in members:
+        pid = parent_id(person, member_ids)
+        if pid:
+            children.setdefault(pid, []).append(person)
+        else:
+            roots.append(person)
+    for kids in children.values():
+        kids.sort(key=lambda p: p["name"].casefold())
+
+    reached = set()
+
+    def mark(person):
+        if person["id"] in reached:
+            return
+        reached.add(person["id"])
+        for child in children.get(person["id"], []):
+            mark(child)
+
+    for root in roots:
+        mark(root)
+    for person in members:
+        if person["id"] not in reached:
+            roots.append(person)
+            mark(person)
+
+    def team_size(person, seen=None):
+        seen = seen if seen is not None else set()
+        if person["id"] in seen:
+            return 0
+        seen.add(person["id"])
+        return sum(1 + team_size(child, seen) for child in children.get(person["id"], []))
+
+    roots.sort(key=lambda p: (-team_size(p), p["name"].casefold()))
+    return roots, children
+
+
+def flatten_forest(roots, children):
+    rows = []
+
+    def walk(person, depth):
+        row = dict(person)
+        row["depth"] = depth
+        rows.append(row)
+        for child in children.get(person["id"], []):
+            walk(child, depth + 1)
+
+    for root in roots:
+        walk(root, 0)
+    return rows

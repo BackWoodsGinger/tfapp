@@ -1,10 +1,17 @@
+import base64
 from datetime import datetime, timedelta
+from io import BytesIO
+from pathlib import Path
 
+from django.conf import settings
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.http import FileResponse, Http404, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import get_template
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.text import slugify
+from xhtml2pdf import pisa
 
 from accounts.models import ProfileCredentialDocument, UserCareerRoleInterest, UserProfile
 from accounts.views import _credential_display_context
@@ -12,6 +19,7 @@ from attendance.models import CustomUser, RoleChoices
 
 from .forms import ResourceEventForm
 from .models import EmployeeHandbook, EventAttachment, Policy, ResourceEvent
+from .org_chart import NO_DEPARTMENT, build_forest, department_label, flatten_forest
 
 
 def _is_executive(user):
@@ -46,13 +54,45 @@ def _org_chart_people(users):
     return people
 
 
-@login_required
-def resources_home(request):
-    users = list(
+def _active_directory_users():
+    return list(
         CustomUser.objects.filter(is_active=True)
         .select_related("profile")
         .order_by("payroll_lastname", "payroll_firstname", "last_name", "first_name", "username")
     )
+
+
+def _pdf_logo_uri():
+    static_dirs = getattr(settings, "STATICFILES_DIRS", []) or []
+    static_root = Path(static_dirs[0]) if static_dirs else Path(settings.BASE_DIR) / "static"
+    img_dir = static_root / "img"
+    for name in ("pdfimage.jpg", "logo.webp", "logo.png"):
+        logo_path = img_dir / name
+        if not logo_path.exists():
+            continue
+        try:
+            raw = logo_path.read_bytes()
+            if name.endswith(".webp"):
+                from PIL import Image
+
+                img = Image.open(BytesIO(raw))
+                buf = BytesIO()
+                img.save(buf, format="PNG")
+                raw = buf.getvalue()
+                mime = "image/png"
+            elif name.endswith(".jpg") or name.endswith(".jpeg"):
+                mime = "image/jpeg"
+            else:
+                mime = "image/png"
+            return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+        except Exception:
+            return None
+    return None
+
+
+@login_required
+def resources_home(request):
+    users = _active_directory_users()
     policies = Policy.objects.all().order_by("title")
     handbook = EmployeeHandbook.objects.filter(pk=1).first()
     org_people = _org_chart_people(users)
@@ -72,6 +112,34 @@ def resources_home(request):
             "is_executive": _is_executive(request.user),
         },
     )
+
+
+@login_required
+def org_chart_pdf(request):
+    dept = request.GET.get("dept", "")
+    if dept != NO_DEPARTMENT:
+        dept = (dept or "").strip()
+    people = _org_chart_people(_active_directory_users())
+    known = {p["department"] for p in people if p["department"]}
+    if dept and dept != NO_DEPARTMENT and dept not in known:
+        dept = ""
+    roots, children = build_forest(people, dept)
+    rows = flatten_forest(roots, children)
+    label = department_label(dept)
+    html = get_template("resources/org_chart_pdf.html").render(
+        {
+            "logo_uri": _pdf_logo_uri(),
+            "department_label": label,
+            "rows": rows,
+            "count": len(rows),
+            "generated_at": timezone.localdate(),
+        }
+    )
+    response = HttpResponse(content_type="application/pdf")
+    fname = f"org_chart_{slugify(label) or 'all'}.pdf"
+    response["Content-Disposition"] = f'attachment; filename="{fname}"'
+    pisa.CreatePDF(html, dest=response)
+    return response
 
 
 @login_required

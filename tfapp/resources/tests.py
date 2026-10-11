@@ -4,7 +4,7 @@ from django.urls import reverse
 
 from attendance.models import RoleChoices
 
-from .org_chart import parent_id, visible_ids
+from .org_chart import build_forest, flatten_forest, parent_id, visible_ids
 from .views import _org_chart_people
 
 User = get_user_model()
@@ -65,6 +65,8 @@ class ResourcesHomeOrgChartTests(TestCase):
         self.assertEqual(emp["url"], reverse("resources:user_detail", args=[self.emp.public_slug]))
         self.assertEqual(emp["photo"], "")
         self.assertContains(response, 'href="#directory"')
+        self.assertContains(response, reverse("resources:org_chart_pdf"))
+        self.assertContains(response, "Export PDF")
 
     def test_org_chart_people_skips_missing_profiles(self):
         people = _org_chart_people([self.ceo, self.emp])
@@ -121,3 +123,38 @@ class OrgChartRelationshipTests(TestCase):
     def test_executive_filter_does_not_pull_other_department_reports(self):
         shown = visible_ids(self.people, "Executive")
         self.assertEqual(shown, {self.exec.pk})
+
+    def test_flatten_nests_team_under_group_under_supervisor(self):
+        roots, children = build_forest(self.people, "")
+        names = [row["name"] for row in flatten_forest(roots, children)]
+        self.assertEqual(
+            names,
+            [
+                "Reyes, Morgan",
+                "Kim, Avery",
+                "Patel, Jordan",
+                "Brooks, Riley",
+                "Diaz, Taylor",
+                "Lee, Sam",
+            ],
+        )
+
+
+class OrgChartPdfTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.exec = _user("ceo", "Morgan", "Reyes", "Executive", RoleChoices.EXECUTIVE)
+        self.emp = _user("emp", "Sam", "Lee", "Production", RoleChoices.USER, supervisor=self.exec)
+
+    def test_pdf_requires_login(self):
+        response = self.client.get(reverse("resources:org_chart_pdf"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login", response.url)
+
+    def test_pdf_exports_filtered_department(self):
+        self.client.force_login(self.emp)
+        response = self.client.get(reverse("resources:org_chart_pdf"), {"dept": "Production"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertIn("org_chart_production.pdf", response["Content-Disposition"])
+        self.assertTrue(response.content.startswith(b"%PDF"))

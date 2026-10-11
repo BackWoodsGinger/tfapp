@@ -6,6 +6,7 @@ app_name = "resources"
 
 urlpatterns = [
     path("", views.resources_home, name="home"),
+    path("org-chart.pdf", views.org_chart_pdf, name="org_chart_pdf"),
     path("directory/<slug:user_slug>/", views.user_detail, name="user_detail"),
     path("handbook/download/", views.handbook_download, name="handbook_download"),
     path("policies/<slug:policy_slug>/", views.policy_detail, name="policy_detail"),

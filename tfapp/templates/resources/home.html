@@ -42,6 +42,7 @@
           <button type="button" class="btn btn-outline-secondary" id="org-chart-expand">Expand all</button>
           <button type="button" class="btn btn-outline-secondary" id="org-chart-collapse">Collapse all</button>
         </div>
+        <a class="btn btn-sm btn-outline-secondary" id="org-chart-export" href="{% url 'resources:org_chart_pdf' %}{% if org_chart_viewer_department %}?dept={{ org_chart_viewer_department|urlencode }}{% endif %}">Export PDF</a>
         <p class="small text-muted mb-0 ms-md-auto" id="org-chart-count" aria-live="polite"></p>
       </div>
       <div class="org-chart-scroll" role="region" aria-label="Organization chart" tabindex="0">
@@ -141,6 +142,6 @@
 <div id="resources-calendar-bootstrap" data-feed-url="{% url 'resources:events_feed' %}" hidden></div>
 <script src="{% static 'js/resources-calendar.js' %}"></script>
 {{ org_chart_people|json_script:"org-chart-people" }}
-<div id="org-chart-bootstrap" data-viewer-id="{{ org_chart_viewer_id }}" hidden></div>
-<script src="{% static 'js/resources-org-chart.js' %}?v=20261011c"></script>
+<div id="org-chart-bootstrap" data-viewer-id="{{ org_chart_viewer_id }}" data-pdf-url="{% url 'resources:org_chart_pdf' %}" hidden></div>
+<script src="{% static 'js/resources-org-chart.js' %}?v=20261011d"></script>
 {% endblock %}
