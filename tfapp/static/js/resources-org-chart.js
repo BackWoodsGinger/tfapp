@@ -66,10 +66,6 @@
   }
 
   function visiblePeople(dept) {
-    var allIds = {};
-    people.forEach(function (p) {
-      allIds[p.id] = true;
-    });
     var seed = {};
     var visible = {};
     people.forEach(function (p) {
@@ -89,26 +85,6 @@
         if (ancestor && byId[ancestor] && !visible[ancestor]) {
           visible[ancestor] = true;
           queue.push(ancestor);
-        }
-      });
-    }
-    var execsInSeed = {};
-    people.forEach(function (p) {
-      if (seed[p.id] && p.role_key === "executive") execsInSeed[p.id] = true;
-    });
-    if (Object.keys(execsInSeed).length) {
-      people.forEach(function (person) {
-        if (visible[person.id]) return;
-        var walk = person;
-        var seen = {};
-        while (walk && !seen[walk.id]) {
-          seen[walk.id] = true;
-          var pid = parentId(walk, allIds);
-          if (pid && execsInSeed[pid]) {
-            visible[person.id] = true;
-            return;
-          }
-          walk = pid ? byId[pid] : null;
         }
       });
     }

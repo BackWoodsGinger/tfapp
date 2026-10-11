@@ -118,9 +118,6 @@ class OrgChartRelationshipTests(TestCase):
         self.assertIn(self.emp.pk, shown)
         self.assertNotIn(self.eng.pk, shown)
 
-    def test_executive_filter_includes_direct_reports_from_other_departments(self):
+    def test_executive_filter_does_not_pull_other_department_reports(self):
         shown = visible_ids(self.people, "Executive")
-        self.assertIn(self.exec.pk, shown)
-        self.assertIn(self.sup.pk, shown)
-        self.assertIn(self.eng.pk, shown)
-        self.assertIn(self.emp.pk, shown)
+        self.assertEqual(shown, {self.exec.pk})

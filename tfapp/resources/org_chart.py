@@ -37,12 +37,10 @@ def visible_ids(people, dept):
     People shown for a department filter.
 
     - Matching department (or everyone when ``dept`` is empty).
-    - Their supervisor / group-lead / team-lead ancestors, so executives still appear.
-    - When the filter itself includes an executive, that executive's reports
-      (anyone who chains up to them) so the Executive view lists direct reports.
+    - Their supervisor / group-lead / team-lead ancestors, so a lead in another
+      department still appears above their team.
     """
     by_id = {p["id"]: p for p in people}
-    all_ids = set(by_id)
     seed = {p["id"] for p in people if in_department(p, dept)}
     visible = set(seed)
 
@@ -54,22 +52,5 @@ def visible_ids(people, dept):
             if ancestor and ancestor in by_id and ancestor not in visible:
                 visible.add(ancestor)
                 queue.append(ancestor)
-
-    execs_in_seed = {
-        p["id"] for p in people if p["id"] in seed and p.get("role_key") == "executive"
-    }
-    if execs_in_seed:
-        for person in people:
-            if person["id"] in visible:
-                continue
-            walk = person
-            seen = set()
-            while walk and walk["id"] not in seen:
-                seen.add(walk["id"])
-                pid = parent_id(walk, all_ids)
-                if pid in execs_in_seed:
-                    visible.add(person["id"])
-                    break
-                walk = by_id.get(pid) if pid else None
 
     return visible
