@@ -35,7 +35,10 @@ def _org_chart_people(users):
                 "name": u.payroll_display_name(),
                 "department": (u.department or "").strip(),
                 "role": u.get_role_display() if u.role != RoleChoices.USER else "",
+                "role_key": u.role or "",
                 "supervisor_id": u.supervisor_id,
+                "group_lead_id": u.group_lead_id,
+                "team_lead_id": u.team_lead_id,
                 "url": reverse("resources:user_detail", args=[u.public_slug]),
                 "photo": _profile_photo_url(u),
             }

@@ -4,12 +4,13 @@ from django.urls import reverse
 
 from attendance.models import RoleChoices
 
+from .org_chart import parent_id, visible_ids
 from .views import _org_chart_people
 
 User = get_user_model()
 
 
-def _user(username, first, last, department="", role=RoleChoices.USER, supervisor=None):
+def _user(username, first, last, department="", role=RoleChoices.USER, supervisor=None, group_lead=None, team_lead=None):
     return User.objects.create_user(
         username=username,
         password="x",
@@ -20,6 +21,8 @@ def _user(username, first, last, department="", role=RoleChoices.USER, superviso
         department=department or "",
         role=role,
         supervisor=supervisor,
+        group_lead=group_lead,
+        team_lead=team_lead,
     )
 
 
@@ -55,6 +58,9 @@ class ResourcesHomeOrgChartTests(TestCase):
         self.assertEqual(response.context["org_chart_departments"], ["Engineering", "Executive", "Production"])
         emp = next(p for p in people if p["id"] == self.emp.pk)
         self.assertEqual(emp["supervisor_id"], self.lead.pk)
+        self.assertEqual(emp["role_key"], RoleChoices.USER)
+        self.assertIn("group_lead_id", emp)
+        self.assertIn("team_lead_id", emp)
         self.assertEqual(emp["department"], "Production")
         self.assertEqual(emp["url"], reverse("resources:user_detail", args=[self.emp.public_slug]))
         self.assertEqual(emp["photo"], "")
@@ -64,3 +70,57 @@ class ResourcesHomeOrgChartTests(TestCase):
         people = _org_chart_people([self.ceo, self.emp])
         self.assertEqual(len(people), 2)
         self.assertTrue(all(p["photo"] == "" for p in people))
+
+
+class OrgChartRelationshipTests(TestCase):
+    def setUp(self):
+        self.exec = _user("ceo", "Morgan", "Reyes", "Executive", RoleChoices.EXECUTIVE)
+        self.sup = _user("sup", "Jordan", "Patel", "Production", RoleChoices.SUPERVISOR, self.exec)
+        self.gl = _user(
+            "gl", "Riley", "Brooks", "Production", RoleChoices.GROUP_LEAD, supervisor=self.sup
+        )
+        self.tl = _user(
+            "tl",
+            "Taylor",
+            "Diaz",
+            "Production",
+            RoleChoices.TEAM_LEAD,
+            supervisor=self.sup,
+            group_lead=self.gl,
+        )
+        self.emp = _user(
+            "emp",
+            "Sam",
+            "Lee",
+            "Production",
+            RoleChoices.USER,
+            supervisor=self.sup,
+            group_lead=self.gl,
+            team_lead=self.tl,
+        )
+        self.eng = _user("eng", "Avery", "Kim", "Engineering", RoleChoices.MANAGER, self.exec)
+        self.people = _org_chart_people(
+            [self.exec, self.sup, self.gl, self.tl, self.emp, self.eng]
+        )
+        self.ids = {p["id"] for p in self.people}
+
+    def test_parent_prefers_team_lead_then_group_lead_then_supervisor(self):
+        by_name = {p["id"]: p for p in self.people}
+        self.assertEqual(parent_id(by_name[self.emp.pk], self.ids), self.tl.pk)
+        self.assertEqual(parent_id(by_name[self.tl.pk], self.ids), self.gl.pk)
+        self.assertEqual(parent_id(by_name[self.gl.pk], self.ids), self.sup.pk)
+        self.assertEqual(parent_id(by_name[self.sup.pk], self.ids), self.exec.pk)
+        self.assertIsNone(parent_id(by_name[self.exec.pk], self.ids))
+
+    def test_production_filter_includes_executive_ancestor_not_other_departments(self):
+        shown = visible_ids(self.people, "Production")
+        self.assertIn(self.exec.pk, shown)
+        self.assertIn(self.emp.pk, shown)
+        self.assertNotIn(self.eng.pk, shown)
+
+    def test_executive_filter_includes_direct_reports_from_other_departments(self):
+        shown = visible_ids(self.people, "Executive")
+        self.assertIn(self.exec.pk, shown)
+        self.assertIn(self.sup.pk, shown)
+        self.assertIn(self.eng.pk, shown)
+        self.assertIn(self.emp.pk, shown)

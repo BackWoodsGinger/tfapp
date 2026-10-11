@@ -1,7 +1,6 @@
 /**
- * Resources org chart: supervisor -> direct reports tree, filtered by department.
- * Expects json_script #org-chart-people (id, name, department, role, supervisor_id, url, photo)
- * and #org-chart-bootstrap with data-viewer-id.
+ * Resources org chart: team lead / group lead / supervisor tree, filtered by department.
+ * Rules match resources/org_chart.py. Expects json_script #org-chart-people and #org-chart-bootstrap.
  */
 (function () {
   var dataEl = document.getElementById("org-chart-people");
@@ -23,6 +22,12 @@
 
   var NO_DEPARTMENT = "__none__";
   var ALL_DEPTH_EXPANDED = 2;
+  var PARENT_FIELDS = ["team_lead_id", "group_lead_id", "supervisor_id"];
+  var PARENT_LABELS = {
+    team_lead_id: "Team lead",
+    group_lead_id: "Group lead",
+    supervisor_id: "Supervisor",
+  };
 
   var byId = {};
   people.forEach(function (p) {
@@ -46,10 +51,74 @@
     return p.department === dept;
   }
 
-  function buildForest(dept) {
-    var members = people.filter(function (p) {
-      return inDepartment(p, dept);
+  function parentField(p, memberIds) {
+    for (var i = 0; i < PARENT_FIELDS.length; i++) {
+      var field = PARENT_FIELDS[i];
+      var parent = p[field];
+      if (parent && parent !== p.id && memberIds[parent]) return field;
+    }
+    return null;
+  }
+
+  function parentId(p, memberIds) {
+    var field = parentField(p, memberIds);
+    return field ? p[field] : null;
+  }
+
+  function visiblePeople(dept) {
+    var allIds = {};
+    people.forEach(function (p) {
+      allIds[p.id] = true;
     });
+    var seed = {};
+    var visible = {};
+    people.forEach(function (p) {
+      if (inDepartment(p, dept)) {
+        seed[p.id] = true;
+        visible[p.id] = true;
+      }
+    });
+    var queue = Object.keys(seed).map(function (id) {
+      return parseInt(id, 10);
+    });
+    while (queue.length) {
+      var current = byId[queue.pop()];
+      if (!current) continue;
+      PARENT_FIELDS.forEach(function (field) {
+        var ancestor = current[field];
+        if (ancestor && byId[ancestor] && !visible[ancestor]) {
+          visible[ancestor] = true;
+          queue.push(ancestor);
+        }
+      });
+    }
+    var execsInSeed = {};
+    people.forEach(function (p) {
+      if (seed[p.id] && p.role_key === "executive") execsInSeed[p.id] = true;
+    });
+    if (Object.keys(execsInSeed).length) {
+      people.forEach(function (person) {
+        if (visible[person.id]) return;
+        var walk = person;
+        var seen = {};
+        while (walk && !seen[walk.id]) {
+          seen[walk.id] = true;
+          var pid = parentId(walk, allIds);
+          if (pid && execsInSeed[pid]) {
+            visible[person.id] = true;
+            return;
+          }
+          walk = pid ? byId[pid] : null;
+        }
+      });
+    }
+    return people.filter(function (p) {
+      return visible[p.id];
+    });
+  }
+
+  function buildForest(dept) {
+    var members = visiblePeople(dept);
     var memberIds = {};
     members.forEach(function (p) {
       memberIds[p.id] = true;
@@ -57,9 +126,9 @@
     var children = {};
     var roots = [];
     members.forEach(function (p) {
-      var sup = p.supervisor_id;
-      if (sup && memberIds[sup] && sup !== p.id) {
-        (children[sup] = children[sup] || []).push(p);
+      var pid = parentId(p, memberIds);
+      if (pid) {
+        (children[pid] = children[pid] || []).push(p);
       } else {
         roots.push(p);
       }
@@ -114,7 +183,7 @@
     return node;
   }
 
-  function personCard(p, showDepartment, reportsTo) {
+  function personCard(p, showDepartment, reportsTo, reportsVia) {
     var card = el("div", "org-chart-card" + (p.id === viewerId ? " is-viewer" : ""));
     if (p.photo) {
       var img = el("img", "org-chart-avatar");
@@ -138,7 +207,7 @@
     if (p.id === viewerId) body.appendChild(el("div", "org-chart-meta org-chart-you", "You"));
     if (reportsTo) {
       var rt = el("div", "org-chart-meta");
-      rt.appendChild(document.createTextNode("Reports to "));
+      rt.appendChild(document.createTextNode((reportsVia ? reportsVia + " · " : "") + "Reports to "));
       var supLink = el("a", "", reportsTo.name);
       supLink.href = reportsTo.url;
       rt.appendChild(supLink);
@@ -151,7 +220,7 @@
   function render() {
     var dept = deptSelect.value;
     var forest = buildForest(dept);
-    var showDepartment = dept === "";
+    var showDepartment = true;
     root.textContent = "";
 
     if (countEl) {
@@ -167,10 +236,15 @@
       rendered[p.id] = true;
       var li = el("li", "org-chart-node");
       var reportsTo = null;
-      if (depth === 0 && p.supervisor_id && byId[p.supervisor_id] && p.supervisor_id !== p.id) {
-        reportsTo = byId[p.supervisor_id];
+      var reportsVia = "";
+      if (depth === 0) {
+        var outside = parentField(p, byId);
+        if (outside && p[outside] !== p.id && byId[p[outside]]) {
+          reportsTo = byId[p[outside]];
+          reportsVia = PARENT_LABELS[outside] || "";
+        }
       }
-      li.appendChild(personCard(p, showDepartment, reportsTo));
+      li.appendChild(personCard(p, showDepartment, reportsTo, reportsVia));
 
       var kids = (forest.children[p.id] || []).filter(function (c) {
         return !rendered[c.id];

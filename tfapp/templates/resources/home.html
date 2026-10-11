@@ -24,7 +24,7 @@
       <h2 class="h5 mb-0">Org chart</h2>
     </div>
     <div class="card-body">
-      <p class="text-muted small">Reporting lines by supervisor. Choose a department, use the arrows to show or hide someone’s team, and select a name to view their profile.</p>
+      <p class="text-muted small">Reporting lines by team lead, group lead, and supervisor. Choose a department, use the arrows to show or hide someone’s team, and select a name to view their profile. The Executive department lists each executive’s reports, including people in other departments.</p>
       <div class="d-flex flex-wrap align-items-end gap-2 mb-3">
         <div>
           <label for="org-chart-department" class="form-label small text-muted mb-0">Department</label>
@@ -142,5 +142,5 @@
 <script src="{% static 'js/resources-calendar.js' %}"></script>
 {{ org_chart_people|json_script:"org-chart-people" }}
 <div id="org-chart-bootstrap" data-viewer-id="{{ org_chart_viewer_id }}" hidden></div>
-<script src="{% static 'js/resources-org-chart.js' %}?v=20261011"></script>
+<script src="{% static 'js/resources-org-chart.js' %}?v=20261011b"></script>
 {% endblock %}
